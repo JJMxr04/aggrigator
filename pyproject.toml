@@ -1,0 +1,53 @@
+[project]
+name = "aggrigator"
+version = "0.1.0"
+description = "Sports Odds Aggregator — FastAPI service that fronts SportsGameOdds for MDProject."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "sqlalchemy[asyncio]>=2.0.32",
+  "asyncpg>=0.29",
+  "psycopg2-binary>=2.9",
+  "alembic>=1.13",
+  "pydantic[email]>=2.8",
+  "pydantic-settings>=2.4",
+  "httpx>=0.27",
+  "passlib[argon2]>=1.7.4",
+  "python-jose[cryptography]>=3.3",
+  "slowapi>=0.1.9",
+  "arq>=0.26",
+  "redis>=5.0",
+  "sqladmin>=0.18",
+  "itsdangerous>=2.2",
+  "structlog>=24.4",
+  "sentry-sdk[fastapi]>=2.10",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.23",
+  "anyio>=4.4",
+  "httpx>=0.27",
+  "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+include = ["aggrigator*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# Share one event loop across the whole session so the session-scoped engine
+# and function-scoped DB sessions don't create cross-loop asyncpg futures.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+filterwarnings = [
+  "ignore::DeprecationWarning:passlib.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

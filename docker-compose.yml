@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: aggrigator
+      POSTGRES_PASSWORD: aggrigator
+      POSTGRES_DB: aggrigator
+    ports:
+      - "5433:5432"
+    volumes:
+      - aggrigator_pg:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+  api:
+    build: .
+    depends_on: [postgres, redis]
+    environment:
+      AGG_DATABASE_URL: postgresql+asyncpg://aggrigator:aggrigator@postgres:5432/aggrigator
+      AGG_DATABASE_URL_SYNC: postgresql+psycopg2://aggrigator:aggrigator@postgres:5432/aggrigator
+      AGG_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8001:8001"
+
+  worker:
+    build: .
+    depends_on: [postgres, redis]
+    environment:
+      AGG_DATABASE_URL: postgresql+asyncpg://aggrigator:aggrigator@postgres:5432/aggrigator
+      AGG_REDIS_URL: redis://redis:6379/0
+    command: ["arq", "aggrigator.workers.settings.WorkerSettings"]
+
+volumes:
+  aggrigator_pg:
