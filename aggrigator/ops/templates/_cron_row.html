@@ -1,0 +1,54 @@
+{% set lr = item.last_run %}
+<tr id="cron-row-{{ item.name }}"
+    {% if item.is_running %}hx-get="/ops/crons/{{ item.name }}/row" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  <td>
+    <strong>{{ item.name }}</strong>
+    <div style="font-size:.8em;color:#666;">{{ item.description }}</div>
+    <details class="run-detail">
+      <summary>show last 25 runs</summary>
+      <div hx-get="/ops/crons/{{ item.name }}/history" hx-trigger="toggle once from:closest details" hx-swap="innerHTML">
+        Loading…
+      </div>
+    </details>
+  </td>
+  <td><code>{{ item.schedule_human }}</code></td>
+  <td>
+    {% if lr %}
+      <time datetime="{{ lr.started_at.isoformat() }}" title="{{ lr.started_at.isoformat() }}">
+        {{ lr.started_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}
+      </time>
+      {% if lr.started_by_email %}
+        <div style="font-size:.8em;color:#666;">by {{ lr.started_by_email }}</div>
+      {% endif %}
+    {% else %}
+      <em style="color:#999;">never</em>
+    {% endif %}
+  </td>
+  <td>
+    {% if not lr %}
+      <span class="pill never">never</span>
+    {% else %}
+      <span class="pill {{ lr.status }}">{{ lr.status }}</span>
+      {% if lr.error_excerpt %}
+        <div><span class="err-excerpt" title="{{ lr.error_excerpt }}">{{ lr.error_excerpt }}</span></div>
+      {% endif %}
+    {% endif %}
+  </td>
+  <td>
+    {% if lr and lr.duration_seconds is not none %}
+      {{ '%.2f' % lr.duration_seconds }}s
+    {% else %}—{% endif %}
+  </td>
+  <td>
+    {% if lr and lr.items_processed is not none %}{{ lr.items_processed }}{% else %}—{% endif %}
+  </td>
+  <td class="actions">
+    <button class="run"
+            {% if item.is_running %}disabled{% endif %}
+            hx-post="/ops/crons/{{ item.name }}/run"
+            hx-target="#cron-row-{{ item.name }}"
+            hx-swap="outerHTML">
+      {% if item.is_running %}Running…{% else %}Run now{% endif %}
+    </button>
+  </td>
+</tr>

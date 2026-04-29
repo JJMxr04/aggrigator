@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aggrigator.config import get_settings
 from aggrigator.db import async_session_factory
 from aggrigator.models import WebhookDelivery, WebhookEndpoint
-from aggrigator.security.webhook_signing import decrypt_secret
+from aggrigator.security.webhook_signing import InvalidSignature, decrypt_secret
 from aggrigator.webhooks.deliver import send_one
 
 logger = logging.getLogger(__name__)
@@ -88,12 +88,36 @@ async def _send_with_endpoint(
         row.last_error = "endpoint deleted or disabled"
         row.next_retry_at = None
         return None
-    secret = decrypt_secret(endpoint.secret_ciphertext, key=encryption_key)
+
+    try:
+        secret = decrypt_secret(endpoint.secret_ciphertext, key=encryption_key)
+    except InvalidSignature as exc:
+        # Stored ciphertext was encrypted with a different key (typical when
+        # AGG_SECRET_ENCRYPTION_KEY changed, or when a stale row from a test
+        # run is sitting in the dev DB). Don't crash the batch — mark this
+        # delivery as a permanent failure so the worker keeps draining
+        # everything else, and let an operator rotate or clean up.
+        logger.warning(
+            "delivery=%s endpoint=%s: cannot decrypt secret (%s); "
+            "marking permanent_fail. Re-rotate the endpoint's signing "
+            "secret via /v1/webhook-endpoints/{id}/rotate to recover.",
+            row.id, endpoint.id, exc,
+        )
+        row.last_error = f"secret decrypt failed: {exc}"
+        row.next_retry_at = None
+        return None
+
     return await send_one(
         row, url=endpoint.url, secret=secret, client=http,
     )
 
 
 async def webhook_deliver_task(ctx: dict) -> dict:
-    """ARQ-callable wrapper."""
-    return await run_deliver_due()
+    """ARQ-callable wrapper. Records each scheduled run in ``cron_run``."""
+    from aggrigator.ops.recorder import cron_run_recorder
+
+    @cron_run_recorder("webhook_deliver")
+    async def _runner(ctx_):
+        return await run_deliver_due()
+
+    return await _runner(ctx)

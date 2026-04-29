@@ -48,5 +48,12 @@ async def run_ingest_due_leagues() -> dict[str, Any]:
 
 
 async def ingest_due_leagues_task(ctx: dict) -> dict:
-    """ARQ-callable wrapper."""
-    return await run_ingest_due_leagues()
+    """ARQ-callable wrapper. Wrapped by ``cron_run_recorder`` so every
+    scheduled run lands in the ``cron_run`` table (plan §2.1.4)."""
+    from aggrigator.ops.recorder import cron_run_recorder
+
+    @cron_run_recorder("ingest_due_leagues")
+    async def _runner(ctx_):
+        return await run_ingest_due_leagues()
+
+    return await _runner(ctx)

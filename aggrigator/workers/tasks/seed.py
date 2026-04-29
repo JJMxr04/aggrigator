@@ -20,4 +20,11 @@ async def run_seed_sports_and_leagues() -> dict:
 
 
 async def seed_task(ctx: dict) -> dict:
-    return await run_seed_sports_and_leagues()
+    """ARQ-callable wrapper. Records each scheduled run in ``cron_run``."""
+    from aggrigator.ops.recorder import cron_run_recorder
+
+    @cron_run_recorder("seed_sports_and_leagues")
+    async def _runner(ctx_):
+        return await run_seed_sports_and_leagues()
+
+    return await _runner(ctx)

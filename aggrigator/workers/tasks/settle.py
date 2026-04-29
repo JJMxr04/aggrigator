@@ -18,4 +18,11 @@ async def run_settle_pending(lookback_hours: int = 48) -> dict:
 
 
 async def settle_pending_task(ctx: dict) -> dict:
-    return await run_settle_pending()
+    """ARQ-callable wrapper. Records each scheduled run in ``cron_run``."""
+    from aggrigator.ops.recorder import cron_run_recorder
+
+    @cron_run_recorder("settle_pending")
+    async def _runner(ctx_):
+        return await run_settle_pending()
+
+    return await _runner(ctx)
