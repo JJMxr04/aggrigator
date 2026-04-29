@@ -1,0 +1,46 @@
+{# Slide-down panel injected into a ``.run-detail-slot`` after a click on a
+   history row. Renders the full traceback (untruncated) + the summary JSON
+   pretty-printed. #}
+<div class="run-detail">
+  <div class="run-detail__row">
+    <span class="run-detail__label">Run #</span>
+    <span style="font-family: var(--mono); font-size: .85rem;">{{ detail.id }}</span>
+  </div>
+  <div class="run-detail__row">
+    <span class="run-detail__label">Started</span>
+    <span>{{ detail.started_at.isoformat() }}</span>
+  </div>
+  {% if detail.finished_at %}
+    <div class="run-detail__row">
+      <span class="run-detail__label">Finished</span>
+      <span>{{ detail.finished_at.isoformat() }}</span>
+    </div>
+  {% endif %}
+  <div class="run-detail__row">
+    <span class="run-detail__label">Trigger</span>
+    <span>
+      {{ detail.trigger_source }}
+      {% if detail.started_by_email %} · by {{ detail.started_by_email }}{% endif %}
+    </span>
+  </div>
+  <div class="run-detail__row">
+    <span class="run-detail__label">Status</span>
+    <span><span class="pill {{ detail.status }}">{{ detail.status }}</span></span>
+  </div>
+
+  {% if detail.error_full %}
+    <h4 class="run-detail__heading">Traceback</h4>
+    <pre class="run-detail__error">{{ detail.error_full }}</pre>
+  {% endif %}
+
+  {% if summary_pretty %}
+    <h4 class="run-detail__heading">Summary</h4>
+    <pre class="run-detail__summary">{{ summary_pretty }}</pre>
+  {% endif %}
+
+  {% if not detail.error_full and not summary_pretty %}
+    <p style="color: var(--text-mute); font-size: .85rem; margin: .5rem 0 0;">
+      No error or summary recorded.
+    </p>
+  {% endif %}
+</div>

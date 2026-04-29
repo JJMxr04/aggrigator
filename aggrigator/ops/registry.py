@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from aggrigator.workers.tasks.full_refresh import run_full_refresh
 from aggrigator.workers.tasks.ingest import run_ingest_due_leagues
 from aggrigator.workers.tasks.seed import run_seed_sports_and_leagues
 from aggrigator.workers.tasks.settle import run_settle_pending
@@ -30,18 +31,36 @@ class CronSpec:
     max_runtime_seconds: int
 
 
-# Order here drives the UI order.
+# Order here drives the UI order. ``full_refresh`` sits at the top because
+# it's the "one-click everything" path most operators reach for.
 REGISTRY: list[CronSpec] = [
     CronSpec(
+        name="full_refresh",
+        description=(
+            "Seed sports + leagues, then ingest events for every active "
+            "league. The end-to-end one-click refresh."
+        ),
+        schedule_human="manual only",
+        runner=run_full_refresh,
+        max_runtime_seconds=2400,
+    ),
+    CronSpec(
         name="seed_sports_and_leagues",
-        description="Pull every sport and league from SGO into the DB.",
+        description=(
+            "Pull every sport and league from SGO into the DB. Doesn't fetch "
+            "events — use ``full_refresh`` or ``ingest_due_leagues`` for that."
+        ),
         schedule_human="manual only",
         runner=run_seed_sports_and_leagues,
         max_runtime_seconds=600,
     ),
     CronSpec(
         name="ingest_due_leagues",
-        description="Walk every active league once and ingest events.",
+        description=(
+            "Walk every active league once and ingest events. Assumes seed "
+            "has already run; otherwise no leagues are active and this is a "
+            "no-op."
+        ),
         schedule_human="every 30 min",
         runner=run_ingest_due_leagues,
         max_runtime_seconds=1800,

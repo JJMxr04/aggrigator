@@ -1,0 +1,231 @@
+{% extends "_base.html" %}
+
+{% block body %}
+
+{# Inline styles specific to this page — additive on top of _base.html. #}
+<style>
+  .danger-banner {
+    border-left: 3px solid var(--danger);
+    background: color-mix(in srgb, var(--danger-soft) 60%, transparent);
+    padding: .9rem 1.1rem; border-radius: 6px;
+    margin-bottom: 1.5rem; font-size: .9rem;
+    color: var(--text);
+  }
+  .danger-banner strong { color: var(--danger); }
+  .flash {
+    padding: .65rem .85rem; border-radius: 6px; margin-bottom: 1rem;
+    font-size: .9rem; font-weight: 500;
+  }
+  .flash.ok { background: var(--success-soft); color: var(--success); }
+  .flash.err { background: var(--danger-soft); color: var(--danger); }
+
+  .section-title {
+    margin: 1.75rem 0 .65rem;
+    font-size: .8rem; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--text-mute); font-weight: 700;
+  }
+  .table-grid {
+    display: grid; gap: .5rem;
+    grid-template-columns: 1fr;
+  }
+  .table-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 1rem; align-items: center;
+    padding: .75rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    transition: border-color .15s;
+  }
+  .table-row:hover { border-color: var(--border-strong); }
+  .table-row.is-dangerous { border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%); }
+  .table-row__name {
+    font-family: var(--mono); font-size: .92rem; font-weight: 600;
+  }
+  .table-row__hint {
+    font-size: .75rem; color: var(--text-mute); margin-top: .15rem;
+  }
+  .table-row__count {
+    font-variant-numeric: tabular-nums; font-weight: 600;
+    color: var(--text);
+    background: var(--surface-2);
+    padding: .25rem .65rem; border-radius: 99px;
+    font-size: .82rem;
+  }
+  .table-row__count.is-zero { color: var(--text-mute); }
+
+  .btn--danger {
+    background: var(--danger); color: white; border: 1px solid var(--danger);
+  }
+  .btn--danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 88%, black);
+  }
+
+  /* Confirmation modal — pure CSS / details element. The summary itself
+   * acts as the trigger button so clicking it reliably toggles
+   * <details> across browsers. (Nesting an interactive <button> inside
+   * <summary> is invalid HTML and prevents the toggle in some
+   * browsers — that's what was breaking the modal.) */
+  details.confirm { position: relative; }
+  details.confirm > summary {
+    list-style: none;
+  }
+  details.confirm > summary::-webkit-details-marker { display: none; }
+  details.confirm > summary::after { content: ""; }
+  details.confirm > summary.is-disabled {
+    pointer-events: none; opacity: .5; cursor: not-allowed;
+  }
+  details.confirm[open] .confirm-modal-bg {
+    display: flex;
+  }
+  .confirm-modal-bg {
+    display: none;
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(15, 23, 42, .55);
+    align-items: center; justify-content: center;
+    padding: 1rem;
+  }
+  .confirm-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    max-width: 480px; width: 100%;
+    box-shadow: var(--shadow-md);
+  }
+  .confirm-modal h3 { margin: 0 0 .5rem; font-size: 1.05rem; }
+  .confirm-modal p { color: var(--text-soft); font-size: .88rem; margin: 0 0 1rem; }
+  .confirm-modal code {
+    font-family: var(--mono);
+    background: var(--surface-2); padding: .1rem .4rem; border-radius: 4px;
+    font-size: .85rem;
+  }
+  .confirm-modal input[type=text] {
+    width: 100%; padding: .55rem .75rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    font-family: var(--mono); font-size: .9rem;
+    background: var(--bg); color: var(--text);
+    margin: .25rem 0 1rem;
+    box-sizing: border-box;
+  }
+  .confirm-modal input[type=text]:focus {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .confirm-modal__actions {
+    display: flex; justify-content: flex-end; gap: .5rem;
+  }
+</style>
+
+<header class="ops-header" style="margin-bottom: 1.25rem;">
+  <div>
+    <h1 class="ops-title">Data Reset</h1>
+    <p class="ops-subtitle">
+      Logged in as <span class="ops-actor">{{ actor_email }}</span> · truncate any model with CASCADE.
+    </p>
+  </div>
+  <nav class="ops-nav">
+    <a href="/ops/crons">⇐ Cron runner</a>
+    <a href="/admin">SQLAdmin</a>
+  </nav>
+</header>
+
+<div class="danger-banner">
+  <strong>This is a destructive operation.</strong> Each click runs
+  <code>TRUNCATE TABLE ... RESTART IDENTITY CASCADE</code>. Dependent rows in
+  child tables are deleted too. There is no undo. Every truncate is
+  audit-logged with your email + IP.
+</div>
+
+{% if flash %}
+  {% if flash.startswith('ok:') %}
+    {% set _, name, count = flash.split(':') %}
+    <div class="flash ok">✓ Truncated <code>{{ name }}</code> — {{ count }} rows removed (plus cascaded children).</div>
+  {% elif flash.startswith('mismatch:') %}
+    {% set _, name = flash.split(':', 1) %}
+    <div class="flash err">⚠ Confirmation didn't match. To delete <code>{{ name }}</code>, the typed value must equal the table name exactly.</div>
+  {% endif %}
+{% endif %}
+
+{% for section in section_order %}
+  {% if section in grouped_tables %}
+    <h2 class="section-title">{{ section }}</h2>
+    <div class="table-grid">
+      {% for t in grouped_tables[section] %}
+        <div class="table-row {% if t.is_dangerous %}is-dangerous{% endif %}">
+          <div>
+            <div class="table-row__name">{{ t.name }}</div>
+            {% if t.is_dangerous %}
+              <div class="table-row__hint">⚠ Truncating may log you out / break in-flight ops</div>
+            {% endif %}
+          </div>
+          <span class="table-row__count {% if t.row_count == 0 %}is-zero{% endif %}">
+            {{ '{:,}'.format(t.row_count) }} {{ 'row' if t.row_count == 1 else 'rows' }}
+          </span>
+          <details class="confirm">
+            <summary class="btn btn--danger btn--small {% if t.row_count == 0 %}is-disabled{% endif %}"
+                     role="button"
+                     {% if t.row_count == 0 %}aria-disabled="true" tabindex="-1"{% else %}tabindex="0"{% endif %}>
+              Delete all
+            </summary>
+            <div class="confirm-modal-bg">
+              <form class="confirm-modal"
+                    method="post"
+                    action="/ops/data-reset/{{ t.name }}"
+                    onsubmit="this.querySelector('button[type=submit]').disabled=true">
+                <h3>Truncate <code>{{ t.name }}</code>?</h3>
+                <p>
+                  This will delete <strong>{{ '{:,}'.format(t.row_count) }}</strong> rows from
+                  <code>{{ t.name }}</code> and cascade to any FK-dependent tables.
+                  {% if t.is_dangerous %}
+                    <br><br><strong style="color: var(--danger);">⚠
+                      This table holds session-critical data. Truncating it
+                      may log you out or break the running session.</strong>
+                  {% endif %}
+                </p>
+                <label for="confirm-{{ t.name }}" style="font-size: .82rem; color: var(--text-soft);">
+                  Type <code>{{ t.name }}</code> to confirm:
+                </label>
+                <input type="text"
+                       id="confirm-{{ t.name }}"
+                       name="confirm"
+                       autocomplete="off"
+                       autocapitalize="off"
+                       spellcheck="false"
+                       placeholder="{{ t.name }}"
+                       required>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="confirm-modal__actions">
+                  <button type="button"
+                          class="btn btn--ghost btn--small"
+                          onclick="this.closest('details').open=false">
+                    Cancel
+                  </button>
+                  <button type="submit" class="btn btn--danger btn--small">
+                    Truncate
+                  </button>
+                </div>
+              </form>
+            </div>
+          </details>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endfor %}
+
+<script>
+  // The form's CSRF token also rides on the X-CSRF-Token header so the
+  // CSRF check passes the same way HTMX requests do.
+  document.querySelectorAll('form[action^="/ops/data-reset/"]').forEach(form => {
+    form.addEventListener('submit', (e) => {
+      const tok = form.querySelector('input[name=csrf_token]').value;
+      // Set a custom header on submit by intercepting + using fetch — but
+      // we want the redirect-flow to work, so just leave the form-field
+      // CSRF for the server to read. The route accepts both.
+    });
+  });
+</script>
+
+{% endblock %}

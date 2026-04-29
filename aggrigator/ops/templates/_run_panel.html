@@ -1,34 +1,31 @@
 {% if not runs %}
-  <em style="color:#999;">No runs yet.</em>
+  <div class="history-empty">No runs yet.</div>
 {% else %}
-  <table>
-    <thead>
-      <tr>
-        <th>Started</th>
-        <th>By</th>
-        <th>Source</th>
-        <th>Status</th>
-        <th>Duration</th>
-        <th>Items</th>
-        <th>Error</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in runs %}
-        <tr>
-          <td title="{{ r.started_at.isoformat() }}">{{ r.started_at.strftime('%H:%M:%S') }}</td>
-          <td>{% if r.started_by_email %}{{ r.started_by_email }}{% else %}—{% endif %}</td>
-          <td><code>{{ r.trigger_source }}</code></td>
-          <td><span class="pill {{ r.status }}">{{ r.status }}</span></td>
-          <td>{% if r.duration_seconds is not none %}{{ '%.2f' % r.duration_seconds }}s{% else %}—{% endif %}</td>
-          <td>{% if r.items_processed is not none %}{{ r.items_processed }}{% else %}—{% endif %}</td>
-          <td>
-            {% if r.error_excerpt %}
-              <span class="err-excerpt" title="{{ r.error_excerpt }}">{{ r.error_excerpt }}</span>
-            {% else %}—{% endif %}
-          </td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="history-list">
+    {% for r in runs %}
+      <div class="history-item {% if r.status == 'failed' %}is-failed{% endif %}"
+           hx-get="/ops/crons/{{ r.cron_name }}/runs/{{ r.id }}"
+           hx-target="next .run-detail-slot"
+           hx-swap="innerHTML">
+        <span class="history-item__ts" title="{{ r.started_at.isoformat() }}">
+          {{ r.started_at.strftime('%H:%M:%S') }}
+        </span>
+        <span class="pill {{ r.status }}">{{ r.status }}</span>
+        <span class="history-item__src">{{ r.trigger_source }}</span>
+        <span class="history-item__by">
+          {% if r.started_by_email %}{{ r.started_by_email }}{% else %}—{% endif %}
+        </span>
+        <span style="font-variant-numeric: tabular-nums; color: var(--text-soft);">
+          {% if r.duration_seconds is not none %}{{ '%.2f' % r.duration_seconds }}s{% else %}—{% endif %}
+        </span>
+        <span style="color: var(--text-soft); font-size:.75rem;">
+          {% if r.items_processed is not none %}{{ r.items_processed }} items{% endif %}
+        </span>
+      </div>
+      <div class="run-detail-slot"></div>
+    {% endfor %}
+  </div>
+  <p style="margin-top: .75rem; font-size: .78rem; color: var(--text-mute); text-align: center;">
+    Click any row to expand the full traceback / summary.
+  </p>
 {% endif %}

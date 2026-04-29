@@ -3,7 +3,8 @@ edits. Mounted at /admin in main.py."""
 
 from __future__ import annotations
 
-from sqladmin import Admin, ModelView
+from sqladmin import Admin, BaseView, ModelView, expose
+from starlette.responses import RedirectResponse
 
 from aggrigator.db import engine
 from aggrigator.models import (
@@ -12,6 +13,7 @@ from aggrigator.models import (
     Bookmaker,
     BookmakerSelection,
     ClientApp,
+    CronRun,
     Event,
     League,
     Market,
@@ -141,6 +143,51 @@ class OddsQuoteView(ModelView, model=OddsQuote):
     can_delete = False
 
 
+class CronRunView(ModelView, model=CronRun):
+    """Browse the run history that the ops console writes."""
+    column_list = [
+        "id", "cron_name", "trigger_source", "started_at", "finished_at",
+        "status", "items_processed",
+    ]
+    column_searchable_list = ["cron_name", "arq_job_id"]
+    column_sortable_list = ["started_at", "cron_name", "status"]
+    can_create = False
+    can_edit = False
+    can_delete = False
+    name_plural = "Cron runs"
+    icon = "fa-solid fa-history"
+
+
+class CronsConsoleLink(BaseView):
+    """Sidebar entry that takes the operator to the HTMX cron-runner page.
+
+    SQLAdmin generates the sidebar URL via ``request.url_for(f"admin:{view.identity}")``
+    where ``identity`` defaults to the exposed method's ``__name__``. If we'd
+    used a method named ``index`` SQLAdmin would resolve ``admin:index`` —
+    which is SQLAdmin's own dashboard route — and the sidebar link would
+    silently land on ``/admin/`` instead of our redirect. We pass an explicit
+    ``identity="run-crons"`` so the route name is unique.
+    """
+
+    name = "Run crons"
+    icon = "fa-solid fa-bolt"
+
+    @expose("/run-crons", methods=["GET"], identity="run-crons")
+    async def run_crons(self, request):
+        return RedirectResponse(url="/ops/crons", status_code=302)
+
+
+class DataResetLink(BaseView):
+    """Sidebar entry → /ops/data-reset (truncate-with-cascade UI)."""
+
+    name = "Data reset"
+    icon = "fa-solid fa-trash-can"
+
+    @expose("/data-reset", methods=["GET"], identity="data-reset")
+    async def data_reset(self, request):
+        return RedirectResponse(url="/ops/data-reset", status_code=302)
+
+
 # ---- registration ----------------------------------------------------------
 
 
@@ -153,9 +200,13 @@ def mount_admin(app, *, base_url: str = "/admin") -> Admin:
         title="Aggrigator Admin",
         authentication_backend=make_admin_auth(),
     )
+    # Top of sidebar: operator action shortcuts.
+    admin.add_base_view(CronsConsoleLink)
+    admin.add_base_view(DataResetLink)
     for view in [
         UserView, ApiKeyView, RefreshTokenView, ClientAppView,
         WebhookEndpointView, WebhookDeliveryView, AuditLogView,
+        CronRunView,
         SportView, LeagueView, TeamView, EventView,
         BookmakerView, BookmakerSelectionView,
         MarketView, SelectionView, OddsQuoteView,

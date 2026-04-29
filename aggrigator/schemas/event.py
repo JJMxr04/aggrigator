@@ -5,7 +5,9 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from aggrigator.schemas.league import LeagueOut
 from aggrigator.schemas.market import MarketOut
+from aggrigator.schemas.sport import SportOut
 from aggrigator.schemas.team import TeamOut
 
 
@@ -30,6 +32,10 @@ class EventOut(BaseModel):
     winner: str | None
     home_team: TeamOut | None
     away_team: TeamOut | None
+    # Pre-joined nested objects (vs. just the FK strings above) so consumers
+    # don't need follow-up calls to /v1/sports or /v1/leagues for the names.
+    sport: SportOut | None = None
+    league: LeagueOut | None = None
 
 
 class EventWithMarketsOut(EventOut):

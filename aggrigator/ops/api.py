@@ -179,7 +179,9 @@ async def trigger_ingest_event(
         "event_id": result.event.id,
         "transition": result.transition.value,
         "selections_written": result.selections_written,
-        "selections_graded": result.selections_graded,
+        "selections_graded": result.selections_graded,    # PROVIDER
+        "selections_computed": result.selections_computed,  # COMPUTED fallback
+        "selections_voided": result.selections_voided,    # PENDING → VOID lock-in
         "deliveries_enqueued": result.deliveries_enqueued,
     }
 

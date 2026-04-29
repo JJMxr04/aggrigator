@@ -14,6 +14,10 @@ class Sport(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     short_name: Mapped[str] = mapped_column(String(48), default="", server_default="")
-    active: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Default ``active=True`` — newly-seeded sports are walkable out of the
+    # box. To restrict the cron's footprint, flip individual sports off in
+    # SQLAdmin after the most recent seed (your decision persists until the
+    # next seed run, per ``upsert_sport_from_sgo``).
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     leagues = relationship("League", back_populates="sport")

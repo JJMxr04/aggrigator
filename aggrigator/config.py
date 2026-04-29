@@ -39,11 +39,17 @@ class Settings(BaseSettings):
     # redis — Homebrew default. docker-compose uses 6380 to coexist.
     redis_url: str = Field(default="redis://localhost:6379/0", alias="AGG_REDIS_URL")
 
-    # SGO
+    # SGO. Dev default points at the local simulator with the shared dev key
+    # (``aggrigator-dev``). The simulator validates against the same value
+    # — see sports-scores-sim/simulator/sportsgame/app.py. Production overrides
+    # both ``SPORTSGAMEODDS_BASE_URL`` (real SGO) and ``SPORTSGAMEODDS_API_KEY``
+    # (the real key) in lockstep.
     sgo_base_url: str = Field(
         default="http://127.0.0.1:8765/v2", alias="SPORTSGAMEODDS_BASE_URL"
     )
-    sgo_api_key: str = Field(default="", alias="SPORTSGAMEODDS_API_KEY")
+    sgo_api_key: str = Field(
+        default="aggrigator-dev", alias="SPORTSGAMEODDS_API_KEY",
+    )
     sgo_fixture_dir: str = Field(default="", alias="SPORTSGAMEODDS_FIXTURE_DIR")
 
     # auth

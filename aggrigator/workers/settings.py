@@ -14,6 +14,7 @@ from arq.connections import RedisSettings
 from arq.cron import cron
 
 from aggrigator.config import get_settings
+from aggrigator.workers.tasks.full_refresh import full_refresh_task
 from aggrigator.workers.tasks.ingest import ingest_due_leagues_task
 from aggrigator.workers.tasks.seed import seed_task
 from aggrigator.workers.tasks.settle import settle_pending_task
@@ -31,6 +32,7 @@ class WorkerSettings:
     # Ad-hoc enqueue targets (used when the API layer wants to trigger a
     # job out-of-band, e.g. on-demand event refresh).
     functions = [
+        full_refresh_task,
         ingest_due_leagues_task,
         webhook_deliver_task,
         settle_pending_task,

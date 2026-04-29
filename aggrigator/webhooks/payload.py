@@ -117,6 +117,9 @@ def _market_dict(market: Market) -> dict[str, Any]:
         "subject_team_id": market.subject_team_id,
         "is_live": market.is_live,
         "suspended": market.suspended,
+        # Required by MDProject's NOT NULL ``Market.last_updated`` column —
+        # don't drop it from the payload or the receiver's upsert blows up.
+        "last_updated": _iso(market.last_updated),
         "selections": [_selection_dict(s) for s in market.selections],
     }
 

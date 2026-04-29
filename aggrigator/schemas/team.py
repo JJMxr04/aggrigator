@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
 
 class TeamOut(BaseModel):
@@ -21,3 +21,10 @@ class TeamOut(BaseModel):
     primary_contrast: str | None
     secondary_contrast: str | None
     logo_url: str | None
+
+    @computed_field
+    @property
+    def name(self) -> str:
+        """Alias for ``name_long`` — matches the legacy Django ``Team.name``
+        property so portal templates that read ``team.name`` keep working."""
+        return self.name_long

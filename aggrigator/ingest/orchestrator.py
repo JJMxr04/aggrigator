@@ -21,6 +21,7 @@ from aggrigator.ingest.client import SgoClient
 from aggrigator.ingest.ingester import write_markets
 from aggrigator.ingest.lifecycle import EventState, Transition, decide_transition
 from aggrigator.ingest.normalize import EventSpec, event_spec_from_payload
+from aggrigator.ingest.settlement_computed import settle_event, void_remaining_pending
 from aggrigator.ingest.settlement_provider import grade_event
 from aggrigator.ingest.upserts import (
     upsert_event_from_spec,
@@ -38,7 +39,9 @@ class IngestResult(NamedTuple):
     event: Event
     transition: Transition
     selections_written: int
-    selections_graded: int
+    selections_graded: int       # PROVIDER (per-odd ``score`` from SGO)
+    selections_computed: int     # COMPUTED fallback (event-score logic)
+    selections_voided: int       # PENDING → VOID at finalize (definitive only)
     deliveries_enqueued: int
 
 
@@ -86,8 +89,28 @@ async def ingest_event(
     selections_written = await write_markets(session, event, spec.markets)
 
     selections_graded = 0
+    selections_computed = 0
+    selections_voided = 0
     if event.is_finalized:
+        # 1) PROVIDER first — per-odd ``score`` field from SGO. Covers
+        #    MONEYLINE / SPREAD / TOTAL / PROPS_TEAM / yn+eo PROPS_GAME.
         selections_graded = await grade_event(session, event, spec.markets)
+        # 2) COMPUTED fallback for whatever PROVIDER skipped (soccer BTTS /
+        #    double-chance / draw-no-bet / SOCCER+NHL team totals — all
+        #    derivable from event scores, no per-odd score needed). Flush so
+        #    grade_event's UPDATEs are visible before settle_event reads.
+        #    settle_event itself only touches PENDING rows whose source is
+        #    '' or COMPUTED — never overrides a PROVIDER-graded row, never
+        #    touches MANUAL.
+        await session.flush()
+        selections_computed = await settle_event(session, event)
+        # 3) Lock-in pass: anything still PENDING on a finished event is
+        #    something we lack data to resolve (e.g. quarter-by-quarter
+        #    moneylines without per-period scores on the free SGO tier).
+        #    Mark VOID so the webhook payload is definitive — no PENDING
+        #    selections sneak out attached to an ``event.finalized`` event.
+        await session.flush()
+        selections_voided = await void_remaining_pending(session, event)
 
     new_state = EventState(
         status_type=spec.status_type,
@@ -108,6 +131,8 @@ async def ingest_event(
         transition=transition,
         selections_written=selections_written,
         selections_graded=selections_graded,
+        selections_computed=selections_computed,
+        selections_voided=selections_voided,
         deliveries_enqueued=len(deliveries),
     )
 

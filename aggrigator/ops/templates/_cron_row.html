@@ -1,54 +1,67 @@
 {% set lr = item.last_run %}
-<tr id="cron-row-{{ item.name }}"
-    {% if item.is_running %}hx-get="/ops/crons/{{ item.name }}/row" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
-  <td>
-    <strong>{{ item.name }}</strong>
-    <div style="font-size:.8em;color:#666;">{{ item.description }}</div>
-    <details class="run-detail">
-      <summary>show last 25 runs</summary>
-      <div hx-get="/ops/crons/{{ item.name }}/history" hx-trigger="toggle once from:closest details" hx-swap="innerHTML">
-        Loading…
+<article id="cron-row-{{ item.name }}"
+         class="cron-card {% if item.is_running %}is-running{% endif %}"
+         {% if item.is_running %}hx-get="/ops/crons/{{ item.name }}/row" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+
+  <header class="cron-head">
+    <div>
+      <div class="cron-name">{{ item.name }}</div>
+      <div class="cron-desc">{{ item.description }}</div>
+    </div>
+    <span class="cron-schedule" title="Schedule">{{ item.schedule_human }}</span>
+  </header>
+
+  {% if lr %}
+    <div class="run-summary">
+      <span class="pill {{ lr.status }}">{{ lr.status }}</span>
+      <div>
+        <div class="run-summary__ts" title="{{ lr.started_at.isoformat() }}">
+          {{ lr.started_at.strftime('%b %d · %H:%M:%S UTC') }}
+        </div>
+        <div class="run-summary__meta">
+          {% if lr.started_by_email %}
+            by {{ lr.started_by_email }} ·
+          {% else %}
+            {{ lr.trigger_source }} ·
+          {% endif %}
+          {% if lr.duration_seconds is not none %}{{ '%.2f' % lr.duration_seconds }}s{% else %}—{% endif %}
+        </div>
+      </div>
+      <div class="run-summary__metric">
+        {% if lr.items_processed is not none %}
+          <strong>{{ lr.items_processed }}</strong> items
+        {% endif %}
+      </div>
+    </div>
+
+    {% if lr.error_excerpt %}
+      <div class="err-preview" title="Click 'Show last 25 runs' for the full traceback">{{ lr.error_excerpt }}</div>
+    {% endif %}
+  {% else %}
+    <div class="run-summary">
+      <span class="pill never">never run</span>
+      <div class="run-summary__meta">click <em>Run now</em> to trigger the first run.</div>
+      <div></div>
+    </div>
+  {% endif %}
+
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:.75rem;">
+    <details class="disclosure">
+      <summary>Show last 25 runs</summary>
+      <div class="history-panel"
+           hx-get="/ops/crons/{{ item.name }}/history"
+           hx-trigger="toggle once from:closest details"
+           hx-swap="innerHTML">
+        <div class="history-empty">Loading…</div>
       </div>
     </details>
-  </td>
-  <td><code>{{ item.schedule_human }}</code></td>
-  <td>
-    {% if lr %}
-      <time datetime="{{ lr.started_at.isoformat() }}" title="{{ lr.started_at.isoformat() }}">
-        {{ lr.started_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}
-      </time>
-      {% if lr.started_by_email %}
-        <div style="font-size:.8em;color:#666;">by {{ lr.started_by_email }}</div>
-      {% endif %}
-    {% else %}
-      <em style="color:#999;">never</em>
-    {% endif %}
-  </td>
-  <td>
-    {% if not lr %}
-      <span class="pill never">never</span>
-    {% else %}
-      <span class="pill {{ lr.status }}">{{ lr.status }}</span>
-      {% if lr.error_excerpt %}
-        <div><span class="err-excerpt" title="{{ lr.error_excerpt }}">{{ lr.error_excerpt }}</span></div>
-      {% endif %}
-    {% endif %}
-  </td>
-  <td>
-    {% if lr and lr.duration_seconds is not none %}
-      {{ '%.2f' % lr.duration_seconds }}s
-    {% else %}—{% endif %}
-  </td>
-  <td>
-    {% if lr and lr.items_processed is not none %}{{ lr.items_processed }}{% else %}—{% endif %}
-  </td>
-  <td class="actions">
-    <button class="run"
+
+    <button class="btn btn--primary"
             {% if item.is_running %}disabled{% endif %}
             hx-post="/ops/crons/{{ item.name }}/run"
             hx-target="#cron-row-{{ item.name }}"
             hx-swap="outerHTML">
       {% if item.is_running %}Running…{% else %}Run now{% endif %}
     </button>
-  </td>
-</tr>
+  </div>
+</article>

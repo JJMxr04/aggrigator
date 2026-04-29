@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from aggrigator.deps import SessionDep, require_user
-from aggrigator.models import Event, Market, Selection, User
+from aggrigator.models import BookmakerSelection, Event, Market, Selection, User
 from aggrigator.schemas.event import (
     EventDetailOut,
     EventOut,
@@ -59,6 +59,8 @@ async def list_events(
     stmt = select(Event).options(
         selectinload(Event.home_team),
         selectinload(Event.away_team),
+        selectinload(Event.sport),
+        selectinload(Event.league),
     )
 
     if sport:
@@ -119,7 +121,12 @@ async def get_event(
     event = await session.scalar(
         select(Event)
         .where(Event.id == event_id)
-        .options(selectinload(Event.home_team), selectinload(Event.away_team))
+        .options(
+            selectinload(Event.home_team),
+            selectinload(Event.away_team),
+            selectinload(Event.sport),
+            selectinload(Event.league),
+        )
     )
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
@@ -162,7 +169,12 @@ async def get_event_markets(
     stmt = (
         select(Market)
         .where(Market.event_id == event_id)
-        .options(selectinload(Market.selections))
+        .options(
+            selectinload(Market.selections)
+                .selectinload(Selection.by_book)
+                .selectinload(BookmakerSelection.bookmaker),
+            selectinload(Market.subject_team),
+        )
     )
 
     if category:
@@ -220,7 +232,12 @@ async def _attach_markets(session, events: list[Event]) -> list[EventWithMarkets
     stmt = (
         select(Market)
         .where(Market.event_id.in_(event_ids))
-        .options(selectinload(Market.selections))
+        .options(
+            selectinload(Market.selections)
+                .selectinload(Selection.by_book)
+                .selectinload(BookmakerSelection.bookmaker),
+            selectinload(Market.subject_team),
+        )
         .order_by(Market.event_id, Market.category, Market.scope, Market.line)
     )
     markets = list(await session.scalars(stmt))

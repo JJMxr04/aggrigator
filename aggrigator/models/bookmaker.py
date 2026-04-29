@@ -72,3 +72,13 @@ class BookmakerSelection(Base, TimestampMixin):
     )
 
     selection = relationship("Selection", back_populates="by_book", lazy="raise")
+    bookmaker = relationship("Bookmaker", lazy="raise")
+
+    @property
+    def bookmaker_name(self) -> str | None:
+        """Display name pulled from the related ``Bookmaker``. Read by the
+        Pydantic ``BookmakerSelectionOut.bookmaker_name`` field via
+        ``from_attributes`` so portal templates don't need a second roundtrip
+        to ``/v1/bookmakers``. Requires the caller to ``selectinload`` the
+        ``bookmaker`` relationship — otherwise SQLAlchemy raises (lazy="raise")."""
+        return self.bookmaker.name if self.bookmaker else None

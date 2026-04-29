@@ -96,6 +96,9 @@ class Market(Base, TimestampMixin):
     )
 
     event = relationship("Event", back_populates="markets", lazy="raise")
+    subject_team = relationship(
+        "Team", foreign_keys=[subject_team_id], lazy="raise",
+    )
     selections = relationship(
         "Selection", back_populates="market", cascade="all, delete-orphan", lazy="raise"
     )

@@ -235,3 +235,41 @@ async def settle_pending_events(
         logger.info("Voided %d stale pending selections", voided)
 
     return {"events_processed": processed, "selections_settled": settled, "voided": voided}
+
+
+async def void_remaining_pending(session: AsyncSession, event: Event) -> int:
+    """Mark any still-PENDING selection on a finalized event as VOID.
+
+    Rationale: the webhook payload built immediately after this should carry
+    DEFINITIVE results only — no PENDING. Anything we couldn't resolve via
+    PROVIDER (per-odd ``score`` from SGO) or COMPUTED (event-score logic)
+    will never resolve on the free SGO tier, so locking it as VOID is honest.
+
+    Caller is responsible for ordering: run AFTER ``grade_event`` +
+    ``settle_event``, BEFORE ``enqueue_for_event``. Only touches PENDING rows
+    — never overrides MANUAL/PROVIDER/COMPUTED settlements.
+    """
+    if event.status_type != "finished":
+        return 0
+    now = datetime.now(tz=timezone.utc)
+    result = await session.execute(
+        update(Selection)
+        .where(
+            Selection.settlement_status == "PENDING",
+            Selection.market_id.in_(
+                select(Market.id).where(Market.event_id == event.id)
+            ),
+        )
+        .values(
+            settlement_status="VOID",
+            settled_at=now,
+            settlement_source="COMPUTED",
+        )
+    )
+    voided = result.rowcount or 0
+    if voided:
+        logger.info(
+            "Voided %d remaining PENDING selections on finalized event=%s",
+            voided, event.id,
+        )
+    return voided

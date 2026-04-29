@@ -86,6 +86,8 @@ class Event(Base, TimestampMixin):
 
     home_team = relationship("Team", foreign_keys=[home_team_id], lazy="raise")
     away_team = relationship("Team", foreign_keys=[away_team_id], lazy="raise")
+    sport = relationship("Sport", lazy="raise")
+    league = relationship("League", lazy="raise")
     markets = relationship(
         "Market", back_populates="event", cascade="all, delete-orphan", lazy="raise"
     )
