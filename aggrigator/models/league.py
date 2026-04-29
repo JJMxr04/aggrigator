@@ -23,11 +23,12 @@ class League(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     short_name: Mapped[str] = mapped_column(String(48), default="", server_default="")
 
-    # Default ``active=True`` — newly-seeded leagues are walkable out of the
-    # box. ``ingest_due_leagues`` filters on this. Flip individual leagues
-    # off in SQLAdmin to throttle SGO quota; your decision persists until
-    # the next seed (per ``upsert_league_from_sgo``).
-    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # Default ``active=False`` — newly-seeded leagues are off until the
+    # operator explicitly enables them in SQLAdmin. ``ingest_due_leagues``
+    # filters on this, so a fresh DB walks zero leagues until you turn
+    # something on. Re-seeding does NOT reset operator choices (per
+    # ``upsert_league_from_sgo``).
+    active: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     refresh_cadence_minutes: Mapped[int] = mapped_column(
         Integer, default=720, server_default="720"
     )

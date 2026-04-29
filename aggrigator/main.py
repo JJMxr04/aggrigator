@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -67,6 +68,16 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(BaseHTTPMiddleware, dispatch=resolve_first_party_promotion)
 
+    # The aggregator is an internal API + admin surface — never indexable.
+    # Stamp ``X-Robots-Tag`` on every response so a crawler that gets
+    # behind any reverse proxy still won't have its fetch indexed.
+    async def _noindex_dispatch(request, call_next):
+        response = await call_next(request)
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+        return response
+
+    app.add_middleware(BaseHTTPMiddleware, dispatch=_noindex_dispatch)
+
     app.include_router(auth_router.router)
     app.include_router(api_keys_router.router)
     app.include_router(references_router.router)
@@ -90,6 +101,13 @@ def create_app() -> FastAPI:
             "ops": "/ops/crons",
             "healthz": "/healthz",
         }
+
+    @app.get("/robots.txt", include_in_schema=False, response_class=PlainTextResponse)
+    def robots():
+        # The aggregator is an internal API + admin surface — block every
+        # crawler from every path. Mirrors ``X-Robots-Tag: noindex`` set
+        # on every response above.
+        return "User-agent: *\nDisallow: /\n"
 
     @app.get("/healthz")
     def healthz():

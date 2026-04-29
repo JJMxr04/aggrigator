@@ -190,6 +190,15 @@ async def run_detail_panel(
 
 
 # ---- data-reset (truncate-with-CASCADE) ------------------------------------
+#
+# These routes wipe entire tables. They are gated by ``AGG_TEST_MODE`` AND
+# admin authentication AND CSRF AND a typed-name confirmation. In production
+# (the default ``AGG_TEST_MODE=False``) they 403 even for valid admins —
+# the operator must explicitly opt the deployment into testing mode via
+# ``.env`` to use these.
+
+
+from aggrigator.ops.testmode import require_test_mode as _require_test_mode  # noqa: E402
 
 
 @router.get("/data-reset", response_class=HTMLResponse)
@@ -198,6 +207,7 @@ async def data_reset_page(request: Request):
 
     Each truncate goes through ``POST /ops/data-reset/{table}`` which checks
     a typed-name confirmation before issuing ``TRUNCATE ... CASCADE``."""
+    _require_test_mode()
     user = await _admin_from_session(request)
     if user is None:
         return RedirectResponse(
@@ -226,11 +236,13 @@ async def data_reset_page(request: Request):
 async def data_reset_truncate(request: Request, table: str):
     """Truncate one table CASCADE.
 
-    Two confirmation gates:
-      1. CSRF token (header / hidden form field) — see ``_require_csrf``.
-      2. Typed confirmation — the form submits ``confirm`` which must equal
+    Three confirmation gates:
+      1. ``AGG_TEST_MODE=True`` (env-driven) — see ``_require_test_mode``.
+      2. CSRF token (header / hidden form field) — see ``_require_csrf``.
+      3. Typed confirmation — the form submits ``confirm`` which must equal
          the table name. Catches accidental clicks. Server-side check.
     """
+    _require_test_mode()
     user = await _admin_from_session(request)
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED)

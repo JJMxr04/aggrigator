@@ -35,17 +35,16 @@ async def upsert_sport_from_sgo(session: AsyncSession, payload: dict) -> Sport |
             id=sport_id,
             name=payload.get("name") or sport_id.title(),
             short_name=(payload.get("shortName") or "")[:48],
-            active=True,
+            active=False,
         )
         session.add(row)
     else:
         row.name = payload.get("name") or sport_id.title()
         row.short_name = (payload.get("shortName") or "")[:48]
-        # Every seed resets ``active=True``. Treat seed as "reset to known
-        # default state" — the default being "everything SGO ships is on".
-        # To deactivate a sport, flip it off in SQLAdmin AFTER the most
-        # recent seed; your decision persists until the next seed run.
-        row.active = True
+        # Re-seed preserves operator choices: the active flag is set when
+        # the row is first inserted (default False) and never overwritten
+        # by subsequent seeds. Operators flip sports on in SQLAdmin and
+        # those decisions stick across daily seeds.
     return row
 
 
@@ -56,7 +55,7 @@ async def upsert_league_from_sgo(session: AsyncSession, payload: dict) -> League
         return None
     sport = await session.get(Sport, sport_id)
     if sport is None:
-        sport = Sport(id=sport_id, name=sport_id.title(), active=True)
+        sport = Sport(id=sport_id, name=sport_id.title(), active=False)
         session.add(sport)
         await session.flush()
 
@@ -67,18 +66,17 @@ async def upsert_league_from_sgo(session: AsyncSession, payload: dict) -> League
             sport_id=sport.id,
             name=payload.get("name") or league_id,
             short_name=(payload.get("shortName") or "")[:48],
-            active=True,
+            active=False,
         )
         session.add(row)
     else:
         row.sport_id = sport.id
         row.name = payload.get("name") or league_id
         row.short_name = (payload.get("shortName") or "")[:48]
-        # Same "reset to active" rule as ``upsert_sport_from_sgo`` —
-        # ``ingest_due_leagues`` walks ``active=True`` leagues only, so the
-        # natural expectation is that ``Run seed`` (or ``Run full_refresh``)
-        # gets the operator back to "every league walkable" each time.
-        row.active = True
+        # Re-seed preserves operator choices: see ``upsert_sport_from_sgo``.
+        # ``ingest_due_leagues`` walks ``active=True`` leagues only, so a
+        # fresh DB walks zero leagues until the operator turns something
+        # on; that decision then sticks across daily seeds.
     return row
 
 

@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     env: str = Field(default="dev", alias="AGG_ENV")
     debug: bool = Field(default=False, alias="AGG_DEBUG")
     log_level: str = Field(default="INFO", alias="AGG_LOG_LEVEL")
+    # When True, dangerous endpoints — data-reset (truncate-with-CASCADE)
+    # plus the manual "ingest one event by ID" — are reachable. When False
+    # (default) they 403 even for authenticated admins. Flip ONLY for
+    # local dev / staging — never in production.
+    test_mode: bool = Field(default=False, alias="AGG_TEST_MODE")
 
     # db — local dev defaults match Homebrew Postgres 18 on port 5434.
     database_url: str = Field(

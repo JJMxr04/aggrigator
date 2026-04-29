@@ -40,7 +40,7 @@ REGISTRY: list[CronSpec] = [
             "Seed sports + leagues, then ingest events for every active "
             "league. The end-to-end one-click refresh."
         ),
-        schedule_human="manual only",
+        schedule_human="daily @ 02:30 UTC",
         runner=run_full_refresh,
         max_runtime_seconds=2400,
     ),
@@ -50,7 +50,7 @@ REGISTRY: list[CronSpec] = [
             "Pull every sport and league from SGO into the DB. Doesn't fetch "
             "events — use ``full_refresh`` or ``ingest_due_leagues`` for that."
         ),
-        schedule_human="manual only",
+        schedule_human="daily @ 02:00 UTC",
         runner=run_seed_sports_and_leagues,
         max_runtime_seconds=600,
     ),

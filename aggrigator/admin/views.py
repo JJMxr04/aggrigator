@@ -178,10 +178,22 @@ class CronsConsoleLink(BaseView):
 
 
 class DataResetLink(BaseView):
-    """Sidebar entry → /ops/data-reset (truncate-with-cascade UI)."""
+    """Sidebar entry → /ops/data-reset (truncate-with-cascade UI).
+
+    Visible only when ``AGG_TEST_MODE=True`` — production admins shouldn't
+    see a button that always 403s. The redirect target itself is also
+    test-mode-gated (defense in depth) at ``aggrigator/ops/routes.py``."""
 
     name = "Data reset"
     icon = "fa-solid fa-trash-can"
+
+    def is_visible(self, request):
+        from aggrigator.config import get_settings
+        return get_settings().test_mode
+
+    def is_accessible(self, request):
+        from aggrigator.config import get_settings
+        return get_settings().test_mode
 
     @expose("/data-reset", methods=["GET"], identity="data-reset")
     async def data_reset(self, request):

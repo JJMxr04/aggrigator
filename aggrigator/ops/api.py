@@ -143,7 +143,13 @@ async def trigger_ingest_event(
     _admin: Annotated[User, Depends(require_admin)],
 ) -> dict:
     """Ad-hoc one-event ingest. Useful when testing the lifecycle for a
-    specific event without waiting on the league sweep."""
+    specific event without waiting on the league sweep.
+
+    Gated by ``AGG_TEST_MODE`` — manual ingest in production would let an
+    operator silently rewrite event state, so we keep it admin-only AND
+    test-mode-only."""
+    from aggrigator.ops.testmode import require_test_mode
+    require_test_mode()
     client = _build_client()
 
     payload_dict: dict | None = None

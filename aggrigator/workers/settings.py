@@ -42,6 +42,17 @@ class WorkerSettings:
     # Cron schedule.
     cron_jobs = [
         cron(
+            seed_task,
+            hour={2}, minute={0},  # daily 02:00 UTC — refresh sport/league taxonomy
+            name="seed_sports_and_leagues",
+        ),
+        cron(
+            full_refresh_task,
+            hour={2}, minute={30}, # daily 02:30 UTC — seed (again, idempotent)
+                                   # then ingest events for every active league
+            name="full_refresh",
+        ),
+        cron(
             ingest_due_leagues_task,
             minute={0, 30},        # every 30 minutes
             run_at_startup=False,
