@@ -1,0 +1,38 @@
+# Keep the build context tiny so each `docker build` is fast.
+# Anything not needed at runtime / build-time goes here.
+
+# Virtualenvs
+venv/
+.venv/
+
+# Python noise
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tests + dev tooling
+tests/
+.coverage
+htmlcov/
+
+# Editor / VCS
+.git/
+.gitignore
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local env
+.env
+.env.local
+.env.*.local
+
+# Docs / planning (in repo for reference, not in image)
+aggrigator-plan/
+README.md
