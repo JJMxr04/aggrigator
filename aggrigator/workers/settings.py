@@ -4,8 +4,11 @@ Run with::
 
     arq aggrigator.workers.settings.WorkerSettings
 
-The schedule mirrors plan §5: ingest every 30m, webhook_deliver every 30s
-(short loop because retries clump near boundaries), settle nightly at 03:30 UTC.
+The schedule mirrors plan §5: ingest every 30m by default, webhook_deliver
+every 30s (short loop because retries clump near boundaries), settle nightly
+at 03:30 UTC. The ingest + full_refresh cadences are env-tunable for free
+SGO tier — see ``AGG_INGEST_CRON_MINUTES`` and ``AGG_FULL_REFRESH_WEEKDAY``
+in config.py.
 """
 
 from __future__ import annotations
@@ -26,6 +29,52 @@ def _redis_settings() -> RedisSettings:
     return RedisSettings.from_dsn(s.redis_url)
 
 
+def _build_cron_jobs() -> list:
+    """Assemble the cron schedule, honoring env-driven cadence knobs.
+
+    Done at module load, not inside WorkerSettings, so arq sees a plain
+    ``cron_jobs`` attribute. Re-importing this module after changing env
+    vars yields a fresh schedule — that matches the worker's
+    deploy-on-restart lifecycle.
+    """
+    s = get_settings()
+
+    # full_refresh: daily 02:30 UTC by default; weekly when
+    # AGG_FULL_REFRESH_WEEKDAY is set (free-tier friendly).
+    full_refresh_kwargs: dict = {
+        "hour": {2},
+        "minute": {30},
+        "name": "full_refresh",
+    }
+    if s.full_refresh_weekday_set is not None:
+        full_refresh_kwargs["weekday"] = s.full_refresh_weekday_set
+
+    return [
+        cron(
+            seed_task,
+            hour={2}, minute={0},
+            name="seed_sports_and_leagues",
+        ),
+        cron(full_refresh_task, **full_refresh_kwargs),
+        cron(
+            ingest_due_leagues_task,
+            minute=s.ingest_cron_minute_set,
+            run_at_startup=False,
+            name="ingest_due_leagues",
+        ),
+        cron(
+            webhook_deliver_task,
+            second={0, 30},
+            name="webhook_deliver",
+        ),
+        cron(
+            settle_pending_task,
+            hour={3}, minute={30},
+            name="settle_pending",
+        ),
+    ]
+
+
 class WorkerSettings:
     redis_settings = _redis_settings()
 
@@ -39,36 +88,7 @@ class WorkerSettings:
         seed_task,
     ]
 
-    # Cron schedule.
-    cron_jobs = [
-        cron(
-            seed_task,
-            hour={2}, minute={0},  # daily 02:00 UTC — refresh sport/league taxonomy
-            name="seed_sports_and_leagues",
-        ),
-        cron(
-            full_refresh_task,
-            hour={2}, minute={30}, # daily 02:30 UTC — seed (again, idempotent)
-                                   # then ingest events for every active league
-            name="full_refresh",
-        ),
-        cron(
-            ingest_due_leagues_task,
-            minute={0, 30},        # every 30 minutes
-            run_at_startup=False,
-            name="ingest_due_leagues",
-        ),
-        cron(
-            webhook_deliver_task,
-            second={0, 30},        # every 30 seconds
-            name="webhook_deliver",
-        ),
-        cron(
-            settle_pending_task,
-            hour={3}, minute={30}, # nightly 03:30 UTC
-            name="settle_pending",
-        ),
-    ]
+    cron_jobs = _build_cron_jobs()
 
     keep_result = 3600  # one hour of job results visible in Redis
     max_jobs = 10

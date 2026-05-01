@@ -21,13 +21,25 @@ from __future__ import annotations
 
 import logging
 
-from aggrigator.workers.tasks.ingest import run_ingest_due_leagues
+from aggrigator.config import get_settings
+from aggrigator.ingest.quota import is_monthly_quota_exhausted
+from aggrigator.workers.tasks.ingest import _build_client, run_ingest_due_leagues
 from aggrigator.workers.tasks.seed import run_seed_sports_and_leagues
 
 logger = logging.getLogger(__name__)
 
 
 async def run_full_refresh() -> dict:
+    # Pre-flight quota check — skip BOTH halves when over budget, so we
+    # don't burn the seed allowance (~5–15 calls) only to bail in the
+    # ingest step. Mirrors run_ingest_due_leagues' check; same bypass
+    # rules (test_mode + threshold>=100).
+    settings = get_settings()
+    if not settings.test_mode and is_monthly_quota_exhausted(
+        _build_client(), threshold_pct=settings.sgo_quota_threshold_pct,
+    ):
+        return {"skipped": True, "reason": "sgo_monthly_quota"}
+
     seed_summary = await run_seed_sports_and_leagues()
     ingest_summary = await run_ingest_due_leagues()
     combined = {

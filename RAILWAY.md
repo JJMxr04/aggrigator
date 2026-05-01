@@ -198,6 +198,75 @@ league refresh cadence.
 
 ---
 
+## 6a. Free-tier SGO tuning (recommended if you're on the amateur tier)
+
+SportsGameOdds's free / amateur tier meters by **per-month entities**,
+not raw HTTP requests. The default cap is around **2,500 entities/month**
+— each `/events` response can return many entities (one per event +
+markets + selections), so the worker can burn through the cap days
+before month-end if left at default cadence.
+
+Three env vars (all read by `aggrigator/config.py`) tune this:
+
+| Var | Default | Purpose |
+| --- | --- | --- |
+| `AGG_INGEST_CRON_MINUTES` | `0,30` | Comma-separated minutes for the `ingest_due_leagues` cron. Default = every 30 min. |
+| `AGG_FULL_REFRESH_WEEKDAY` | *(unset)* | arq weekday (0=Mon … 6=Sun) for daily `full_refresh`. Unset = every day. |
+| `AGG_SGO_QUOTA_THRESHOLD_PCT` | `90` | Skip ingest crons when monthly usage is ≥ this percent. `100` disables the check. |
+
+### Recommended free-tier preset
+
+In Railway → `agg-web` and `agg-worker` → **Variables**:
+
+```
+AGG_INGEST_CRON_MINUTES=0
+AGG_FULL_REFRESH_WEEKDAY=0
+AGG_SGO_QUOTA_THRESHOLD_PCT=85
+```
+
+What this does:
+
+- `ingest_due_leagues` runs **hourly** instead of every 30 min — half
+  the entity burn.
+- `full_refresh` runs **only on Mondays** instead of daily — cuts the
+  taxonomy-walk cost by ~85%.
+- The worker calls `/account/usage` before each ingest and **skips the
+  run if usage is past 85%** of any per-month cap. The cron-run row
+  records `{"skipped": true, "reason": "sgo_monthly_quota"}` so the
+  ops console (`/ops/crons`) shows when it kicked in.
+
+You can tighten further by:
+
+- Marking unused leagues `active=False` (Django admin → `/admin/leagues`).
+  The worker only walks leagues with `active=True`. Cutting from "all
+  leagues" to just NFL + NBA can reduce burn 60%+.
+- Setting `AGG_INGEST_CRON_MINUTES=0` and only enabling specific hours
+  by combining with arq's hour filter — currently we don't expose an
+  `AGG_INGEST_CRON_HOURS` knob; if you need it, edit
+  `aggrigator/workers/settings.py`'s `_build_cron_jobs` directly.
+
+The skip is **bypassed when `AGG_TEST_MODE=true`** so dev / CI never
+short-circuit on synthetic usage payloads. Leave `AGG_TEST_MODE=false`
+in prod.
+
+### Monitoring usage
+
+From the Railway **Shell** tab on `agg-web`:
+
+```sh
+python -c "
+from aggrigator.workers.tasks.ingest import _build_client
+import json
+print(json.dumps(_build_client().get_account_usage(), indent=2))
+"
+```
+
+The `rateLimits.per-month` block shows `current-entities` /
+`max-entities`. When `current` approaches `max`, either upgrade your
+SGO tier or wait for month-end reset.
+
+---
+
 ## 7. (Optional) Register a webhook subscriber
 
 If something downstream needs `event.finalized` / `event.voided`

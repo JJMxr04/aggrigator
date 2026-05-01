@@ -80,6 +80,29 @@ class Settings(BaseSettings):
     # observability
     sentry_dsn: str = Field(default="", alias="AGG_SENTRY_DSN")
 
+    # --- free-tier tuning ---
+    # Comma-separated minute values for the ingest_due_leagues cron. Default
+    # "0,30" → every 30 minutes (paid SGO behavior). For free tier set to
+    # "0" (hourly) to halve SGO quota burn.
+    ingest_cron_minutes: str = Field(
+        default="0,30", alias="AGG_INGEST_CRON_MINUTES",
+    )
+    # Optional weekday filter for the daily full_refresh cron. arq uses
+    # 0=Mon ... 6=Sun. Empty (default) → run every day at 02:30 UTC. Set to
+    # "0" to run only Mondays — usually enough to catch upstream schema
+    # changes on a free tier.
+    full_refresh_weekday: str = Field(
+        default="", alias="AGG_FULL_REFRESH_WEEKDAY",
+    )
+    # Skip ingest crons (ingest_due_leagues + full_refresh) if SGO's monthly
+    # /account/usage reports we're past this percent of any per-month cap
+    # (requests OR entities). Set to 100 to disable the check. The check is
+    # bypassed entirely when test_mode=True so tests + dev don't hit the
+    # network.
+    sgo_quota_threshold_pct: int = Field(
+        default=90, alias="AGG_SGO_QUOTA_THRESHOLD_PCT",
+    )
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
@@ -87,6 +110,41 @@ class Settings(BaseSettings):
     @property
     def sgo_fixture_path(self) -> Path | None:
         return Path(self.sgo_fixture_dir) if self.sgo_fixture_dir else None
+
+    @property
+    def ingest_cron_minute_set(self) -> set[int]:
+        """Parsed AGG_INGEST_CRON_MINUTES → set[int] for arq.cron(minute=...).
+
+        Falls back to the 30-minute cadence on a malformed value rather than
+        crashing the worker on boot.
+        """
+        try:
+            return {
+                int(p.strip())
+                for p in self.ingest_cron_minutes.split(",")
+                if p.strip()
+            } or {0, 30}
+        except ValueError:
+            return {0, 30}
+
+    @property
+    def full_refresh_weekday_set(self) -> set[int] | None:
+        """Parsed AGG_FULL_REFRESH_WEEKDAY → set[int] or None (= every day).
+
+        ``None`` is meaningful here: arq's cron treats an unset weekday as
+        "every day", so we return None to omit the kwarg entirely.
+        """
+        if not self.full_refresh_weekday.strip():
+            return None
+        try:
+            parsed = {
+                int(p.strip())
+                for p in self.full_refresh_weekday.split(",")
+                if p.strip()
+            }
+        except ValueError:
+            return None
+        return parsed or None
 
 
 @lru_cache(maxsize=1)
