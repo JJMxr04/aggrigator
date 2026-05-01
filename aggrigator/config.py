@@ -77,6 +77,13 @@ class Settings(BaseSettings):
         alias="AGG_CORS_ORIGINS",
     )
 
+    # Host-header allowlist. Comma-separated. Empty (default) skips the
+    # TrustedHostMiddleware install — current behavior. Set in prod to
+    # e.g. "aggrigator-production.up.railway.app,api.example.com" to
+    # reject Host-spoofed requests. Wildcard prefixes ("*.example.com")
+    # are honored by Starlette.
+    allowed_hosts: str = Field(default="", alias="AGG_ALLOWED_HOSTS")
+
     # observability
     sentry_dsn: str = Field(default="", alias="AGG_SENTRY_DSN")
 
@@ -106,6 +113,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        return [h.strip() for h in self.allowed_hosts.split(",") if h.strip()]
 
     @property
     def sgo_fixture_path(self) -> Path | None:

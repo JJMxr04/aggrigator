@@ -23,12 +23,21 @@ case "$ROLE" in
     # access logs to stdout for journald / docker logs.
     # PORT is injected by Railway / Render / etc. Falls back to 8001 for
     # Coolify / docker-compose where we control the port mapping ourselves.
+    #
+    # ``--forwarded-allow-ips=*`` makes gunicorn trust X-Forwarded-* headers
+    # from the upstream proxy (Railway's edge / Coolify's Traefik). Without
+    # it the app sees the proxy IP as the client and ``request.url.scheme``
+    # as ``http`` — which breaks rate-limit keying on real client IP and
+    # session cookies' ``secure`` flag. Trusting "*" is safe here because
+    # Railway / Coolify are the only things that can reach the container;
+    # external clients never bypass the edge.
     exec gunicorn aggrigator.main:app \
         --worker-class uvicorn.workers.UvicornWorker \
         --workers "${AGG_WEB_WORKERS:-4}" \
         --bind "0.0.0.0:${PORT:-8001}" \
         --timeout "${AGG_WEB_TIMEOUT:-30}" \
         --graceful-timeout 30 \
+        --forwarded-allow-ips="*" \
         --access-logfile - \
         --error-logfile -
     ;;

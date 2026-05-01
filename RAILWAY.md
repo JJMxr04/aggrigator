@@ -125,12 +125,30 @@ SPORTSGAMEODDS_API_KEY=<your real SGO key>
 # Wildcards are rejected.
 AGG_CORS_ORIGINS=https://app.example.com
 
+# Host-header allowlist — Railway domain + any custom domain you attach.
+# REQUIRED in prod (rejects Host-spoofed / DNS-rebinding requests).
+AGG_ALLOWED_HOSTS=aggrigator-production.up.railway.app
+
 # Optional but recommended
 AGG_SENTRY_DSN=https://<key>@sentry.io/<project>
 
 AGG_WEB_WORKERS=4
 AGG_WEB_TIMEOUT=30
 ```
+
+> **Production hardening note.** With `AGG_ENV=prod`, the app:
+>
+> - Disables `/docs`, `/redoc`, `/openapi.json` (route + schema disclosure)
+> - Returns 404 on `/` (no version / route hints)
+> - Stamps `Strict-Transport-Security`, `X-Frame-Options: DENY`,
+>   `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+>   `Permissions-Policy`, `Cross-Origin-Opener-Policy`, plus
+>   `X-Robots-Tag: noindex, nofollow, noarchive` on every response
+> - Marks the session cookie `Secure` + honors `X-Forwarded-Proto: https`
+>   from Railway's edge
+>
+> If `AGG_ALLOWED_HOSTS` is set, requests with any other `Host` header
+> get a 400 from Starlette's `TrustedHostMiddleware`.
 
 Hit **Deploy**. Railway will:
 
@@ -310,15 +328,75 @@ env vars.
 
 ## 9. Pre-flight checklist
 
-Before you mark a deploy "done", confirm:
+Before you mark a deploy "done", confirm each item below. The bash block
+that follows runs them all in one shot — paste it into your terminal
+with `DOMAIN=` set to your Railway domain.
 
-- [ ] `https://<agg-domain>/healthz` returns `{"ok": true, "version": "..."}`.
-- [ ] `https://<agg-domain>/robots.txt` returns `User-agent: *\nDisallow: /`.
-- [ ] Every response carries `X-Robots-Tag: noindex, nofollow, noarchive`.
-- [ ] `https://<agg-domain>/admin` requires login.
-- [ ] `https://<agg-domain>/ops/data-reset` returns **403**
-      (`AGG_TEST_MODE=false` in prod).
-- [ ] `https://<agg-domain>/v1/sports` returns 401 without an API key.
+```sh
+DOMAIN=aggrigator-production.up.railway.app
+
+# 1. Homepage is opaque (404; no JSON disclosing routes/version).
+curl -s -o /dev/null -w "GET /            -> %{http_code}\n" "https://$DOMAIN/"
+
+# 2. /healthz works (200, body just {"ok":true} — no version leak).
+curl -s -w "\nGET /healthz     -> %{http_code}\n" "https://$DOMAIN/healthz"
+
+# 3. /robots.txt blocks everything.
+curl -s -w "\nGET /robots.txt  -> %{http_code}\n" "https://$DOMAIN/robots.txt"
+
+# 4. OpenAPI/Swagger/Redoc are gone in prod (all 404).
+for path in /docs /redoc /openapi.json; do
+  curl -s -o /dev/null -w "GET $path  -> %{http_code}\n" "https://$DOMAIN$path"
+done
+
+# 5. Admin redirects to login (302 or 303).
+curl -s -o /dev/null -w "GET /admin/      -> %{http_code}\n" "https://$DOMAIN/admin/"
+
+# 6. Ops console redirects to auth.
+curl -s -o /dev/null -w "GET /ops/crons   -> %{http_code}\n" "https://$DOMAIN/ops/crons"
+
+# 7. /v1/sports rejects unauth'd traffic (401).
+curl -s -o /dev/null -w "GET /v1/sports   -> %{http_code}\n" "https://$DOMAIN/v1/sports"
+
+# 8. Dangerous endpoint is 403 in prod (AGG_TEST_MODE=false).
+curl -s -o /dev/null -w "GET /ops/data-reset -> %{http_code}\n" "https://$DOMAIN/ops/data-reset"
+
+# 9. Bogus Host is rejected (400) — confirms AGG_ALLOWED_HOSTS is wired.
+curl -sk -o /dev/null -w "Bogus Host       -> %{http_code}\n" \
+  -H "Host: evil.example.com" "https://$DOMAIN/healthz"
+
+# 10. Security headers are stamped on every response.
+echo "--- security headers on /healthz ---"
+curl -sI "https://$DOMAIN/healthz" | grep -iE \
+  '^(x-robots-tag|x-content-type-options|x-frame-options|referrer-policy|permissions-policy|cross-origin-opener-policy|strict-transport-security):'
+```
+
+Expected output:
+
+```
+GET /            -> 404
+GET /healthz     -> 200    {"ok":true}
+GET /robots.txt  -> 200    User-agent: *  /  Disallow: /
+GET /docs        -> 404
+GET /redoc       -> 404
+GET /openapi.json -> 404
+GET /admin/      -> 302
+GET /ops/crons   -> 303
+GET /v1/sports   -> 401
+GET /ops/data-reset -> 403
+Bogus Host       -> 400
+--- security headers on /healthz ---
+x-robots-tag: noindex, nofollow, noarchive
+x-content-type-options: nosniff
+x-frame-options: DENY
+referrer-policy: no-referrer
+permissions-policy: accelerometer=(), camera=(), geolocation=(), ...
+cross-origin-opener-policy: same-origin
+strict-transport-security: max-age=63072000; includeSubDomains; preload
+```
+
+Plus from inside Railway:
+
 - [ ] Worker logs show `Starting worker for ...` and the cron schedule.
 - [ ] `full_refresh` cron run succeeds (check `/ops/crons/full_refresh/history`).
 
