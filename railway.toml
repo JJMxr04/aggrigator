@@ -1,16 +1,28 @@
 ## Railway service config — applied automatically by the GitHub connector.
-## Two services point at this repo (agg-web and agg-worker); the build /
-## healthcheck section is shared, the start command is overridden per
-## service in Railway's UI (or via [environments.<env>.deploy] sections).
+## Two services point at this repo (agg-web and agg-worker); both share
+## the build + healthcheck config below.
+##
+## DO NOT set `startCommand` here. For Dockerfile-based services Railway's
+## startCommand REPLACES the image's ENTRYPOINT entirely (it does NOT
+## append to CMD), so e.g. `startCommand = "web"` would try to exec a
+## "web" binary that doesn't exist. Leaving it unset lets the Dockerfile's
+## ENTRYPOINT ["/app/docker-entrypoint.sh"] + CMD ["web"] apply naturally
+## — that's the right default for the web service.
+##
+## The worker service uses the same image but needs to run the entrypoint
+## with a different arg. Because startCommand replaces ENTRYPOINT, the
+## worker's Custom Start Command (set in the Railway UI) must be the
+## FULL command:
+##
+##     /app/docker-entrypoint.sh worker
+##
+## Not just "worker".
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-## Default for the web service. The worker service overrides this in
-## the Railway UI: Settings → Deploy → Custom Start Command = "worker".
-startCommand = "web"
 healthcheckPath = "/healthz"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"

@@ -164,7 +164,14 @@ source.
 
 Rename it to `agg-worker`. Then in **Settings**:
 
-- **Custom Start Command**: `worker`
+- **Custom Start Command**: `/app/docker-entrypoint.sh worker`
+
+  ⚠️ **Must be the full command, not just `worker`.** For
+  Dockerfile-based services Railway's start command **replaces** the
+  image's `ENTRYPOINT` rather than appending to it — setting
+  `worker` alone makes Railway try to exec a `worker` binary that
+  doesn't exist. Spelling out the entrypoint path runs our script with
+  `worker` as `$1`, which the entrypoint's case statement handles.
 - **Healthcheck path**: clear it (the worker doesn't expose HTTP).
 - **Networking**: do not generate a domain — the worker has no public
   ingress.
