@@ -1,0 +1,17 @@
+## Railway service config — applied automatically by the GitHub connector.
+## Two services point at this repo (agg-web and agg-worker); the build /
+## healthcheck section is shared, the start command is overridden per
+## service in Railway's UI (or via [environments.<env>.deploy] sections).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+## Default for the web service. The worker service overrides this in
+## the Railway UI: Settings → Deploy → Custom Start Command = "worker".
+startCommand = "web"
+healthcheckPath = "/healthz"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

@@ -21,10 +21,12 @@ case "$ROLE" in
     echo "[entrypoint] starting gunicorn (uvicorn workers)..."
     # 4 workers default, tunable via env. ``--access-logfile -`` sends
     # access logs to stdout for journald / docker logs.
+    # PORT is injected by Railway / Render / etc. Falls back to 8001 for
+    # Coolify / docker-compose where we control the port mapping ourselves.
     exec gunicorn aggrigator.main:app \
         --worker-class uvicorn.workers.UvicornWorker \
         --workers "${AGG_WEB_WORKERS:-4}" \
-        --bind 0.0.0.0:8001 \
+        --bind "0.0.0.0:${PORT:-8001}" \
         --timeout "${AGG_WEB_TIMEOUT:-30}" \
         --graceful-timeout 30 \
         --access-logfile - \

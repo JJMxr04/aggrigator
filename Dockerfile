@@ -60,12 +60,14 @@ RUN rm -rf tests/ .pytest_cache/ .git/ .vscode/ aggrigator-plan/ 2>/dev/null || 
 
 USER app
 
-# FastAPI binds to 8001 by convention; Coolify's Traefik sits in front.
+# FastAPI binds to ${PORT:-8001}. Railway injects $PORT; Coolify and
+# docker-compose default to 8001 via the entrypoint fallback.
 EXPOSE 8001
 
-# Coolify reads HEALTHCHECK to decide rolling-deploy readiness.
+# HEALTHCHECK shell-form so ${PORT} expands at runtime. Coolify and Railway
+# both gate rolling deploys on this.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8001/healthz || exit 1
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8001}/healthz" || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
