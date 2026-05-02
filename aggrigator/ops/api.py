@@ -30,7 +30,7 @@ from aggrigator.deps import SessionDep, require_admin
 from aggrigator.ingest.orchestrator import ingest_event as _ingest_event
 from aggrigator.models import League, User
 from aggrigator.ops.registry import REGISTRY
-from aggrigator.ops.service import CronService, TriggerRejected
+from aggrigator.ops.service import CronService, LockUnavailable, TriggerRejected
 from aggrigator.workers.tasks.ingest import _build_client
 
 logger = logging.getLogger(__name__)
@@ -123,6 +123,14 @@ async def trigger_run(
             run = await svc.trigger(name, actor=user)
         except TriggerRejected as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+        except LockUnavailable as exc:
+            # Redis lock died. service.trigger already logged + recorded a
+            # FAILED cron_run row. Surface a 503 (not 500) so callers /
+            # alerting can distinguish "infra problem" from "your fault".
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            )
         return _run_to_dict(run)
     finally:
         await redis.aclose()

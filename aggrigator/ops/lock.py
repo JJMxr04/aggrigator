@@ -36,8 +36,21 @@ def _key(cron_name: str) -> str:
 async def try_acquire(
     redis: Redis, cron_name: str, run_id: str, *, ttl_seconds: int,
 ) -> bool:
-    """``SET key run_id NX EX ttl`` — atomic. Returns True if we got the lock."""
-    ok = await redis.set(_key(cron_name), run_id, nx=True, ex=ttl_seconds)
+    """``SET key run_id NX EX ttl`` — atomic. Returns True if we got the lock.
+
+    Re-raises Redis errors so the caller can decide how to surface them
+    (the trigger path wraps this and records a FAILED cron_run row). The
+    log line here is the operator's first breadcrumb when Redis goes away
+    — without it the failure is just a stack trace with no cron context.
+    """
+    try:
+        ok = await redis.set(_key(cron_name), run_id, nx=True, ex=ttl_seconds)
+    except Exception as exc:  # noqa: BLE001 — log + re-raise
+        logger.error(
+            "cron lock acquire failed: cron=%s run=%s error=%s: %s",
+            cron_name, run_id, type(exc).__name__, exc,
+        )
+        raise
     return bool(ok)
 
 

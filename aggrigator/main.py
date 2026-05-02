@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
+from redis.asyncio import Redis
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -21,6 +24,7 @@ from aggrigator.api import references as references_router
 from aggrigator.api import selections as selections_router
 from aggrigator.api import webhook_endpoints as webhook_endpoints_router
 from aggrigator.config import get_settings
+from aggrigator.db import engine
 from aggrigator.observability.logging import configure_logging
 from aggrigator.observability.prometheus import register_metrics
 from aggrigator.observability.sentry import init_sentry
@@ -32,10 +36,117 @@ from aggrigator.security.rate_limit import (
     resolve_first_party_promotion,
 )
 
+logger = logging.getLogger(__name__)
+
+
+# Defaults that ship in config.py — flagging these in prod is the cheapest
+# way to catch "operator forgot to set the env var" before it bites in
+# production. Kept in sync with aggrigator/config.py defaults.
+_DEFAULT_JWT_SECRET = "dev-only-change-me"
+_DEFAULT_FERNET_KEY = "dXuPg8VG-pEz3w6mF1gAo0FVXa5Y9xqNxGgfZ7jEz0o="
+_DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+
+
+async def _probe_redis(redis_url: str) -> None:
+    """PING the configured Redis. Log clearly on failure; don't raise — Railway
+    will keep the container alive while the operator fixes the URL."""
+    r = Redis.from_url(redis_url, decode_responses=True)
+    try:
+        ok = await r.ping()
+        logger.info("[startup] redis ping ok=%s url=%s", ok, _redacted(redis_url))
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "[startup] redis ping FAILED url=%s err=%s: %s — "
+            "cron triggers will 503 until this is fixed. Check AGG_REDIS_URL.",
+            _redacted(redis_url), type(exc).__name__, exc,
+        )
+    finally:
+        await r.aclose()
+
+
+async def _probe_db() -> None:
+    """SELECT 1 against the async engine. Same don't-block-startup contract
+    as the Redis probe."""
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        logger.info("[startup] postgres ping ok")
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "[startup] postgres ping FAILED err=%s: %s — "
+            "the app cannot serve traffic. Check AGG_DATABASE_URL "
+            "(asyncpg) and AGG_DATABASE_URL_SYNC (psycopg2/alembic).",
+            type(exc).__name__, exc,
+        )
+
+
+def _redacted(url: str) -> str:
+    """Strip the password from a URL for safe logging."""
+    if "@" not in url or "://" not in url:
+        return url
+    scheme, rest = url.split("://", 1)
+    creds, host = rest.split("@", 1)
+    user = creds.split(":", 1)[0] if ":" in creds else creds
+    return f"{scheme}://{user}:***@{host}"
+
+
+def _warn_on_misconfig(settings) -> None:
+    """One-shot log audit at startup: surface the most expensive-if-missed
+    misconfigs (default secrets in prod, missing host allowlist, etc.)."""
+    is_prod = settings.env in ("prod", "production")
+    if not is_prod:
+        return
+
+    if settings.jwt_secret == _DEFAULT_JWT_SECRET:
+        logger.warning(
+            "[startup] AGG_JWT_SECRET is the dev default in prod — "
+            "session cookies are forgeable. Generate a real value: "
+            "openssl rand -hex 32"
+        )
+    if settings.secret_encryption_key == _DEFAULT_FERNET_KEY:
+        logger.warning(
+            "[startup] AGG_SECRET_ENCRYPTION_KEY is the dev default in prod — "
+            "stored webhook secrets are decryptable from the source. "
+            "Generate: python -c \"from cryptography.fernet import Fernet; "
+            "print(Fernet.generate_key().decode())\""
+        )
+    if settings.redis_url == _DEFAULT_REDIS_URL:
+        logger.warning(
+            "[startup] AGG_REDIS_URL is the localhost default in prod — "
+            "cron triggers will 503. Set ${{Redis.REDIS_URL}} from the "
+            "Railway Redis plugin."
+        )
+    if not settings.allowed_hosts_list:
+        logger.warning(
+            "[startup] AGG_ALLOWED_HOSTS is empty in prod — Host-header "
+            "spoofing is not blocked. Set to your Railway domain + any "
+            "custom domains."
+        )
+    if settings.sgo_api_key in ("", "aggrigator-dev"):
+        logger.warning(
+            "[startup] SPORTSGAMEODDS_API_KEY is the dev placeholder in prod — "
+            "every SGO call will fail. Set the real key from your SGO account."
+        )
+    if settings.test_mode:
+        logger.warning(
+            "[startup] AGG_TEST_MODE=true in prod — destructive endpoints "
+            "(/ops/data-reset, /ops/ingest-event) are reachable. Disable "
+            "before going public."
+        )
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    settings = get_settings()
+    logger.info(
+        "[startup] aggrigator %s booting env=%s debug=%s log_level=%s",
+        __version__, settings.env, settings.debug, settings.log_level,
+    )
+    _warn_on_misconfig(settings)
+    await _probe_db()
+    await _probe_redis(settings.redis_url)
     yield
+    logger.info("[shutdown] aggrigator stopping")
 
 
 def create_app() -> FastAPI:

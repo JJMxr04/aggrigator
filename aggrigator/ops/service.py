@@ -9,13 +9,14 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aggrigator.db import session_scope
 from aggrigator.models import CronRun, CronRunSource, CronRunStatus, User
 from aggrigator.ops import lock as lock_module
 from aggrigator.ops.recorder import run_with_recording
@@ -70,6 +71,16 @@ class CronListItem:
 
 class TriggerRejected(Exception):
     """A run of this cron is already in flight (lock collision)."""
+
+
+class LockUnavailable(Exception):
+    """The Redis lock subsystem is unreachable. The trigger never started.
+
+    Distinct from TriggerRejected (which means "another run is already
+    holding the lock"). LockUnavailable means we couldn't even ask Redis
+    whether the lock was free — typically AGG_REDIS_URL is missing,
+    pointing at the wrong host, or the Redis plugin is down.
+    """
 
 
 class CronService:
@@ -140,34 +151,95 @@ class CronService:
         actor: User,
     ) -> CronRunOut:
         """Acquire the lock, run the cron synchronously, return the resulting
-        CronRun. Raises ``TriggerRejected`` if a run of this cron is already
-        in flight."""
+        CronRun.
+
+        Raises:
+            KeyError: ``name`` is not a registered cron spec.
+            TriggerRejected: another run is already holding the lock.
+            LockUnavailable: Redis lock subsystem is unreachable. Best-effort
+                ``cron_run`` row written so the failure shows up in history.
+        """
         spec = by_name(name)
         if spec is None:
             raise KeyError(f"Unknown cron: {name}")
 
         run_id = str(uuid.uuid4())
-        async with lock_module.cron_lock(
-            self.redis, spec.name, run_id, ttl_seconds=spec.max_runtime_seconds,
-        ) as acquired:
-            if not acquired:
-                raise TriggerRejected(
-                    f"a run of {spec.name} is already in flight"
-                )
+        try:
+            async with lock_module.cron_lock(
+                self.redis, spec.name, run_id, ttl_seconds=spec.max_runtime_seconds,
+            ) as acquired:
+                if not acquired:
+                    raise TriggerRejected(
+                        f"a run of {spec.name} is already in flight"
+                    )
 
-            try:
-                row, _summary, _err = await run_with_recording(
-                    spec,
-                    trigger_source=CronRunSource.MANUAL,
-                    started_by_user_id=actor.id,
-                    arq_job_id=run_id,
-                )
-            except BaseException:  # noqa: BLE001 — error already recorded
-                # Re-fetch so we return the updated row.
-                row = await self._latest_run(spec.name)
+                try:
+                    row, _summary, _err = await run_with_recording(
+                        spec,
+                        trigger_source=CronRunSource.MANUAL,
+                        started_by_user_id=actor.id,
+                        arq_job_id=run_id,
+                    )
+                except BaseException:  # noqa: BLE001 — error already recorded
+                    # Re-fetch so we return the updated row.
+                    row = await self._latest_run(spec.name)
+        except TriggerRejected:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # Lock subsystem failure (Redis down, bad URL, auth, network).
+            # Without this branch the request 500s and the operator sees no
+            # cron_run row — making it look like the click did nothing.
+            logger.error(
+                "cron trigger aborted: cron=%s actor=%s redis_lock_error=%s: %s",
+                spec.name, actor.id, type(exc).__name__, exc,
+            )
+            row = await self._record_lock_failure(
+                spec, actor.id, run_id, exc,
+            )
+            raise LockUnavailable(
+                f"cron lock unavailable for {spec.name}: {exc}"
+            ) from exc
 
         email = await self._email_of(actor.id)
-        return CronRunOut.from_row(row, email)
+        return CronRunOut.from_row(row, email) if row else None
+
+    async def _record_lock_failure(
+        self,
+        spec: CronSpec,
+        actor_id: uuid.UUID | None,
+        run_id: str,
+        exc: BaseException,
+    ) -> CronRun | None:
+        """Best-effort: write a FAILED cron_run row for the lock failure.
+
+        Uses its own session_scope so we don't poison the caller's session
+        with an aborted transaction. If the DB is also down, log and return
+        None — the caller still raises LockUnavailable for the client.
+        """
+        try:
+            async with session_scope() as fail_session:
+                row = CronRun(
+                    cron_name=spec.name,
+                    trigger_source=CronRunSource.MANUAL,
+                    started_by_user_id=actor_id,
+                    arq_job_id=run_id,
+                    status=CronRunStatus.FAILED,
+                    finished_at=datetime.now(tz=timezone.utc),
+                    error=(
+                        f"LockUnavailable: {type(exc).__name__}: {exc}\n\n"
+                        "Redis lock subsystem unreachable. Check AGG_REDIS_URL "
+                        "on the agg-web service and that the Redis plugin is up."
+                    )[:4000],
+                )
+                fail_session.add(row)
+                await fail_session.flush()
+                return row
+        except Exception as db_exc:  # noqa: BLE001
+            logger.error(
+                "could not record lock-failure cron_run row for %s: %s: %s",
+                spec.name, type(db_exc).__name__, db_exc,
+            )
+            return None
 
     # ---- internals ----------------------------------------------------------
 

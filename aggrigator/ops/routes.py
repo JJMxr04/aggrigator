@@ -34,7 +34,7 @@ from aggrigator.ops.data_reset import (
     list_table_info,
     truncate_table,
 )
-from aggrigator.ops.service import CronService, TriggerRejected
+from aggrigator.ops.service import CronService, LockUnavailable, TriggerRejected
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +128,23 @@ async def trigger_run_html(request: Request, name: str) -> HTMLResponse:
                 pass
             except KeyError:
                 raise HTTPException(status.HTTP_404_NOT_FOUND)
+            except LockUnavailable as exc:
+                # Redis lock died. service.trigger already wrote a FAILED
+                # cron_run row + logged the underlying error. Return 503
+                # so the HTMX swap shows a clear failure (not a generic
+                # blank 500), and the operator knows to fix
+                # AGG_REDIS_URL or the Redis plugin.
+                logger.warning(
+                    "trigger_run_html: lock unavailable for cron=%s: %s",
+                    name, exc,
+                )
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=(
+                        "Cron lock subsystem unavailable — Redis is unreachable "
+                        "from agg-web. Check AGG_REDIS_URL and the Redis plugin."
+                    ),
+                )
             item = await svc.get_cron(name)
         finally:
             await redis.aclose()
