@@ -149,12 +149,25 @@ class SgoHttpClient:
 
     def _throttle(self) -> None:
         """Sleep just enough to maintain ``self.min_interval`` since the last
-        request. No-op when min_interval is 0 (default for fixtures / tests)."""
+        request. No-op when min_interval is 0 (default for fixtures / tests).
+
+        Logs at INFO when sleeping more than 0.5s — gives operators a
+        visible "we're pacing, not stuck" signal in deploy logs. Smaller
+        waits aren't logged (cron drains run hundreds of these and the
+        noise overwhelms the useful 429 / completion lines).
+        """
         if self.min_interval <= 0:
             return
         elapsed = time.monotonic() - self._last_request_at
-        if elapsed < self.min_interval:
-            time.sleep(self.min_interval - elapsed)
+        wait = self.min_interval - elapsed
+        if wait > 0:
+            if wait > 0.5:
+                logger.info(
+                    "SGO throttle: pacing next request by %.1fs "
+                    "(staying under upstream rate-limit cap)",
+                    wait,
+                )
+            time.sleep(wait)
 
     @staticmethod
     def _parse_retry_after(value: str | None) -> float | None:
@@ -173,41 +186,60 @@ class SgoHttpClient:
         backoff = 1.0
         for attempt in range(self.max_retries + 1):
             self._throttle()
+            t0 = time.monotonic()
             try:
                 resp = self.client.get(f"/{path.lstrip('/')}", params=clean)
             except httpx.HTTPError as exc:
                 raise SgoError(f"GET {path} failed: {exc}") from exc
             finally:
                 self._last_request_at = time.monotonic()
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
 
             if resp.status_code == 429:
                 if attempt >= self.max_retries:
                     logger.warning(
-                        "SGO 429 on %s after %d retries — giving up",
-                        path, attempt,
+                        "SGO 429 on %s after %d retries — giving up (last call %dms)",
+                        path, attempt, elapsed_ms,
                     )
                     raise QuotaExceeded(
                         f"SGO 429 on {path} (after {attempt} retries)"
                     )
                 wait = self._parse_retry_after(resp.headers.get("Retry-After"))
+                from_header = wait is not None
                 if wait is None:
                     wait = backoff
                 wait = min(wait, self._MAX_RETRY_WAIT)
                 logger.warning(
-                    "SGO 429 on %s — sleeping %.1fs (retry %d/%d)",
+                    "SGO rate-limit hit on %s — waiting %.1fs before retry "
+                    "%d/%d (%s)",
                     path, wait, attempt + 1, self.max_retries,
+                    "Retry-After header" if from_header else "exponential backoff",
                 )
                 time.sleep(wait)
                 backoff = min(backoff * 2, self._MAX_RETRY_WAIT)
                 continue
 
             if resp.status_code >= 400:
+                logger.warning(
+                    "SGO GET %s → HTTP %d (%dms) — %s",
+                    path, resp.status_code, elapsed_ms, resp.text[:120],
+                )
                 raise SgoError(
                     f"GET {path} returned {resp.status_code}: {resp.text[:200]}"
                 )
             body = resp.json()
             if body.get("success") is False:
                 raise SgoError(body.get("error", "Unknown SGO error"))
+
+            # One INFO line per successful call — surfaces in Railway deploy
+            # logs so operators can see crons making progress without
+            # tailing the worker every time.
+            data = body.get("data")
+            entries = len(data) if isinstance(data, list) else (1 if data else 0)
+            logger.info(
+                "SGO GET %s → 200 (%d entries, %dms)",
+                path, entries, elapsed_ms,
+            )
             return body
 
         # Loop exits via ``return`` or ``raise`` — this is unreachable but

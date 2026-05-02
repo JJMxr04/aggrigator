@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aggrigator.db import session_scope
 from aggrigator.models import CronRun, CronRunSource, CronRunStatus, User
 from aggrigator.ops import lock as lock_module
+from aggrigator.ops.progress import get_progress
 from aggrigator.ops.recorder import run_with_recording
 from aggrigator.ops.registry import CronSpec, REGISTRY, by_name
 
@@ -67,6 +68,11 @@ class CronListItem:
     schedule_human: str
     last_run: CronRunOut | None
     is_running: bool
+    # Live status, populated only when ``is_running=True``. Both come from
+    # outside the ``cron_run`` row: ``progress_message`` is read from
+    # Redis, ``elapsed_seconds`` is computed at render time.
+    progress_message: str | None = None
+    elapsed_seconds: float | None = None
 
 
 class TriggerRejected(Exception):
@@ -95,13 +101,7 @@ class CronService:
         for spec in REGISTRY:
             row = await self._latest_run(spec.name)
             email = await self._email_of(row.started_by_user_id) if row else None
-            items.append(CronListItem(
-                name=spec.name,
-                description=spec.description,
-                schedule_human=spec.schedule_human,
-                last_run=CronRunOut.from_row(row, email) if row else None,
-                is_running=row is not None and row.status == CronRunStatus.RUNNING,
-            ))
+            items.append(await self._build_list_item(spec, row, email))
         return items
 
     async def get_cron(self, name: str) -> CronListItem | None:
@@ -110,12 +110,30 @@ class CronService:
             return None
         row = await self._latest_run(spec.name)
         email = await self._email_of(row.started_by_user_id) if row else None
+        return await self._build_list_item(spec, row, email)
+
+    async def _build_list_item(
+        self, spec: CronSpec, row: CronRun | None, email: str | None,
+    ) -> CronListItem:
+        """Compose the UI item — for running rows, fold in live progress
+        message (from Redis) and elapsed-time (computed) so the cron card
+        shows real-time signal instead of a static "running" pill."""
+        is_running = row is not None and row.status == CronRunStatus.RUNNING
+        progress_message: str | None = None
+        elapsed_seconds: float | None = None
+        if is_running and row is not None:
+            elapsed_seconds = (
+                datetime.now(tz=row.started_at.tzinfo) - row.started_at
+            ).total_seconds()
+            progress_message = await get_progress(row.id)
         return CronListItem(
             name=spec.name,
             description=spec.description,
             schedule_human=spec.schedule_human,
             last_run=CronRunOut.from_row(row, email) if row else None,
-            is_running=row is not None and row.status == CronRunStatus.RUNNING,
+            is_running=is_running,
+            progress_message=progress_message,
+            elapsed_seconds=elapsed_seconds,
         )
 
     async def history(self, name: str, *, limit: int = 25) -> list[CronRunOut]:

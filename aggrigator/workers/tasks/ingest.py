@@ -13,6 +13,7 @@ from aggrigator.ingest.orchestrator import ingest_due_leagues
 from aggrigator.ingest.quota import is_monthly_quota_exhausted
 from aggrigator.ingest.sgo_http import SgoHttpClient
 from aggrigator.ingest.sgo_simulator import FixtureSgoClient
+from aggrigator.ops.progress import set_progress
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,8 @@ async def run_ingest_due_leagues() -> dict[str, Any]:
     (they construct the client themselves and call ``ingest_due_leagues``
     directly). ARQ wraps this with a session_scope.
     """
+    logger.info("ingest_due_leagues: starting")
+    await set_progress("starting — checking quota")
     settings = get_settings()
     client = _build_client()
     # Pre-flight monthly quota check — skip the run if SGO usage is past
@@ -51,7 +54,13 @@ async def run_ingest_due_leagues() -> dict[str, Any]:
     if not settings.test_mode and is_monthly_quota_exhausted(
         client, threshold_pct=settings.sgo_quota_threshold_pct,
     ):
+        logger.warning(
+            "ingest_due_leagues: skipped — SGO monthly quota past threshold "
+            "(%s%%). Bump AGG_SGO_QUOTA_THRESHOLD_PCT or wait for reset.",
+            settings.sgo_quota_threshold_pct,
+        )
         return {"skipped": True, "reason": "sgo_monthly_quota"}
+    await set_progress("walking active leagues")
     async with session_scope() as session:
         reports = await ingest_due_leagues(session, client)
     summary = {
@@ -59,7 +68,7 @@ async def run_ingest_due_leagues() -> dict[str, Any]:
         "events_processed": sum(r.events_processed for r in reports),
         "events_failed": sum(r.events_failed for r in reports),
     }
-    logger.info("ingest_due_leagues report: %s", summary)
+    logger.info("ingest_due_leagues: complete %s", summary)
     return summary
 
 

@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aggrigator.db import session_scope
 from aggrigator.models import CronRun, CronRunSource, CronRunStatus
+from aggrigator.ops.progress import clear_progress, current_run_id
 from aggrigator.ops.registry import CronSpec, by_name
 
 logger = logging.getLogger(__name__)
@@ -107,10 +108,19 @@ async def run_with_recording(
         await session.commit()
         run_id = row.id
 
+    # Make run_id ambient so ``ops.progress.set_progress`` calls inside
+    # the runner know where to write. Reset on the way out so progress
+    # writes from outside a cron context (manual shell, tests) are no-ops.
+    progress_token = current_run_id.set(run_id)
     try:
         summary = await spec.runner()
     except BaseException as exc:  # noqa: BLE001 — we re-raise after recording
         error = exc
+    finally:
+        current_run_id.reset(progress_token)
+        # Best-effort: clean up the progress key as soon as the run ends.
+        # TTL would catch it eventually, but the UI re-renders within 2s.
+        await clear_progress(run_id)
 
     async with session_scope() as session:
         row = await session.get(CronRun, run_id)

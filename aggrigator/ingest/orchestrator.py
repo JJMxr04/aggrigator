@@ -29,6 +29,7 @@ from aggrigator.ingest.upserts import (
     upsert_team_from_spec,
 )
 from aggrigator.models import Event, League
+from aggrigator.ops.progress import set_progress
 from aggrigator.webhooks.enqueue import enqueue_for_event
 
 logger = logging.getLogger(__name__)
@@ -179,6 +180,12 @@ async def ingest_league(
         now + timedelta(days=settings.ingest_window_days_ahead)
     ).isoformat(timespec="seconds")
 
+    logger.info(
+        "ingest_league %s: walking SGO events in window [%s, %s]",
+        league.id, starts_after_iso, starts_before_iso,
+    )
+    await set_progress(f"fetching events for {league.id}")
+
     report = LeagueReport(league_id=league.id)
     for payload in client.get_events(
         league_id=league.id,
@@ -202,6 +209,13 @@ async def ingest_league(
         report.transitions.append(result.transition)
         await session.flush()
     league.last_refreshed_at = datetime.now(tz=timezone.utc)
+    logger.info(
+        "ingest_league %s: %d events processed, %d failed",
+        league.id, report.events_processed, report.events_failed,
+    )
+    await set_progress(
+        f"{league.id}: {report.events_processed} events processed"
+    )
     return report
 
 

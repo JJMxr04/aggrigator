@@ -11,6 +11,19 @@
     <span class="cron-schedule" title="Schedule">{{ item.schedule_human }}</span>
   </header>
 
+  {% if item.is_running %}
+    <div class="run-live" style="display:flex; gap:.5rem; align-items:center; padding:.5rem .75rem; background:#fff8d6; border-left:3px solid #d4a72c; font-size:.875rem;">
+      <span class="run-live__spinner" aria-hidden="true">⏳</span>
+      <span class="run-live__elapsed">
+        running {% if item.elapsed_seconds is not none %}{{ '%.0f' % item.elapsed_seconds }}s{% endif %}
+      </span>
+      {% if item.progress_message %}
+        <span class="run-live__sep" aria-hidden="true">·</span>
+        <span class="run-live__msg">{{ item.progress_message }}</span>
+      {% endif %}
+    </div>
+  {% endif %}
+
   {% if lr %}
     <div class="run-summary">
       <span class="pill {{ lr.status }}">{{ lr.status }}</span>

@@ -20,6 +20,7 @@ import logging
 
 from aggrigator.db import session_scope
 from aggrigator.ingest.seed import seed_leagues, seed_sports, seed_all
+from aggrigator.ops.progress import set_progress
 from aggrigator.workers.tasks.ingest import _build_client
 
 logger = logging.getLogger(__name__)
@@ -27,11 +28,13 @@ logger = logging.getLogger(__name__)
 
 async def run_seed_sports() -> dict:
     """Upsert every Sport row from SGO. One SGO call (``/sports``)."""
+    logger.info("seed_sports: starting (1 SGO call expected)")
+    await set_progress("fetching /sports from SGO")
     client = _build_client()
     async with session_scope() as session:
         sports = await seed_sports(session, client)
     result = {"sports": sports}
-    logger.info("seed_sports: %s", result)
+    logger.info("seed_sports: complete %s", result)
     return result
 
 
@@ -43,11 +46,13 @@ async def run_seed_leagues() -> dict:
     won't error, but the linkage will be incomplete until the next
     seed_sports run.
     """
+    logger.info("seed_leagues: starting (1 SGO call expected)")
+    await set_progress("fetching /leagues from SGO")
     client = _build_client()
     async with session_scope() as session:
         leagues = await seed_leagues(session, client)
     result = {"leagues": leagues}
-    logger.info("seed_leagues: %s", result)
+    logger.info("seed_leagues: complete %s", result)
     return result
 
 
@@ -55,10 +60,11 @@ async def run_seed_sports_and_leagues() -> dict:
     """Both halves in one call — used by ``full_refresh`` as a defensive
     pre-step so the daily refresh is self-sufficient even if the standalone
     seed crons haven't fired yet."""
+    logger.info("seed_sports_and_leagues: starting (2 SGO calls expected)")
     client = _build_client()
     async with session_scope() as session:
         result = await seed_all(session, client)
-    logger.info("seed_sports_and_leagues: %s", result)
+    logger.info("seed_sports_and_leagues: complete %s", result)
     return result
 
 
