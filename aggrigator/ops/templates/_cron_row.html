@@ -59,7 +59,16 @@
   {% endif %}
 
   <div style="display:flex; align-items:center; justify-content:space-between; gap:.75rem;">
-    <details class="disclosure">
+    {#-
+      hx-preserve keeps this element (and its children) intact across the
+      2s outerHTML polls that fire while the cron is running. Without it
+      every poll wipes the open ``<details>`` panel and forces the user
+      to re-click "Show last 25 runs". Stable ``id`` is required by HTMX
+      for preservation to work.
+    -#}
+    <details class="disclosure"
+             id="history-{{ item.name }}"
+             hx-preserve="true">
       <summary>Show last 25 runs</summary>
       <div class="history-panel"
            hx-get="/ops/crons/{{ item.name }}/history"

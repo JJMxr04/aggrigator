@@ -312,13 +312,16 @@ async def ingest_league(
             )
         except Exception:  # noqa: BLE001
             logger.exception("ingest failed for event=%s", payload.get("eventID"))
+            await session.rollback()
             report.events_failed += 1
             continue
-        if result is None:
-            continue
-        report.events_processed += 1
-        report.transitions.append(result.transition)
-        await session.flush()
+        if result is not None:
+            report.events_processed += 1
+            report.transitions.append(result.transition)
+        # Commit per-event so markets/selections/quotes become visible
+        # mid-walk. Each event is idempotent on retry, so a partial
+        # league walk is recoverable on the next run.
+        await session.commit()
     league.last_refreshed_at = datetime.now(tz=timezone.utc)
     logger.info(
         "ingest_league %s: %d events processed, %d failed",
