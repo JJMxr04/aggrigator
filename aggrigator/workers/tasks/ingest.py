@@ -19,11 +19,21 @@ logger = logging.getLogger(__name__)
 
 def _build_client() -> SgoClient:
     """Pick a client per env. Fixture mode wins if ``SPORTSGAMEODDS_FIXTURE_DIR``
-    is set — useful in dev without burning the SGO quota."""
+    is set — useful in dev without burning the SGO quota.
+
+    The HTTP client gets the configured rate-limit knobs so seed +
+    full_refresh self-throttle under SGO's 10/min cap instead of failing
+    the whole cron on the first 429.
+    """
     settings = get_settings()
     if settings.sgo_fixture_path is not None:
         return FixtureSgoClient(settings.sgo_fixture_path)
-    return SgoHttpClient(base_url=settings.sgo_base_url, api_key=settings.sgo_api_key)
+    return SgoHttpClient(
+        base_url=settings.sgo_base_url,
+        api_key=settings.sgo_api_key,
+        min_interval=settings.sgo_min_interval_seconds,
+        max_retries=settings.sgo_max_retries,
+    )
 
 
 async def run_ingest_due_leagues() -> dict[str, Any]:

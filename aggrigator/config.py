@@ -57,6 +57,18 @@ class Settings(BaseSettings):
     )
     sgo_fixture_dir: str = Field(default="", alias="SPORTSGAMEODDS_FIXTURE_DIR")
 
+    # Pre-emptive throttle: minimum seconds between SGO HTTP requests on a
+    # single client instance. Default 7s ≈ 8 req/min, safely under SGO's
+    # 10/min free-tier cap. Set to 0 to disable (paid tiers may not need it).
+    sgo_min_interval_seconds: float = Field(
+        default=7.0, alias="SPORTSGAMEODDS_MIN_INTERVAL_SECONDS",
+    )
+    # On HTTP 429, retry up to this many times with exponential backoff
+    # (honors Retry-After header when present). 0 = no retries (fail fast).
+    sgo_max_retries: int = Field(
+        default=3, alias="SPORTSGAMEODDS_MAX_RETRIES",
+    )
+
     # auth
     jwt_secret: str = Field(default="dev-only-change-me", alias="AGG_JWT_SECRET")
     jwt_access_ttl_seconds: int = Field(default=900, alias="AGG_JWT_ACCESS_TTL_SECONDS")
@@ -109,6 +121,19 @@ class Settings(BaseSettings):
     sgo_quota_threshold_pct: int = Field(
         default=90, alias="AGG_SGO_QUOTA_THRESHOLD_PCT",
     )
+
+    # --- vacuum (storage tuning for free DB tiers) ---
+    # Delete terminal events older than this many days. The vacuum cron
+    # runs nightly @ 04:00 UTC. Set to 0 to disable (the cron stays
+    # registered but each run is a no-op). Default 3 — safe for free
+    # Neon (0.5 GB) while leaving a window for late settlements + webhook
+    # redeliveries.
+    vacuum_days: int = Field(default=3, alias="AGG_VACUUM_DAYS")
+    # Max events deleted per cron run. Cascades through markets, selections,
+    # quotes, and webhook_delivery via DB FKs, so the actual row count
+    # touched is much higher. Keep modest so a backlog doesn't lock the
+    # DB or blow Neon's connection budget.
+    vacuum_batch_size: int = Field(default=1000, alias="AGG_VACUUM_BATCH_SIZE")
 
     @property
     def cors_origin_list(self) -> list[str]:

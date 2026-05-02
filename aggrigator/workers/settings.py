@@ -21,6 +21,7 @@ from aggrigator.workers.tasks.full_refresh import full_refresh_task
 from aggrigator.workers.tasks.ingest import ingest_due_leagues_task
 from aggrigator.workers.tasks.seed import seed_task
 from aggrigator.workers.tasks.settle import settle_pending_task
+from aggrigator.workers.tasks.vacuum import vacuum_old_events_task
 from aggrigator.workers.tasks.webhook_deliver import webhook_deliver_task
 
 
@@ -72,6 +73,11 @@ def _build_cron_jobs() -> list:
             hour={3}, minute={30},
             name="settle_pending",
         ),
+        cron(
+            vacuum_old_events_task,
+            hour={4}, minute={0},  # 30 min after settle_pending finishes
+            name="vacuum_old_events",
+        ),
     ]
 
 
@@ -86,6 +92,7 @@ class WorkerSettings:
         webhook_deliver_task,
         settle_pending_task,
         seed_task,
+        vacuum_old_events_task,
     ]
 
     cron_jobs = _build_cron_jobs()

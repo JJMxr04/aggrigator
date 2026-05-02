@@ -19,6 +19,7 @@ from aggrigator.workers.tasks.full_refresh import run_full_refresh
 from aggrigator.workers.tasks.ingest import run_ingest_due_leagues
 from aggrigator.workers.tasks.seed import run_seed_sports_and_leagues
 from aggrigator.workers.tasks.settle import run_settle_pending
+from aggrigator.workers.tasks.vacuum import run_vacuum_old_events
 from aggrigator.workers.tasks.webhook_deliver import run_deliver_due
 
 
@@ -78,6 +79,17 @@ REGISTRY: list[CronSpec] = [
         schedule_human="nightly @ 03:30 UTC",
         runner=run_settle_pending,
         max_runtime_seconds=900,
+    ),
+    CronSpec(
+        name="vacuum_old_events",
+        description=(
+            "Delete terminal events older than AGG_VACUUM_DAYS (default 3). "
+            "Cascades through markets, selections, quotes, and webhook "
+            "deliveries. Frees DB storage on free Postgres tiers."
+        ),
+        schedule_human="nightly @ 04:00 UTC",
+        runner=run_vacuum_old_events,
+        max_runtime_seconds=600,
     ),
 ]
 

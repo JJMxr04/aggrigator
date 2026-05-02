@@ -48,30 +48,39 @@ _DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 
 
 async def _probe_redis(redis_url: str) -> None:
-    """PING the configured Redis. Log clearly on failure; don't raise — Railway
-    will keep the container alive while the operator fixes the URL."""
-    r = Redis.from_url(redis_url, decode_responses=True)
+    """PING the configured Redis. ALWAYS non-fatal — even URL-parsing
+    errors are caught here. Crashing the lifespan on a bad env var means
+    the operator can't reach /healthz to debug; instead we log loudly
+    and let the app boot.
+    """
+    r = None
     try:
+        r = Redis.from_url(redis_url, decode_responses=True)
         ok = await r.ping()
         logger.info("[startup] redis ping ok=%s url=%s", ok, _redacted(redis_url))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — never fatal at startup
         logger.error(
             "[startup] redis ping FAILED url=%s err=%s: %s — "
-            "cron triggers will 503 until this is fixed. Check AGG_REDIS_URL.",
+            "cron triggers will 503 until this is fixed. Check AGG_REDIS_URL "
+            "(must start with redis:// or rediss://).",
             _redacted(redis_url), type(exc).__name__, exc,
         )
     finally:
-        await r.aclose()
+        if r is not None:
+            try:
+                await r.aclose()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 async def _probe_db() -> None:
-    """SELECT 1 against the async engine. Same don't-block-startup contract
-    as the Redis probe."""
+    """SELECT 1 against the async engine. Same non-fatal contract as the
+    Redis probe — log clearly, never crash the lifespan."""
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         logger.info("[startup] postgres ping ok")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — never fatal at startup
         logger.error(
             "[startup] postgres ping FAILED err=%s: %s — "
             "the app cannot serve traffic. Check AGG_DATABASE_URL "
@@ -90,9 +99,24 @@ def _redacted(url: str) -> str:
     return f"{scheme}://{user}:***@{host}"
 
 
+_REDIS_VALID_SCHEMES = ("redis://", "rediss://", "unix://")
+
+
 def _warn_on_misconfig(settings) -> None:
     """One-shot log audit at startup: surface the most expensive-if-missed
     misconfigs (default secrets in prod, missing host allowlist, etc.)."""
+    # URL-shape checks fire in any env (dev too) — a malformed URL is a
+    # bug regardless of where you're running.
+    if settings.redis_url and not settings.redis_url.startswith(_REDIS_VALID_SCHEMES):
+        logger.error(
+            "[startup] AGG_REDIS_URL has no valid scheme (got %r) — "
+            "must start with redis://, rediss://, or unix://. "
+            "Common cause: variable reference like ${{Redis.REDIS_URL}} "
+            "didn't resolve (Redis plugin name may not match) so the "
+            "value got set to a literal string or empty.",
+            settings.redis_url[:60],
+        )
+
     is_prod = settings.env in ("prod", "production")
     if not is_prod:
         return
@@ -137,14 +161,22 @@ def _warn_on_misconfig(settings) -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    settings = get_settings()
-    logger.info(
-        "[startup] aggrigator %s booting env=%s debug=%s log_level=%s",
-        __version__, settings.env, settings.debug, settings.log_level,
-    )
-    _warn_on_misconfig(settings)
-    await _probe_db()
-    await _probe_redis(settings.redis_url)
+    # Belt-and-suspenders: every probe + warning here is independently
+    # try/except-ed already, but wrapping the lifespan body in a final
+    # catch-all means a bug in the boot logic can never take the app
+    # down. If something raises, gunicorn's worker stays up and we lose
+    # only the diagnostic line — better than no service.
+    try:
+        settings = get_settings()
+        logger.info(
+            "[startup] aggrigator %s booting env=%s debug=%s log_level=%s",
+            __version__, settings.env, settings.debug, settings.log_level,
+        )
+        _warn_on_misconfig(settings)
+        await _probe_db()
+        await _probe_redis(settings.redis_url)
+    except Exception as exc:  # noqa: BLE001 — never fail startup
+        logger.exception("[startup] lifespan probe crashed: %s", exc)
     yield
     logger.info("[shutdown] aggrigator stopping")
 
