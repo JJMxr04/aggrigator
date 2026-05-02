@@ -134,6 +134,22 @@ class Settings(BaseSettings):
         default=90, alias="AGG_SGO_QUOTA_THRESHOLD_PCT",
     )
 
+    # --- ingest window (storage + quota tuning) ---
+    # ``ingest_due_leagues`` only walks SGO events whose ``start_time`` falls
+    # in [now - days_behind, now + days_ahead]. Cuts both directions of cost:
+    #   - Fewer SGO entities returned per /events call (per-month quota).
+    #   - Fewer Event/Market/Selection rows inserted (DB storage).
+    # The 1-day "behind" buffer catches events that are LIVE right now (they
+    # started in the past) plus just-finished games still flowing through
+    # the lifecycle → settle pipeline. Combined with skip_if_new_terminal,
+    # nothing older than this window leaks into the DB.
+    ingest_window_days_ahead: int = Field(
+        default=7, alias="AGG_INGEST_WINDOW_DAYS_AHEAD",
+    )
+    ingest_window_days_behind: int = Field(
+        default=1, alias="AGG_INGEST_WINDOW_DAYS_BEHIND",
+    )
+
     # --- vacuum (storage tuning for free DB tiers) ---
     # Delete terminal events older than this many days. The vacuum cron
     # runs nightly @ 04:00 UTC. Set to 0 to disable (the cron stays

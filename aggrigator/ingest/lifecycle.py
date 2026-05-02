@@ -28,6 +28,13 @@ class Transition(StrEnum):
     VOIDED = "event.voided"
 
 
+# Statuses that mean the event is over and won't change again. Used by
+# the ingest cron to skip backfilling events SGO has already finished
+# but our DB has never seen — pointless DB rows + SGO entity burn — and
+# by the vacuum cron to identify rows safe to delete after retention.
+TERMINAL_STATUSES: tuple[str, ...] = ("finished", "postponed", "canceled")
+
+
 @dataclass(frozen=True)
 class EventState:
     """Just enough of an Event to make a transition decision."""

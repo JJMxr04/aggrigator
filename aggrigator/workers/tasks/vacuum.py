@@ -33,14 +33,10 @@ from sqlalchemy import or_, select
 
 from aggrigator.config import get_settings
 from aggrigator.db import session_scope
+from aggrigator.ingest.lifecycle import TERMINAL_STATUSES
 from aggrigator.models.event import Event
 
 logger = logging.getLogger(__name__)
-
-
-# status_type values that mean "this event is over and won't change again."
-# Mirrors the lifecycle module's terminal states (see ingest/lifecycle.py).
-_TERMINAL_STATUS = ("finished", "postponed", "canceled")
 
 
 async def run_vacuum_old_events() -> dict[str, Any]:
@@ -77,7 +73,7 @@ async def run_vacuum_old_events() -> dict[str, Any]:
                     Event.start_time < cutoff,
                     or_(
                         Event.is_finalized.is_(True),
-                        Event.status_type.in_(_TERMINAL_STATUS),
+                        Event.status_type.in_(TERMINAL_STATUSES),
                     ),
                 )
                 .limit(batch)

@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aggrigator.config import get_settings
 from aggrigator.ingest.client import SgoClient
 from aggrigator.ingest.ingester import write_markets
 from aggrigator.ingest.lifecycle import EventState, Transition, decide_transition
@@ -58,13 +59,22 @@ class LeagueReport:
 
 
 async def ingest_event(
-    session: AsyncSession, payload: dict
+    session: AsyncSession,
+    payload: dict,
+    *,
+    skip_if_new_terminal: bool = False,
 ) -> IngestResult | None:
     """Normalize one SGO event payload, upsert the row, write its markets,
     PROVIDER-grade if finalized, return the lifecycle transition.
 
     The caller is responsible for committing the session — this function only
     issues writes and ``flush`` calls. Idempotent on repeated input.
+
+    When ``skip_if_new_terminal=True``, payloads for events not already in
+    our DB whose ``status_type`` is terminal (``finished`` / ``postponed`` /
+    ``canceled``) are dropped without inserting anything. The cron loop
+    (``ingest_league``) sets this; the manual ad-hoc ingest endpoint
+    leaves it off so operators can backfill on demand.
     """
     spec = event_spec_from_payload(payload)
     if spec is None:
@@ -82,7 +92,13 @@ async def ingest_event(
         return None
     await session.flush()
 
-    upserted = await upsert_event_from_spec(session, spec, home=home, away=away)
+    upserted = await upsert_event_from_spec(
+        session, spec, home=home, away=away,
+        skip_if_new_terminal=skip_if_new_terminal,
+    )
+    if upserted is None:
+        # New + already-terminal — see upsert_event_from_spec's docstring.
+        return None
     event = upserted.event
     await session.flush()
 
@@ -140,16 +156,42 @@ async def ingest_event(
 async def ingest_league(
     session: AsyncSession, league: League, client: SgoClient,
 ) -> LeagueReport:
-    """Pull events for one league, ingest each, return a report."""
+    """Pull events for one league, ingest each, return a report.
+
+    Two storage / quota optimizations applied here:
+
+    1. **Time window** (``AGG_INGEST_WINDOW_DAYS_BEHIND`` /
+       ``..._AHEAD``): SGO is asked for events in
+       ``[now - behind, now + ahead]`` only. SGO responds with fewer
+       entities (per-month quota) AND we never see far-future games we'd
+       just delete days later anyway.
+    2. **``skip_if_new_terminal=True``**: anything inside that window
+       SGO reports as already terminal but our DB has never seen gets
+       dropped. Existing events still flow through their lifecycle
+       (live → finished still triggers settlement).
+    """
+    settings = get_settings()
+    now = datetime.now(tz=timezone.utc)
+    starts_after_iso = (
+        now - timedelta(days=settings.ingest_window_days_behind)
+    ).isoformat(timespec="seconds")
+    starts_before_iso = (
+        now + timedelta(days=settings.ingest_window_days_ahead)
+    ).isoformat(timespec="seconds")
+
     report = LeagueReport(league_id=league.id)
     for payload in client.get_events(
         league_id=league.id,
         include_open_close=True,
         odds_available=None,
+        starts_after=starts_after_iso,
+        starts_before=starts_before_iso,
         limit=50,
     ):
         try:
-            result = await ingest_event(session, payload)
+            result = await ingest_event(
+                session, payload, skip_if_new_terminal=True,
+            )
         except Exception:  # noqa: BLE001
             logger.exception("ingest failed for event=%s", payload.get("eventID"))
             report.events_failed += 1

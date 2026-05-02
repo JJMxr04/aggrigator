@@ -17,9 +17,13 @@ from typing import NamedTuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aggrigator.ingest.lifecycle import EventState
+import logging
+
+from aggrigator.ingest.lifecycle import TERMINAL_STATUSES, EventState
 from aggrigator.ingest.normalize import EventSpec, TeamSpec
 from aggrigator.models import Event, League, Sport, Team
+
+logger = logging.getLogger(__name__)
 
 
 # ---- sport / league (from /sports + /leagues SGO endpoints) ---------------
@@ -137,15 +141,34 @@ async def upsert_event_from_spec(
     *,
     home: Team | None,
     away: Team | None,
-) -> UpsertedEvent:
+    skip_if_new_terminal: bool = False,
+) -> UpsertedEvent | None:
     """Get-or-update an Event, returning the row and the *previous* state for
     transition decisions (mirrors MDProject's ``_should_settle`` / `_should_reopen``
     snapshot pattern).
+
+    When ``skip_if_new_terminal=True`` and the event isn't in our DB yet,
+    SGO payloads in a terminal status (``finished`` / ``postponed`` /
+    ``canceled``) are skipped — no row inserted, no markets written, no
+    settlement attempted. Returns ``None`` to signal the skip. Cron
+    callers (``ingest_due_leagues``) opt into this so we don't burn
+    storage + entity quota on games we never knew were happening. Manual
+    backfill paths (``/v1/admin/crons/ingest-event``) leave it off so an
+    operator can explicitly request a finished game.
     """
     league = await session.get(League, spec.league_id) if spec.league_id else None
     sport_id = (league.sport_id if league else None) or spec.sport_id
 
     existing = await session.get(Event, spec.event_id)
+    if existing is None and skip_if_new_terminal:
+        if (spec.status_type or "").lower() in TERMINAL_STATUSES:
+            logger.debug(
+                "skipping new terminal event %s (status=%s) — "
+                "not in DB and SGO reports it as already over",
+                spec.event_id, spec.status_type,
+            )
+            return None
+
     previous_state: EventState | None = None
     if existing is not None:
         previous_state = EventState(
