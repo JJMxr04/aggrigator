@@ -16,7 +16,11 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from aggrigator.workers.tasks.full_refresh import run_full_refresh
-from aggrigator.workers.tasks.ingest import run_ingest_due_leagues
+from aggrigator.workers.tasks.ingest import (
+    run_ingest_due_leagues,
+    run_ingest_lifecycle_only,
+    run_ingest_odds_only,
+)
 from aggrigator.workers.tasks.seed import run_seed_leagues, run_seed_sports
 from aggrigator.workers.tasks.settle import run_settle_pending
 from aggrigator.workers.tasks.vacuum import run_vacuum_old_events
@@ -70,12 +74,39 @@ REGISTRY: list[CronSpec] = [
     CronSpec(
         name="ingest_due_leagues",
         description=(
-            "Walk every active league once and ingest events. Assumes seed "
-            "has already run; otherwise no leagues are active and this is a "
-            "no-op."
+            "Walk every active league once and ingest everything: event rows, "
+            "markets, selections, per-bookmaker quotes, lifecycle, webhooks. "
+            "Heaviest cron — prefer ``ingest_event_lifecycle`` for frequent "
+            "status updates and ``ingest_event_odds`` for periodic price "
+            "refreshes. ``full_refresh`` calls this one."
         ),
         schedule_human="every 30 min",
         runner=run_ingest_due_leagues,
+        max_runtime_seconds=1800,
+    ),
+    CronSpec(
+        name="ingest_event_lifecycle",
+        description=(
+            "Lightweight ingest: event rows + status + settlement + webhooks. "
+            "Skips the per-bookmaker quote writes (the dominant per-event "
+            "cost). Use for frequent status / lifecycle freshness without "
+            "the price-refresh overhead. Manual-trigger by default — wire it "
+            "to a schedule in workers/settings.py if you want it automatic."
+        ),
+        schedule_human="manual",
+        runner=run_ingest_lifecycle_only,
+        max_runtime_seconds=600,
+    ),
+    CronSpec(
+        name="ingest_event_odds",
+        description=(
+            "Heavy half: refreshes markets + per-bookmaker prices on events "
+            "that already exist in our DB. Skips lifecycle / webhooks — "
+            "those are the lifecycle phase's job. Run this less frequently "
+            "(prices don't need to be sub-minute fresh)."
+        ),
+        schedule_human="manual",
+        runner=run_ingest_odds_only,
         max_runtime_seconds=1800,
     ),
     CronSpec(

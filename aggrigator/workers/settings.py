@@ -18,7 +18,11 @@ from arq.cron import cron
 
 from aggrigator.config import get_settings
 from aggrigator.workers.tasks.full_refresh import full_refresh_task
-from aggrigator.workers.tasks.ingest import ingest_due_leagues_task
+from aggrigator.workers.tasks.ingest import (
+    ingest_due_leagues_task,
+    ingest_lifecycle_only_task,
+    ingest_odds_only_task,
+)
 from aggrigator.workers.tasks.seed import seed_leagues_task, seed_sports_task
 from aggrigator.workers.tasks.settle import settle_pending_task
 from aggrigator.workers.tasks.vacuum import vacuum_old_events_task
@@ -99,6 +103,8 @@ class WorkerSettings:
     functions = [
         full_refresh_task,
         ingest_due_leagues_task,
+        ingest_lifecycle_only_task,
+        ingest_odds_only_task,
         webhook_deliver_task,
         settle_pending_task,
         seed_sports_task,

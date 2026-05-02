@@ -64,6 +64,7 @@ async def ingest_event(
     payload: dict,
     *,
     skip_if_new_terminal: bool = False,
+    phase: str = "all",
 ) -> IngestResult | None:
     """Normalize one SGO event payload, upsert the row, write its markets,
     PROVIDER-grade if finalized, return the lifecycle transition.
@@ -76,11 +77,59 @@ async def ingest_event(
     ``canceled``) are dropped without inserting anything. The cron loop
     (``ingest_league``) sets this; the manual ad-hoc ingest endpoint
     leaves it off so operators can backfill on demand.
+
+    ``phase`` controls which writes happen:
+
+    - ``"all"`` (default): everything — upsert event + markets + selections +
+      odds quotes + bookmaker quotes + grading + webhook enqueue. Slowest.
+    - ``"lifecycle"``: upsert event row + status, run grading/settle/void on
+      finalized events, enqueue webhooks. **Skip the entire markets walk.**
+      Fast — useful when you only care about scores and lifecycle transitions
+      and the per-bookmaker price snapshot can wait.
+    - ``"odds"``: write only the markets/selections/odds-quotes/bookmaker-quotes
+      for an existing event. Skip lifecycle, settle, webhooks. Requires the
+      event row to already exist (lifecycle phase or full ``"all"`` walk
+      must have created it). New events not in our DB are skipped.
     """
     spec = event_spec_from_payload(payload)
     if spec is None:
         return None  # non-match event or malformed
 
+    if phase == "odds":
+        # Odds-only: existing event row is required. We don't touch the
+        # event metadata — just refresh the per-bookmaker prices.
+        event = await session.get(Event, spec.event_id)
+        if event is None:
+            logger.debug(
+                "odds phase: event %s not in DB yet "
+                "(run lifecycle/all phase first to create the row)",
+                spec.event_id,
+            )
+            return None
+        # Even in odds-only mode, skip when finalized + scores haven't
+        # moved — the prices on a final-and-graded game are immutable.
+        if (
+            event.is_finalized
+            and (spec.status_type or "").lower() == "finished"
+            and event.home_score == spec.home_score
+            and event.away_score == spec.away_score
+        ):
+            return IngestResult(
+                event=event, transition=Transition.NONE,
+                selections_written=0, selections_graded=0,
+                selections_computed=0, selections_voided=0,
+                deliveries_enqueued=0,
+            )
+        selections_written = await write_markets(session, event, spec.markets)
+        await session.flush()
+        return IngestResult(
+            event=event, transition=Transition.NONE,
+            selections_written=selections_written,
+            selections_graded=0, selections_computed=0, selections_voided=0,
+            deliveries_enqueued=0,
+        )
+
+    # phase == "lifecycle" or "all" — full event upsert path
     home = await upsert_team_from_spec(session, spec.home_team)
     away = await upsert_team_from_spec(session, spec.away_team)
     if home is None or away is None:
@@ -133,7 +182,11 @@ async def ingest_event(
             deliveries_enqueued=0,
         )
 
-    selections_written = await write_markets(session, event, spec.markets)
+    # Lifecycle phase deliberately skips write_markets — that's the
+    # whole point. Status / settlement / webhook work below still runs.
+    selections_written = 0
+    if phase == "all":
+        selections_written = await write_markets(session, event, spec.markets)
 
     selections_graded = 0
     selections_computed = 0
@@ -185,7 +238,11 @@ async def ingest_event(
 
 
 async def ingest_league(
-    session: AsyncSession, league: League, client: SgoClient,
+    session: AsyncSession,
+    league: League,
+    client: SgoClient,
+    *,
+    phase: str = "all",
 ) -> LeagueReport:
     """Pull events for one league, ingest each, return a report.
 
@@ -200,6 +257,9 @@ async def ingest_league(
        SGO reports as already terminal but our DB has never seen gets
        dropped. Existing events still flow through their lifecycle
        (live → finished still triggers settlement).
+
+    ``phase`` forwards to ``ingest_event`` — see its docstring for the
+    semantics of ``"all"`` / ``"lifecycle"`` / ``"odds"``.
     """
     settings = get_settings()
     now = datetime.now(tz=timezone.utc)
@@ -246,7 +306,9 @@ async def ingest_league(
             )
         try:
             result = await ingest_event(
-                session, payload, skip_if_new_terminal=True,
+                session, payload,
+                skip_if_new_terminal=True,
+                phase=phase,
             )
         except Exception:  # noqa: BLE001
             logger.exception("ingest failed for event=%s", payload.get("eventID"))
@@ -269,11 +331,19 @@ async def ingest_league(
 
 
 async def ingest_due_leagues(
-    session: AsyncSession, client: SgoClient,
+    session: AsyncSession,
+    client: SgoClient,
+    *,
+    phase: str = "all",
 ) -> list[LeagueReport]:
     """Walk every active League in the DB and ingest each one. Cadence-gating
     is intentionally omitted for v1 — the ARQ cron decides scheduling. Inside
-    a single call, every active league is touched once."""
+    a single call, every active league is touched once.
+
+    ``phase`` forwards to ``ingest_league`` / ``ingest_event``. The default
+    ``"all"`` matches historical behavior (used by ``full_refresh`` and the
+    standalone ``ingest_due_leagues`` cron).
+    """
     from sqlalchemy import select
 
     leagues = list(await session.scalars(
@@ -285,7 +355,9 @@ async def ingest_due_leagues(
         # effect at the next league boundary (worst case: end of current
         # league's walk, typically 5–30s).
         await raise_if_cancelled()
-        reports.append(await ingest_league(session, league, client))
+        reports.append(
+            await ingest_league(session, league, client, phase=phase)
+        )
         # Commit per-league so a cancellation (or a single league's
         # failure) doesn't roll back leagues we've already finished.
         # Each league is self-contained — no cross-league constraints.

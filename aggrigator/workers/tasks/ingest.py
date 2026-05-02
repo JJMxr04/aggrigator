@@ -37,39 +37,68 @@ def _build_client() -> SgoClient:
     )
 
 
-async def run_ingest_due_leagues() -> dict[str, Any]:
-    """Walk every active League once, ingest, return summary report.
-
-    The body is plain async so tests can call it with their own session
-    (they construct the client themselves and call ``ingest_due_leagues``
-    directly). ARQ wraps this with a session_scope.
+async def _run_ingest(phase: str, cron_name: str) -> dict[str, Any]:
+    """Common body for the three ingest phases. ``phase`` forwards to
+    ``ingest_due_leagues`` / ``ingest_event``; ``cron_name`` shows up in
+    the log lines so the deploy-log breadcrumbs match what's on /ops/crons.
     """
-    logger.info("ingest_due_leagues: starting")
-    await set_progress("starting — checking quota")
+    logger.info("%s: starting", cron_name)
+    await set_progress(f"{phase}: checking quota")
     settings = get_settings()
     client = _build_client()
-    # Pre-flight monthly quota check — skip the run if SGO usage is past
-    # AGG_SGO_QUOTA_THRESHOLD_PCT. test_mode bypasses this so dev / CI
-    # never short-circuit on synthetic usage payloads.
     if not settings.test_mode and is_monthly_quota_exhausted(
         client, threshold_pct=settings.sgo_quota_threshold_pct,
     ):
         logger.warning(
-            "ingest_due_leagues: skipped — SGO monthly quota past threshold "
-            "(%s%%). Bump AGG_SGO_QUOTA_THRESHOLD_PCT or wait for reset.",
-            settings.sgo_quota_threshold_pct,
+            "%s: skipped — SGO monthly quota past threshold (%s%%). "
+            "Bump AGG_SGO_QUOTA_THRESHOLD_PCT or wait for reset.",
+            cron_name, settings.sgo_quota_threshold_pct,
         )
-        return {"skipped": True, "reason": "sgo_monthly_quota"}
-    await set_progress("walking active leagues")
+        return {"skipped": True, "reason": "sgo_monthly_quota", "phase": phase}
+    await set_progress(f"{phase}: walking active leagues")
     async with session_scope() as session:
-        reports = await ingest_due_leagues(session, client)
+        reports = await ingest_due_leagues(session, client, phase=phase)
     summary = {
+        "phase": phase,
         "leagues_walked": len(reports),
         "events_processed": sum(r.events_processed for r in reports),
         "events_failed": sum(r.events_failed for r in reports),
     }
-    logger.info("ingest_due_leagues: complete %s", summary)
+    logger.info("%s: complete %s", cron_name, summary)
     return summary
+
+
+async def run_ingest_due_leagues() -> dict[str, Any]:
+    """Walk every active League once with the FULL pipeline (events +
+    markets + selections + bookmaker quotes + lifecycle + webhooks).
+
+    Used by ``full_refresh`` and the standalone scheduled cron. Heavy —
+    if the per-league walk is consistently slow, prefer running
+    ``ingest_event_lifecycle`` frequently and ``ingest_event_odds``
+    less often (cheaper per run, same total work).
+    """
+    return await _run_ingest("all", "ingest_due_leagues")
+
+
+async def run_ingest_lifecycle_only() -> dict[str, Any]:
+    """Lightweight variant: event row + status + settle + webhooks.
+
+    Skips the bookmaker-quote upserts (the dominant per-event cost). Use
+    when you need score / lifecycle freshness without per-bookmaker price
+    refreshes (e.g. live game tracking).
+    """
+    return await _run_ingest("lifecycle", "ingest_event_lifecycle")
+
+
+async def run_ingest_odds_only() -> dict[str, Any]:
+    """Counterpart to lifecycle: refreshes markets + per-bookmaker prices
+    on events that already exist in our DB.
+
+    New events not yet in the DB are skipped — run lifecycle (or a full
+    ingest) first to create their rows. No webhooks fire from this
+    phase; transitions happen exclusively in the lifecycle pass.
+    """
+    return await _run_ingest("odds", "ingest_event_odds")
 
 
 # ---- ARQ entry points ------------------------------------------------------
@@ -83,5 +112,25 @@ async def ingest_due_leagues_task(ctx: dict) -> dict:
     @cron_run_recorder("ingest_due_leagues")
     async def _runner(ctx_):
         return await run_ingest_due_leagues()
+
+    return await _runner(ctx)
+
+
+async def ingest_lifecycle_only_task(ctx: dict) -> dict:
+    from aggrigator.ops.recorder import cron_run_recorder
+
+    @cron_run_recorder("ingest_event_lifecycle")
+    async def _runner(ctx_):
+        return await run_ingest_lifecycle_only()
+
+    return await _runner(ctx)
+
+
+async def ingest_odds_only_task(ctx: dict) -> dict:
+    from aggrigator.ops.recorder import cron_run_recorder
+
+    @cron_run_recorder("ingest_event_odds")
+    async def _runner(ctx_):
+        return await run_ingest_odds_only()
 
     return await _runner(ctx)
