@@ -115,11 +115,29 @@ class Settings(BaseSettings):
     docs_enabled: bool = Field(default=False, alias="AGG_DOCS_ENABLED")
 
     # --- free-tier tuning ---
-    # Comma-separated minute values for the ingest_due_leagues cron. Default
-    # "0,30" → every 30 minutes (paid SGO behavior). For free tier set to
-    # "0" (hourly) to halve SGO quota burn.
+    # Comma-separated minute values for the ``ingest_event_lifecycle`` cron
+    # (formerly drove ``ingest_due_leagues`` — that combined cron is now
+    # manual-only / used by ``full_refresh``). Default "0,30" = every 30
+    # min. The lifecycle phase is the cheap half (event rows + status +
+    # settlement + webhooks) so this can run frequently without the
+    # bookmaker-quote write cost.
     ingest_cron_minutes: str = Field(
         default="0,30", alias="AGG_INGEST_CRON_MINUTES",
+    )
+    # Comma-separated hour values for the ``ingest_event_odds`` cron. Default
+    # "0,2,4,...,22" = every 2 hours. The odds phase is the expensive half
+    # (per-bookmaker price writes) — run it less often so it doesn't dominate
+    # the worker. ALWAYS schedule odds AFTER lifecycle has had a chance to
+    # create event rows for that window — see odds_cron_minute below.
+    odds_cron_hours: str = Field(
+        default="0,2,4,6,8,10,12,14,16,18,20,22",
+        alias="AGG_ODDS_CRON_HOURS",
+    )
+    # Minute-of-the-hour for ``ingest_event_odds``. Defaults to 15 so it
+    # lands ~15 min AFTER a lifecycle run at :00 — by that point any new
+    # event rows lifecycle created are visible to the odds walk.
+    odds_cron_minute: int = Field(
+        default=15, alias="AGG_ODDS_CRON_MINUTE",
     )
     # Optional weekday filter for the daily full_refresh cron. arq uses
     # 0=Mon ... 6=Sun. Empty (default) → run every day at 02:30 UTC. Set to
@@ -193,6 +211,20 @@ class Settings(BaseSettings):
             } or {0, 30}
         except ValueError:
             return {0, 30}
+
+    @property
+    def odds_cron_hour_set(self) -> set[int]:
+        """Parsed AGG_ODDS_CRON_HOURS → set[int] for arq.cron(hour=...)."""
+        try:
+            parsed = {
+                int(p.strip())
+                for p in self.odds_cron_hours.split(",")
+                if p.strip()
+            }
+        except ValueError:
+            parsed = set()
+        # Sane fallback: every 2 hours.
+        return parsed or {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22}
 
     @property
     def full_refresh_weekday_set(self) -> set[int] | None:

@@ -54,6 +54,19 @@ def _build_cron_jobs() -> list:
     if s.full_refresh_weekday_set is not None:
         full_refresh_kwargs["weekday"] = s.full_refresh_weekday_set
 
+    # Cascade order (top → bottom):
+    #   sports  →  leagues  →  events (lifecycle)  →  odds
+    # Each layer changes less often than the one below it, so each cron's
+    # cadence is matched to the cost / refresh rate of its data:
+    #   sports         weekly  — taxonomy practically never changes
+    #   leagues        daily   — new leagues / season turnovers
+    #   lifecycle      every 30m by default — event rows + statuses + settle
+    #   odds           every 2h by default — heavy per-bookmaker writes
+    #
+    # The combined ``ingest_due_leagues`` cron is deliberately NOT on this
+    # auto-schedule — it stays available for manual trigger and as the
+    # one-button path from ``full_refresh``. Letting it auto-fire here
+    # would duplicate every lifecycle/odds run with a redundant SGO call.
     return [
         cron(
             seed_sports_task,
@@ -72,10 +85,25 @@ def _build_cron_jobs() -> list:
         ),
         cron(full_refresh_task, **full_refresh_kwargs),
         cron(
-            ingest_due_leagues_task,
+            ingest_lifecycle_only_task,
+            # Cheap half — event rows + status + settle + webhooks. The
+            # bookmaker-quote writes (the 131s killer) are NOT in this
+            # phase, so 30-min cadence is comfortable.
             minute=s.ingest_cron_minute_set,
             run_at_startup=False,
-            name="ingest_due_leagues",
+            name="ingest_event_lifecycle",
+        ),
+        cron(
+            ingest_odds_only_task,
+            # Heavy half — per-bookmaker price writes. Run on a sparser
+            # cadence (every 2h by default) and offset to :15 so each
+            # odds run lands ~15 min AFTER a lifecycle run, which means
+            # any new event rows lifecycle just created are visible to
+            # the odds walk.
+            hour=s.odds_cron_hour_set,
+            minute={s.odds_cron_minute},
+            run_at_startup=False,
+            name="ingest_event_odds",
         ),
         cron(
             webhook_deliver_task,

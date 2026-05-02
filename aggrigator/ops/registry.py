@@ -74,13 +74,14 @@ REGISTRY: list[CronSpec] = [
     CronSpec(
         name="ingest_due_leagues",
         description=(
-            "Walk every active league once and ingest everything: event rows, "
-            "markets, selections, per-bookmaker quotes, lifecycle, webhooks. "
-            "Heaviest cron — prefer ``ingest_event_lifecycle`` for frequent "
-            "status updates and ``ingest_event_odds`` for periodic price "
-            "refreshes. ``full_refresh`` calls this one."
+            "Combined walk: events + markets + per-bookmaker quotes + "
+            "lifecycle + webhooks in one SGO pass. Single most quota-"
+            "efficient way to refresh everything (one /events call per "
+            "league instead of two). Used by ``full_refresh`` and "
+            "available as a manual trigger here. Auto-scheduling is OFF "
+            "— the split lifecycle + odds crons cover steady-state."
         ),
-        schedule_human="every 30 min",
+        schedule_human="manual / via full_refresh",
         runner=run_ingest_due_leagues,
         max_runtime_seconds=1800,
     ),
@@ -89,11 +90,11 @@ REGISTRY: list[CronSpec] = [
         description=(
             "Lightweight ingest: event rows + status + settlement + webhooks. "
             "Skips the per-bookmaker quote writes (the dominant per-event "
-            "cost). Use for frequent status / lifecycle freshness without "
-            "the price-refresh overhead. Manual-trigger by default — wire it "
-            "to a schedule in workers/settings.py if you want it automatic."
+            "cost). Frequent cadence — keeps scores / lifecycle fresh "
+            "without the price-refresh overhead. Tune via "
+            "AGG_INGEST_CRON_MINUTES."
         ),
-        schedule_human="manual",
+        schedule_human="every 30 min (env-tunable)",
         runner=run_ingest_lifecycle_only,
         max_runtime_seconds=600,
     ),
@@ -102,10 +103,11 @@ REGISTRY: list[CronSpec] = [
         description=(
             "Heavy half: refreshes markets + per-bookmaker prices on events "
             "that already exist in our DB. Skips lifecycle / webhooks — "
-            "those are the lifecycle phase's job. Run this less frequently "
-            "(prices don't need to be sub-minute fresh)."
+            "those are the lifecycle phase's job. Sparser cadence (prices "
+            "don't need sub-minute freshness). Tune via AGG_ODDS_CRON_HOURS "
+            "/ AGG_ODDS_CRON_MINUTE."
         ),
-        schedule_human="manual",
+        schedule_human="every 2h @ :15 (env-tunable)",
         runner=run_ingest_odds_only,
         max_runtime_seconds=1800,
     ),
