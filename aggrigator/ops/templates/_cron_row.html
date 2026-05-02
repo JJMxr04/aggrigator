@@ -69,12 +69,24 @@
       </div>
     </details>
 
-    <button class="btn btn--primary"
-            {% if item.is_running %}disabled{% endif %}
-            hx-post="/ops/crons/{{ item.name }}/run"
-            hx-target="#cron-row-{{ item.name }}"
-            hx-swap="outerHTML">
-      {% if item.is_running %}Running…{% else %}Run now{% endif %}
-    </button>
+    <div style="display:flex; gap:.5rem;">
+      {% if item.is_running %}
+        <button class="btn btn--danger"
+                hx-post="/ops/crons/{{ item.name }}/cancel"
+                hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'
+                hx-target="#cron-row-{{ item.name }}"
+                hx-swap="outerHTML"
+                hx-confirm="Stop this cron run? Already-completed work is preserved.">
+          Stop
+        </button>
+      {% endif %}
+      <button class="btn btn--primary"
+              {% if item.is_running %}disabled{% endif %}
+              hx-post="/ops/crons/{{ item.name }}/run"
+              hx-target="#cron-row-{{ item.name }}"
+              hx-swap="outerHTML">
+        {% if item.is_running %}Running…{% else %}Run now{% endif %}
+      </button>
+    </div>
   </div>
 </article>

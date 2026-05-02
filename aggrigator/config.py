@@ -58,10 +58,13 @@ class Settings(BaseSettings):
     sgo_fixture_dir: str = Field(default="", alias="SPORTSGAMEODDS_FIXTURE_DIR")
 
     # Pre-emptive throttle: minimum seconds between SGO HTTP requests on a
-    # single client instance. Default 7s ≈ 8 req/min, safely under SGO's
-    # 10/min free-tier cap. Set to 0 to disable (paid tiers may not need it).
+    # single client instance. Default 0 — burst 5–10 calls in <1s and let
+    # the 429 retry-with-backoff handle the rare overshoot. Tested live
+    # against SGO's free tier (10/min cap) — bursts well under the cap
+    # never trip 429. Set to a positive value (e.g. 7.0) only if you're
+    # seeing chronic 429s on your tier.
     sgo_min_interval_seconds: float = Field(
-        default=7.0, alias="SPORTSGAMEODDS_MIN_INTERVAL_SECONDS",
+        default=0.0, alias="SPORTSGAMEODDS_MIN_INTERVAL_SECONDS",
     )
     # On HTTP 429, retry up to this many times with exponential backoff
     # (honors Retry-After header when present). 0 = no retries (fail fast).

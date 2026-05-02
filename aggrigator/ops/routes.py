@@ -35,6 +35,7 @@ from aggrigator.ops.data_reset import (
     list_table_info,
     truncate_table,
 )
+from aggrigator.ops.progress import request_cancel
 from aggrigator.ops.service import CronService, LockUnavailable, TriggerRejected
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,44 @@ async def trigger_run_html(request: Request, name: str) -> HTMLResponse:
                         "from agg-web. Check AGG_REDIS_URL and the Redis plugin."
                     ),
                 )
+            item = await svc.get_cron(name)
+        finally:
+            await redis.aclose()
+    return templates.TemplateResponse(
+        request, "_cron_row.html",
+        {"item": item, "csrf_token": _csrf_token(request)},
+    )
+
+
+@router.post("/crons/{name}/cancel", response_class=HTMLResponse)
+async def cancel_run_html(request: Request, name: str) -> HTMLResponse:
+    """Set the cancel flag for whatever run of ``name`` is currently
+    in flight. Cooperative — the runner picks it up at the next
+    breakpoint (typically the next league boundary)."""
+    user = await _admin_from_session(request)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+    await _require_csrf(request)
+
+    async with async_session_factory() as session:
+        redis = _redis()
+        try:
+            svc = CronService(session, redis)
+            item = await svc.get_cron(name)
+            if item is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND)
+            if item.is_running and item.last_run is not None:
+                ok = await request_cancel(item.last_run.id)
+                if not ok:
+                    logger.warning(
+                        "cancel_run_html: request_cancel returned False for %s "
+                        "(Redis blip?). UI will keep showing running.",
+                        name,
+                    )
+            # Re-fetch so the UI shows the updated progress message
+            # (set_progress wrote "cancellation requested..." inside the
+            # runner's next breakpoint, but it may not be visible yet —
+            # next 2s poll picks it up).
             item = await svc.get_cron(name)
         finally:
             await redis.aclose()

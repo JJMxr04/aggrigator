@@ -29,7 +29,7 @@ from aggrigator.ingest.upserts import (
     upsert_team_from_spec,
 )
 from aggrigator.models import Event, League
-from aggrigator.ops.progress import set_progress
+from aggrigator.ops.progress import raise_if_cancelled, set_progress
 from aggrigator.webhooks.enqueue import enqueue_for_event
 
 logger = logging.getLogger(__name__)
@@ -102,6 +102,36 @@ async def ingest_event(
         return None
     event = upserted.event
     await session.flush()
+
+    # Cheap exit for finalized-stable events: if our DB already has this
+    # event in a finished state with the same scores AND SGO is reporting
+    # the same finished state, the markets / selections / bookmaker quotes
+    # below cannot have changed. Skip the (very expensive) write_markets
+    # walk — the row's last_provider_refresh_at was already touched by
+    # upsert_event_from_spec, which is all the freshness signal we need.
+    #
+    # This is the dominant savings on the rolling ingest window: once
+    # an event is finalized, every subsequent walk re-fetches it for
+    # ``AGG_INGEST_WINDOW_DAYS_BEHIND`` days. Without this skip we pay
+    # for ~hundreds of bookmaker_selection upserts per event, daily.
+    prev = upserted.previous_state
+    finalized_stable = (
+        prev is not None
+        and prev.status_type == "finished"
+        and (spec.status_type or "").lower() == "finished"
+        and prev.home_score == spec.home_score
+        and prev.away_score == spec.away_score
+    )
+    if finalized_stable:
+        return IngestResult(
+            event=event,
+            transition=Transition.NONE,
+            selections_written=0,
+            selections_graded=0,
+            selections_computed=0,
+            selections_voided=0,
+            deliveries_enqueued=0,
+        )
 
     selections_written = await write_markets(session, event, spec.markets)
 
@@ -187,14 +217,33 @@ async def ingest_league(
     await set_progress(f"fetching events for {league.id}")
 
     report = LeagueReport(league_id=league.id)
+    event_idx = 0
     for payload in client.get_events(
         league_id=league.id,
-        include_open_close=True,
+        # include_open_close=False: we expose ``opening_odds`` in the schema
+        # but no internal code actually reads it. Dropping the flag halves
+        # the per-event SGO entity count AND halves the bookmaker_selection
+        # rows we have to upsert. If you ever need historical opens/closes,
+        # flip this back on for the cron run that needs them.
+        include_open_close=False,
         odds_available=None,
         starts_after=starts_after_iso,
         starts_before=starts_before_iso,
         limit=50,
     ):
+        # Per-event check too — leagues with many events can take long
+        # enough that operators want sub-league responsiveness on Stop.
+        await raise_if_cancelled()
+        event_idx += 1
+        # Granular progress every 5 events. The UI polls every 2s so any
+        # tighter cadence would just spam Redis without operator-visible
+        # benefit. Loose cadence is fine because each event takes
+        # multiple seconds (DB writes for markets+selections+quotes).
+        if event_idx % 5 == 0:
+            await set_progress(
+                f"{league.id}: processing event {event_idx} "
+                f"({report.events_processed} ingested)"
+            )
         try:
             result = await ingest_event(
                 session, payload, skip_if_new_terminal=True,
@@ -232,5 +281,13 @@ async def ingest_due_leagues(
     ))
     reports: list[LeagueReport] = []
     for league in leagues:
+        # Cooperative cancellation point — operator's Stop click takes
+        # effect at the next league boundary (worst case: end of current
+        # league's walk, typically 5–30s).
+        await raise_if_cancelled()
         reports.append(await ingest_league(session, league, client))
+        # Commit per-league so a cancellation (or a single league's
+        # failure) doesn't roll back leagues we've already finished.
+        # Each league is self-contained — no cross-league constraints.
+        await session.commit()
     return reports

@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aggrigator.ingest.normalize import BookmakerQuoteSpec, MarketSpec, SelectionSpec
@@ -163,32 +164,72 @@ async def _upsert_bookmaker_quotes(
     sel: Selection,
     books: Iterable[BookmakerQuoteSpec],
 ) -> None:
-    for q in books:
-        bookmaker = await session.get(Bookmaker, q.bookmaker_id)
-        if bookmaker is None:
-            bookmaker = Bookmaker(id=q.bookmaker_id, name=q.bookmaker_id.title())
-            session.add(bookmaker)
-            await session.flush()
+    """Bulk upsert all per-bookmaker quotes for one selection.
 
-        existing = await session.scalar(
-            select(BookmakerSelection)
-            .where(
-                BookmakerSelection.selection_id == sel.id,
-                BookmakerSelection.bookmaker_id == bookmaker.id,
-            )
+    Old shape: 2 DB roundtrips per quote (``session.get(Bookmaker)`` +
+    ``select(BookmakerSelection).where(...)``). For ~10 bookmakers per
+    selection × ~100 selections per event × ~50 events per league, that's
+    ~100,000 sequential roundtrips per league walk — at Neon's ~30ms RTT,
+    several minutes of pure latency.
+
+    New shape: 2 DB statements TOTAL per selection — one bulk INSERT
+    for unknown bookmakers (``ON CONFLICT DO NOTHING``) and one bulk
+    INSERT for the per-book selection rows
+    (``ON CONFLICT (selection_id, bookmaker_id) DO UPDATE``). The unique
+    constraint on the second is declared on the model — see
+    ``BookmakerSelection.__table_args__``.
+    """
+    quotes = list(books)
+    if not quotes:
+        return
+
+    now = datetime.now(tz=timezone.utc)
+
+    # 1. Make sure every referenced bookmaker exists. ``ON CONFLICT DO
+    #    NOTHING`` lets us blast through known + unknown books in one
+    #    statement without a pre-flight SELECT. ``id.title()`` is the
+    #    same fallback name we used in the old per-quote path.
+    bookmaker_rows = [
+        {"id": q.bookmaker_id, "name": q.bookmaker_id.title(), "active": True}
+        for q in quotes
+        if q.bookmaker_id  # skip malformed payloads
+    ]
+    if bookmaker_rows:
+        await session.execute(
+            pg_insert(Bookmaker)
+            .values(bookmaker_rows)
+            .on_conflict_do_nothing(index_elements=["id"])
         )
-        payload = dict(
-            decimal_odds=q.decimal_odds,
-            spread=q.spread,
-            over_under=q.over_under,
-            available=q.available,
-            deeplink=q.deeplink or "",
-            last_updated_at=q.last_updated_at or datetime.now(tz=timezone.utc),
-        )
-        if existing is None:
-            session.add(BookmakerSelection(
-                selection_id=sel.id, bookmaker_id=bookmaker.id, **payload,
-            ))
-        else:
-            for k, v in payload.items():
-                setattr(existing, k, v)
+
+    # 2. Upsert the per-book selection rows. ``EXCLUDED.<col>`` references
+    #    the row that *would have* been inserted, which is how we get
+    #    proper UPDATE semantics (overwrite price + spread + last_updated_at).
+    selection_rows = [
+        {
+            "selection_id": sel.id,
+            "bookmaker_id": q.bookmaker_id,
+            "decimal_odds": q.decimal_odds,
+            "spread": q.spread,
+            "over_under": q.over_under,
+            "available": q.available,
+            "deeplink": q.deeplink or "",
+            "last_updated_at": q.last_updated_at or now,
+        }
+        for q in quotes
+        if q.bookmaker_id
+    ]
+    if not selection_rows:
+        return
+    stmt = pg_insert(BookmakerSelection).values(selection_rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["selection_id", "bookmaker_id"],
+        set_={
+            "decimal_odds": stmt.excluded.decimal_odds,
+            "spread": stmt.excluded.spread,
+            "over_under": stmt.excluded.over_under,
+            "available": stmt.excluded.available,
+            "deeplink": stmt.excluded.deeplink,
+            "last_updated_at": stmt.excluded.last_updated_at,
+        },
+    )
+    await session.execute(stmt)

@@ -20,6 +20,10 @@ class CronRunStatus:
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
+    # Operator clicked Stop on the ops console; the runner saw the cancel
+    # flag at its next breakpoint and bailed out cleanly. Distinct from
+    # FAILED so the UI can render it neutrally (no error traceback).
+    CANCELLED = "cancelled"
 
 
 class CronRunSource:

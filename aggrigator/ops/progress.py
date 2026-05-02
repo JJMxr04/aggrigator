@@ -39,11 +39,25 @@ current_run_id: ContextVar[uuid.UUID | None] = ContextVar(
 )
 
 _KEY_PREFIX = "aggrigator:cronprogress:"
+_CANCEL_KEY_PREFIX = "aggrigator:croncancel:"
 _TTL_SECONDS = 3600  # 1h cap; cron-run rows persist independently in Postgres
 
 
 def _key(run_id: uuid.UUID | str) -> str:
     return f"{_KEY_PREFIX}{run_id}"
+
+
+def _cancel_key(run_id: uuid.UUID | int | str) -> str:
+    return f"{_CANCEL_KEY_PREFIX}{run_id}"
+
+
+class CronCancelled(Exception):
+    """Raised by ``raise_if_cancelled`` when an operator has clicked Stop.
+
+    The recorder catches this distinctly from generic exceptions so the
+    cron_run row gets ``status=CANCELLED`` (not ``FAILED``) and no
+    traceback is stored — a stop isn't an error.
+    """
 
 
 async def set_progress(message: str) -> None:
@@ -112,3 +126,80 @@ async def clear_progress(run_id: uuid.UUID | int | str) -> None:
             await r.aclose()
         except Exception:  # noqa: BLE001
             pass
+
+
+# ---- cancellation (cooperative) -------------------------------------------
+
+
+async def request_cancel(run_id: uuid.UUID | int | str) -> bool:
+    """Set the cancel flag for ``run_id``. Returns True on success.
+
+    Cancellation is COOPERATIVE — the runner only stops at points where
+    it calls ``raise_if_cancelled``. So the latency between Stop click
+    and actual halt is bounded by the time between checks (typically
+    one league iteration in ``ingest_due_leagues``).
+    """
+    settings = get_settings()
+    r = Redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await r.setex(_cancel_key(run_id), _TTL_SECONDS, "1")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("request_cancel failed: %s", exc)
+        return False
+    finally:
+        try:
+            await r.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def is_cancelled(run_id: uuid.UUID | int | str) -> bool:
+    """True if the cancel flag is set for ``run_id``. Read failures
+    return False — we never *spuriously* cancel a healthy run on a
+    Redis blip."""
+    settings = get_settings()
+    r = Redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        return bool(await r.exists(_cancel_key(run_id)))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("is_cancelled read failed (treating as not cancelled): %s", exc)
+        return False
+    finally:
+        try:
+            await r.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def clear_cancel(run_id: uuid.UUID | int | str) -> None:
+    """Delete the cancel key. Best-effort — TTL handles cleanup."""
+    settings = get_settings()
+    r = Redis.from_url(settings.redis_url, decode_responses=True)
+    try:
+        await r.delete(_cancel_key(run_id))
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        try:
+            await r.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def raise_if_cancelled() -> None:
+    """Cron-runner-facing breakpoint. Raises ``CronCancelled`` if the
+    operator has clicked Stop. No-op outside a cron context.
+
+    Sprinkle these at natural pause points (between leagues, between
+    batches). Don't bother adding to tight inner loops — Redis round-trip
+    per check would dominate the cron's runtime.
+    """
+    rid = current_run_id.get()
+    if rid is None:
+        return
+    if await is_cancelled(rid):
+        # Update progress so the UI sees "stopping..." even before the
+        # exception unwinds the call stack and the recorder records it.
+        await set_progress("cancellation requested — stopping at next safe point")
+        raise CronCancelled(f"cron run {rid} cancelled by operator")

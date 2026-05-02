@@ -26,7 +26,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aggrigator.db import session_scope
 from aggrigator.models import CronRun, CronRunSource, CronRunStatus
-from aggrigator.ops.progress import clear_progress, current_run_id
+from aggrigator.ops.progress import (
+    CronCancelled,
+    clear_cancel,
+    clear_progress,
+    current_run_id,
+)
 from aggrigator.ops.registry import CronSpec, by_name
 
 logger = logging.getLogger(__name__)
@@ -63,12 +68,18 @@ async def close_run(
 ) -> None:
     row.finished_at = datetime.now(tz=timezone.utc)
     if error is not None:
-        row.status = CronRunStatus.FAILED
-        # truncate at write time (plan §2.1.8)
-        row.error = (
-            f"{type(error).__name__}: {error}\n\n"
-            + "".join(traceback.format_exception(error))
-        )[:ERROR_TRUNCATE_CHARS]
+        if isinstance(error, CronCancelled):
+            # Operator clicked Stop. Distinct status, no traceback —
+            # cancellation isn't an error condition.
+            row.status = CronRunStatus.CANCELLED
+            row.error = str(error)[:ERROR_TRUNCATE_CHARS]
+        else:
+            row.status = CronRunStatus.FAILED
+            # truncate at write time (plan §2.1.8)
+            row.error = (
+                f"{type(error).__name__}: {error}\n\n"
+                + "".join(traceback.format_exception(error))
+            )[:ERROR_TRUNCATE_CHARS]
     else:
         row.status = CronRunStatus.SUCCESS
         row.summary = summary
@@ -118,9 +129,11 @@ async def run_with_recording(
         error = exc
     finally:
         current_run_id.reset(progress_token)
-        # Best-effort: clean up the progress key as soon as the run ends.
-        # TTL would catch it eventually, but the UI re-renders within 2s.
+        # Best-effort cleanup. TTL on both keys would handle this
+        # eventually, but the UI re-renders within 2s and we want
+        # subsequent runs to have a clean slate.
         await clear_progress(run_id)
+        await clear_cancel(run_id)
 
     async with session_scope() as session:
         row = await session.get(CronRun, run_id)
