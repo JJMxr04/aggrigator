@@ -4,12 +4,19 @@ Why this exists: the ops console (``/ops/crons``) only shows a "running"
 pill while a cron is in flight. For a 60-second `ingest_due_leagues`
 walk that's a long time staring at a spinner with no signal that
 anything is happening. This module gives runners a one-liner
-``await set_progress("walking NFL events")`` that surfaces in the UI on
-the next 2-second HTMX poll.
+``await set_progress("walking NFL events")`` and the UI surfaces an
+append-only log of those messages — pushed in real time over SSE so
+operators see updates as they happen, not on a poll tick.
 
-Storage: Redis. Key ``aggrigator:cronprogress:<run_id>``, value JSON
-``{"message": str, "ts": iso}``. TTL caps at 1h so abandoned runs
-self-clean.
+Storage: Redis list (for backlog when an SSE client connects mid-run)
++ Redis pub/sub channel (for live push).
+
+- Key   ``aggrigator:cronprogress:<run_id>``  — JSON entries, RPUSHed
+  oldest-first, trimmed to the most-recent ``_MAX_MESSAGES``, 1h TTL.
+- Chan  ``aggrigator:cronprogress:<run_id>:ch`` — same JSON payload
+  PUBLISHed on every set_progress so SSE subscribers wake up
+  immediately. The recorder publishes a ``__complete__`` sentinel when
+  the run finishes so subscribers exit their loop cleanly.
 
 Discovery: a ``ContextVar`` carries the current run_id ambiently. The
 recorder sets it around ``spec.runner()`` so individual task functions
@@ -21,7 +28,9 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from redis.asyncio import Redis
@@ -41,10 +50,22 @@ current_run_id: ContextVar[uuid.UUID | None] = ContextVar(
 _KEY_PREFIX = "aggrigator:cronprogress:"
 _CANCEL_KEY_PREFIX = "aggrigator:croncancel:"
 _TTL_SECONDS = 3600  # 1h cap; cron-run rows persist independently in Postgres
+_MAX_MESSAGES = 200  # keep the most-recent N updates per run (LTRIM bound)
+COMPLETE_SENTINEL = "__complete__"
 
 
-def _key(run_id: uuid.UUID | str) -> str:
+@dataclass(frozen=True)
+class ProgressUpdate:
+    message: str
+    ts: str  # ISO8601 UTC, second precision
+
+
+def _key(run_id: uuid.UUID | int | str) -> str:
     return f"{_KEY_PREFIX}{run_id}"
+
+
+def _channel(run_id: uuid.UUID | int | str) -> str:
+    return f"{_KEY_PREFIX}{run_id}:ch"
 
 
 def _cancel_key(run_id: uuid.UUID | int | str) -> str:
@@ -61,7 +82,14 @@ class CronCancelled(Exception):
 
 
 async def set_progress(message: str) -> None:
-    """Write a one-line progress update for the current cron run.
+    """Append a one-line progress update for the current cron run.
+
+    Writes to two places:
+
+    1. The Redis list at ``_key(run_id)`` — durable backlog so a client
+       opening the page mid-run can replay everything that's happened.
+    2. The Redis channel at ``_channel(run_id)`` — fan-out to live SSE
+       subscribers so the UI updates without waiting for a poll.
 
     No-op when called outside a cron run (ContextVar unset). Failures
     are swallowed — UI nicety should never break the cron itself.
@@ -76,7 +104,17 @@ async def set_progress(message: str) -> None:
     })
     r = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
-        await r.setex(_key(rid), _TTL_SECONDS, payload)
+        # Pipeline the list write so all three commands cost one round-trip.
+        # Pub/sub is a separate command (not a multi-state op) so we issue
+        # it after — order matters: subscribers should never see a message
+        # that isn't yet in the backlog (otherwise replay-on-connect could
+        # show duplicates or, worse, miss a message in the gap).
+        async with r.pipeline(transaction=False) as pipe:
+            pipe.rpush(_key(rid), payload)
+            pipe.ltrim(_key(rid), -_MAX_MESSAGES, -1)
+            pipe.expire(_key(rid), _TTL_SECONDS)
+            await pipe.execute()
+        await r.publish(_channel(rid), payload)
     except Exception as exc:  # noqa: BLE001 — never break runners on Redis blips
         logger.debug("set_progress failed (non-fatal): %s", exc)
     finally:
@@ -86,30 +124,99 @@ async def set_progress(message: str) -> None:
             pass
 
 
-async def get_progress(run_id: uuid.UUID | int | str) -> str | None:
-    """Read the current progress message, or None if absent / Redis down.
+async def publish_complete(run_id: uuid.UUID | int | str) -> None:
+    """Tell live SSE subscribers the run is over so they can close.
 
-    The ops/crons UI calls this for rows whose status is RUNNING. Read
-    failures fall back to None — the UI just won't show a progress line.
+    Called from the recorder once ``spec.runner()`` returns (or raises).
+    The sentinel is pub/sub-only — no list entry — because clients
+    that connect *after* completion get the empty backlog and a
+    closed channel (the SSE endpoint handles that case explicitly).
     """
     settings = get_settings()
     r = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
-        raw = await r.get(_key(run_id))
+        await r.publish(_channel(run_id), COMPLETE_SENTINEL)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("get_progress read failed (non-fatal): %s", exc)
-        return None
+        logger.debug("publish_complete failed (non-fatal): %s", exc)
     finally:
         try:
             await r.aclose()
         except Exception:  # noqa: BLE001
             pass
-    if not raw:
-        return None
+
+
+async def get_progress(run_id: uuid.UUID | int | str) -> list[ProgressUpdate]:
+    """Read the full message backlog for a run, oldest-first.
+
+    The ops/crons UI calls this for rows whose status is RUNNING (to
+    seed the initial render before SSE takes over). Read failures fall
+    back to ``[]`` so a Redis blip never breaks the page.
+    """
+    settings = get_settings()
+    r = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
-        return json.loads(raw).get("message")
-    except (ValueError, TypeError):
-        return None
+        raws = await r.lrange(_key(run_id), 0, -1)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("get_progress read failed (non-fatal): %s", exc)
+        return []
+    finally:
+        try:
+            await r.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+    out: list[ProgressUpdate] = []
+    for raw in raws or []:
+        try:
+            d = json.loads(raw)
+            out.append(ProgressUpdate(message=d["message"], ts=d["ts"]))
+        except (ValueError, TypeError, KeyError):
+            continue
+    return out
+
+
+async def subscribe_progress(
+    run_id: uuid.UUID | int | str,
+) -> AsyncIterator[ProgressUpdate | None]:
+    """Yield each new progress update as it's published.
+
+    Yields ``ProgressUpdate`` for normal messages and a single ``None``
+    when the recorder has signaled completion (via ``publish_complete``)
+    — at which point the generator returns.
+
+    The caller (the SSE endpoint) is responsible for handling client
+    disconnect — wrap iteration in a try/finally and break on
+    ``request.is_disconnected()``.
+    """
+    settings = get_settings()
+    r = Redis.from_url(settings.redis_url, decode_responses=True)
+    pubsub = r.pubsub()
+    try:
+        await pubsub.subscribe(_channel(run_id))
+        async for msg in pubsub.listen():
+            if msg.get("type") != "message":
+                continue
+            data = msg.get("data")
+            if data == COMPLETE_SENTINEL:
+                yield None
+                return
+            try:
+                d = json.loads(data)
+                yield ProgressUpdate(message=d["message"], ts=d["ts"])
+            except (ValueError, TypeError, KeyError):
+                continue
+    finally:
+        try:
+            await pubsub.unsubscribe(_channel(run_id))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await pubsub.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await r.aclose()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def clear_progress(run_id: uuid.UUID | int | str) -> None:

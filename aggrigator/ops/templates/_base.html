@@ -6,6 +6,7 @@
 <title>Aggrigator — Ops Console</title>
 <meta name="csrf-token" content="{{ csrf_token }}">
 <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+<script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/sse.js"></script>
 <script>
   document.addEventListener('DOMContentLoaded', function() {
     document.body.addEventListener('htmx:configRequest', function(evt) {
@@ -155,6 +156,40 @@
     0%, 100% { opacity: 1; transform: scale(1); }
     50%      { opacity: .4; transform: scale(.6); }
   }
+
+  /* Live run progress log (SSE-driven append-only) */
+  .run-live {
+    background: var(--warning-soft);
+    border-left: 3px solid var(--warning);
+    border-radius: 4px;
+    padding: .5rem .75rem;
+    font-size: .85rem;
+    display: flex; flex-direction: column; gap: .4rem;
+  }
+  .run-live__head {
+    display: flex; align-items: center; gap: .5rem;
+    color: var(--text);
+    font-weight: 600;
+  }
+  .run-live__elapsed { font-variant-numeric: tabular-nums; }
+  .run-live__log {
+    display: flex; flex-direction: column; gap: .15rem;
+    max-height: 12em; overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .35rem .5rem;
+    font-family: var(--mono); font-size: .78rem;
+    line-height: 1.45;
+  }
+  .run-live__log:empty { display: none; }
+  .run-live__line {
+    display: grid; grid-template-columns: 70px 1fr; gap: .5rem;
+    color: var(--text-soft);
+  }
+  .run-live__line:last-child { color: var(--text); font-weight: 600; }
+  .run-live__ts { color: var(--text-mute); font-variant-numeric: tabular-nums; }
+  .run-live__msg { word-break: break-word; }
 
   /* Run summary line */
   .run-summary {

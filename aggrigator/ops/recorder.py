@@ -31,6 +31,7 @@ from aggrigator.ops.progress import (
     clear_cancel,
     clear_progress,
     current_run_id,
+    publish_complete,
 )
 from aggrigator.ops.registry import CronSpec, by_name
 
@@ -129,6 +130,12 @@ async def run_with_recording(
         error = exc
     finally:
         current_run_id.reset(progress_token)
+        # Tell live SSE subscribers the stream is done so their
+        # EventSource closes cleanly. Publish *before* clearing the
+        # backlog so any client currently reading the channel gets
+        # the sentinel — a deleted key with no publisher would just
+        # leave the connection hanging until the proxy timed it out.
+        await publish_complete(run_id)
         # Best-effort cleanup. TTL on both keys would handle this
         # eventually, but the UI re-renders within 2s and we want
         # subsequent runs to have a clean slate.

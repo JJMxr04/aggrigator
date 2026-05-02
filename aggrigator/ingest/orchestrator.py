@@ -274,10 +274,11 @@ async def ingest_league(
         "ingest_league %s: walking SGO events in window [%s, %s]",
         league.id, starts_after_iso, starts_before_iso,
     )
-    await set_progress(f"fetching events for {league.id}")
+    await set_progress(f"{league.id} ({phase}): fetching events from SGO")
 
     report = LeagueReport(league_id=league.id)
     event_idx = 0
+    first_event_seen = False
     for payload in client.get_events(
         league_id=league.id,
         # include_open_close=False: we expose ``opening_odds`` in the schema
@@ -291,19 +292,22 @@ async def ingest_league(
         starts_before=starts_before_iso,
         limit=50,
     ):
+        # First payload arriving means SGO returned the first page —
+        # signal "fetch done, processing begins" so operators can
+        # distinguish a slow upstream from a slow ingest.
+        if not first_event_seen:
+            first_event_seen = True
+            await set_progress(
+                f"{league.id}: SGO returned first batch — starting ingest"
+            )
         # Per-event check too — leagues with many events can take long
         # enough that operators want sub-league responsiveness on Stop.
         await raise_if_cancelled()
         event_idx += 1
-        # Granular progress every 5 events. The UI polls every 2s so any
-        # tighter cadence would just spam Redis without operator-visible
-        # benefit. Loose cadence is fine because each event takes
-        # multiple seconds (DB writes for markets+selections+quotes).
-        if event_idx % 5 == 0:
-            await set_progress(
-                f"{league.id}: processing event {event_idx} "
-                f"({report.events_processed} ingested)"
-            )
+        event_id = payload.get("eventID") or "?"
+        await set_progress(
+            f"{league.id} event {event_idx} ({event_id}): writing odds"
+        )
         try:
             result = await ingest_event(
                 session, payload,
@@ -314,10 +318,23 @@ async def ingest_league(
             logger.exception("ingest failed for event=%s", payload.get("eventID"))
             await session.rollback()
             report.events_failed += 1
+            await set_progress(
+                f"{league.id} event {event_idx} ({event_id}): FAILED — see logs"
+            )
             continue
         if result is not None:
             report.events_processed += 1
             report.transitions.append(result.transition)
+            await set_progress(
+                f"{league.id} event {event_idx} ({event_id}): committed "
+                f"(written={result.selections_written} "
+                f"graded={result.selections_graded} "
+                f"transition={result.transition.name})"
+            )
+        else:
+            await set_progress(
+                f"{league.id} event {event_idx} ({event_id}): skipped"
+            )
         # Commit per-event so markets/selections/quotes become visible
         # mid-walk. Each event is idempotent on retry, so a partial
         # league walk is recoverable on the next run.
@@ -328,7 +345,8 @@ async def ingest_league(
         league.id, report.events_processed, report.events_failed,
     )
     await set_progress(
-        f"{league.id}: {report.events_processed} events processed"
+        f"{league.id}: finished — {report.events_processed} processed, "
+        f"{report.events_failed} failed"
     )
     return report
 
@@ -352,12 +370,18 @@ async def ingest_due_leagues(
     leagues = list(await session.scalars(
         select(League).where(League.active.is_(True))
     ))
+    await set_progress(
+        f"walking {len(leagues)} active league(s) [phase={phase}]"
+    )
     reports: list[LeagueReport] = []
-    for league in leagues:
+    for idx, league in enumerate(leagues, start=1):
         # Cooperative cancellation point — operator's Stop click takes
         # effect at the next league boundary (worst case: end of current
         # league's walk, typically 5–30s).
         await raise_if_cancelled()
+        await set_progress(
+            f"[{idx}/{len(leagues)}] starting {league.id}"
+        )
         reports.append(
             await ingest_league(session, league, client, phase=phase)
         )
@@ -365,4 +389,8 @@ async def ingest_due_leagues(
         # failure) doesn't roll back leagues we've already finished.
         # Each league is self-contained — no cross-league constraints.
         await session.commit()
+    await set_progress(
+        f"all leagues done — {sum(r.events_processed for r in reports)} events processed, "
+        f"{sum(r.events_failed for r in reports)} failed"
+    )
     return reports

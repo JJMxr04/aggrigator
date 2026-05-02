@@ -23,8 +23,9 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+from markupsafe import escape
 from redis.asyncio import Redis
 
 from aggrigator.config import get_settings
@@ -35,7 +36,11 @@ from aggrigator.ops.data_reset import (
     list_table_info,
     truncate_table,
 )
-from aggrigator.ops.progress import request_cancel
+from aggrigator.ops.progress import (
+    ProgressUpdate,
+    request_cancel,
+    subscribe_progress,
+)
 from aggrigator.ops.service import CronService, LockUnavailable, TriggerRejected
 
 logger = logging.getLogger(__name__)
@@ -108,6 +113,120 @@ async def cron_row(request: Request, name: str) -> HTMLResponse:
         request, "_cron_row.html",
         {"item": item, "csrf_token": _csrf_token(request)},
     )
+
+
+@router.get("/crons/{name}/progress/stream")
+async def progress_stream(request: Request, name: str) -> StreamingResponse:
+    """Server-Sent Events stream of live progress updates for a cron run.
+
+    The browser opens this once per running row (via HTMX SSE extension on
+    ``#run-live-log-{name}``). For the lifetime of the connection we:
+
+    1. Look up the in-flight ``cron_run`` for ``name``. No row → 404.
+    2. Subscribe to the per-run pub/sub channel
+       (``aggrigator:cronprogress:<run_id>:ch``).
+    3. Forward each ``set_progress`` write as a ``message`` SSE event
+       containing the rendered ``<div class="run-live__line">`` HTML
+       (HTMX appends with ``hx-swap="beforeend"``).
+    4. When the recorder publishes the ``__complete__`` sentinel, emit a
+       ``stream-end`` event — HTMX SSE's ``sse-close`` directive closes
+       the EventSource on that event name. The next 2s row poll will
+       re-render the row in its non-running state.
+
+    Disconnects (operator closes the tab, browser sleeps): the
+    ``request.is_disconnected()`` poll inside the loop terminates the
+    generator; the ``finally`` in ``subscribe_progress`` unsubscribes
+    and closes the Redis connection.
+    """
+    user = await _admin_from_session(request)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+
+    async with async_session_factory() as session:
+        redis = _redis()
+        try:
+            svc = CronService(session, redis)
+            item = await svc.get_cron(name)
+        finally:
+            await redis.aclose()
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    if not item.is_running or item.run_id is None:
+        # Run already finished by the time the SSE connect attempt
+        # arrived. Send the close event immediately so the client
+        # tears down its EventSource.
+        async def _empty():
+            yield "event: stream-end\ndata: done\n\n"
+        return StreamingResponse(
+            _empty(),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
+    run_id = item.run_id
+
+    async def _event_stream():
+        # We deliberately do NOT replay the backlog here — the initial
+        # row render already injected those <div> lines as DOM children
+        # of the SSE container, and ``hx-preserve`` keeps them in place
+        # across row swaps. Replaying would duplicate them.
+        async for upd in subscribe_progress(run_id):
+            if await request.is_disconnected():
+                return
+            if upd is None:
+                # COMPLETE_SENTINEL — recorder finished, tell the
+                # browser to close its EventSource.
+                yield "event: stream-end\ndata: done\n\n"
+                return
+            yield _sse_message(_render_log_line(upd))
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
+    )
+
+
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache, no-transform",
+    # Disable proxy buffering — Nginx/Cloudflare/Railway-edge will hold
+    # the response until the buffer fills otherwise, which defeats the
+    # whole "real-time" point.
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
+
+
+def _render_log_line(upd: ProgressUpdate) -> str:
+    """Render one ProgressUpdate as the HTML chunk the SSE swap appends.
+
+    Mirror of the Jinja loop in ``_cron_row.html`` — kept here as a tiny
+    string template so the SSE endpoint doesn't have to load a Jinja
+    environment per message. Both must stay in sync; if you change the
+    line markup in the template, change it here too.
+    """
+    ts = upd.ts
+    if "T" in ts:
+        ts = ts.split("T", 1)[1][:8]
+    return (
+        f'<div class="run-live__line">'
+        f'<span class="run-live__ts">{escape(ts)}</span>'
+        f'<span class="run-live__msg">{escape(upd.message)}</span>'
+        f"</div>"
+    )
+
+
+def _sse_message(html: str) -> str:
+    """Pack one HTML chunk as an SSE ``message`` event.
+
+    SSE wire format: each ``data:`` line is one line of the payload;
+    blank line terminates the event. ``htmx-sse`` joins multi-line
+    ``data:`` blocks with ``\\n``, so we collapse newlines defensively
+    to keep our payload single-line (the rendered log line is always
+    a single tag anyway, but defense-in-depth costs nothing).
+    """
+    safe = html.replace("\n", " ")
+    return f"data: {safe}\n\n"
 
 
 @router.post("/crons/{name}/run", response_class=HTMLResponse)
