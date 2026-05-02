@@ -19,7 +19,7 @@ from arq.cron import cron
 from aggrigator.config import get_settings
 from aggrigator.workers.tasks.full_refresh import full_refresh_task
 from aggrigator.workers.tasks.ingest import ingest_due_leagues_task
-from aggrigator.workers.tasks.seed import seed_task
+from aggrigator.workers.tasks.seed import seed_leagues_task, seed_sports_task
 from aggrigator.workers.tasks.settle import settle_pending_task
 from aggrigator.workers.tasks.vacuum import vacuum_old_events_task
 from aggrigator.workers.tasks.webhook_deliver import webhook_deliver_task
@@ -52,9 +52,19 @@ def _build_cron_jobs() -> list:
 
     return [
         cron(
-            seed_task,
+            seed_sports_task,
+            # Sports change essentially never. Weekly Mondays is enough
+            # to catch SGO adding a brand-new sport.
+            weekday={0}, hour={1}, minute={30},
+            name="seed_sports",
+        ),
+        cron(
+            seed_leagues_task,
+            # Leagues drift more often than sports (new minor leagues,
+            # season transitions). Daily so newly-added leagues become
+            # walkable on the next ingest.
             hour={2}, minute={0},
-            name="seed_sports_and_leagues",
+            name="seed_leagues",
         ),
         cron(full_refresh_task, **full_refresh_kwargs),
         cron(
@@ -91,7 +101,8 @@ class WorkerSettings:
         ingest_due_leagues_task,
         webhook_deliver_task,
         settle_pending_task,
-        seed_task,
+        seed_sports_task,
+        seed_leagues_task,
         vacuum_old_events_task,
     ]
 

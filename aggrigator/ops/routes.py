@@ -17,6 +17,7 @@ business logic in the templates; service-layer calls only. Replaces v0
 
 from __future__ import annotations
 
+import hmac
 import logging
 import uuid
 from pathlib import Path
@@ -340,5 +341,10 @@ async def _require_csrf(request: Request) -> None:
             submitted = form.get("csrf_token")
         except Exception:  # noqa: BLE001
             submitted = None
-    if not expected or not submitted or expected != submitted:
+    # Constant-time compare — protects against timing-based token recovery
+    # (Starlette session is signed so the attack surface is narrow, but
+    # str-eq leaks character-level timing in principle).
+    if not expected or not submitted or not hmac.compare_digest(
+        expected, submitted,
+    ):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "CSRF token missing or mismatch")

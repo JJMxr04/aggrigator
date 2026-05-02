@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aggrigator.config import Settings, get_settings
 from aggrigator.db import get_session
 from aggrigator.models.auth import ApiKey, User
+from aggrigator.security import audit
 from aggrigator.security.api_keys import split_raw, verify_key
 from aggrigator.security.jwt import InvalidToken, verify_access_token
 
@@ -91,10 +92,22 @@ async def current_api_key(
     creds = _bearer_or_apikey(authorization, x_api_key)
     if creds is None or creds[0] != "apikey":
         return None
-    _, api_key = await _resolve_api_key(session, creds[1])
+    user, api_key = await _resolve_api_key(session, creds[1])
     if api_key is not None:
         api_key.last_used_at = datetime.now(tz=timezone.utc)
         api_key.last_used_ip = request.client.host if request.client else None
+        # KEY_USE audit row — one per authenticated request. Necessary
+        # for incident response: if a key leaks, this is the only way
+        # to enumerate which IPs / endpoints used it.
+        await audit.write(
+            session,
+            event_name=audit.Event.KEY_USE,
+            actor_api_key_id=api_key.id,
+            actor_user_id=user.id if user else None,
+            ip=request.client.host if request.client else None,
+            target_type="route",
+            target_id=request.url.path,
+        )
         await session.commit()
     return api_key
 

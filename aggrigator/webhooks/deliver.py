@@ -84,14 +84,21 @@ async def send_one(
             http_status=resp.status_code, error=None, next_retry_at=None,
         )
 
+    # Don't store the receiver's response body — a misconfigured receiver
+    # can echo our request headers (signature, timestamp) or app secrets
+    # back in its 4xx response, which would then sit in ``last_error`` and
+    # be visible in /admin / cron history. Status-code-only error messages
+    # are enough for triage; full diagnosis lives in the receiver's logs.
+    sanitized = f"HTTP {resp.status_code}"
+
     if resp.status_code in TRANSIENT_4XX or resp.status_code >= 500:
         return _decide_retry(
             delivery, status=resp.status_code,
-            error=resp.text[:500], now=moment,
+            error=sanitized, now=moment,
         )
 
     # Permanent client error — don't retry.
-    delivery.last_error = resp.text[:500]
+    delivery.last_error = sanitized
     delivery.next_retry_at = None
     return DeliveryOutcome(
         success=False, permanent_fail=True,

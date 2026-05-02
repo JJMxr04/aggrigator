@@ -102,9 +102,51 @@ def _redacted(url: str) -> str:
 _REDIS_VALID_SCHEMES = ("redis://", "rediss://", "unix://")
 
 
+class InsecureProductionConfig(RuntimeError):
+    """Raised at startup when prod is booting with known-default secrets.
+
+    Fail-closed beats fail-open: a forgotten env var is the single most
+    common cause of "we shipped with the dev secret." Refusing to start
+    surfaces the problem immediately instead of letting forgeable JWTs
+    serve traffic.
+    """
+
+
+def _enforce_prod_secrets(settings) -> None:
+    """Hard-fail boot if prod is using the dev default for any secret.
+    Called from create_app() — must run BEFORE the app starts serving."""
+    if settings.env not in ("prod", "production"):
+        return
+
+    failures: list[str] = []
+    if settings.jwt_secret == _DEFAULT_JWT_SECRET:
+        failures.append(
+            "AGG_JWT_SECRET is the dev default. Generate: "
+            "openssl rand -hex 32"
+        )
+    if settings.secret_encryption_key == _DEFAULT_FERNET_KEY:
+        failures.append(
+            "AGG_SECRET_ENCRYPTION_KEY is the dev default. Generate: "
+            'python -c "from cryptography.fernet import Fernet; '
+            'print(Fernet.generate_key().decode())"'
+        )
+    if not failures:
+        return
+    msg = (
+        "[startup] refusing to start in prod with default secrets:\n  - "
+        + "\n  - ".join(failures)
+    )
+    logger.error(msg)
+    raise InsecureProductionConfig(msg)
+
+
 def _warn_on_misconfig(settings) -> None:
     """One-shot log audit at startup: surface the most expensive-if-missed
-    misconfigs (default secrets in prod, missing host allowlist, etc.)."""
+    misconfigs (default secrets in prod, missing host allowlist, etc.).
+
+    Note: AGG_JWT_SECRET / AGG_SECRET_ENCRYPTION_KEY are NOT checked here
+    because they're already fatal in prod — see ``_enforce_prod_secrets``.
+    """
     # URL-shape checks fire in any env (dev too) — a malformed URL is a
     # bug regardless of where you're running.
     if settings.redis_url and not settings.redis_url.startswith(_REDIS_VALID_SCHEMES):
@@ -120,20 +162,6 @@ def _warn_on_misconfig(settings) -> None:
     is_prod = settings.env in ("prod", "production")
     if not is_prod:
         return
-
-    if settings.jwt_secret == _DEFAULT_JWT_SECRET:
-        logger.warning(
-            "[startup] AGG_JWT_SECRET is the dev default in prod — "
-            "session cookies are forgeable. Generate a real value: "
-            "openssl rand -hex 32"
-        )
-    if settings.secret_encryption_key == _DEFAULT_FERNET_KEY:
-        logger.warning(
-            "[startup] AGG_SECRET_ENCRYPTION_KEY is the dev default in prod — "
-            "stored webhook secrets are decryptable from the source. "
-            "Generate: python -c \"from cryptography.fernet import Fernet; "
-            "print(Fernet.generate_key().decode())\""
-        )
     if settings.redis_url == _DEFAULT_REDIS_URL:
         logger.warning(
             "[startup] AGG_REDIS_URL is the localhost default in prod — "
@@ -188,14 +216,32 @@ def create_app() -> FastAPI:
     configure_logging(settings.log_level)
     init_sentry(settings)
 
-    # In prod, kill the OpenAPI/Swagger/Redoc surfaces entirely — they
-    # leak the full route + schema graph to anyone who can reach the
-    # service, which is recon gold for an attacker. Dev / staging keep
-    # them for developer ergonomics.
+    # Fail-closed on default secrets in prod — raises before the app
+    # starts serving. Better an immediate boot-loop than a quietly
+    # forgeable JWT.
+    _enforce_prod_secrets(settings)
+
+    # OpenAPI / Swagger / Redoc are recon material — they expose the full
+    # route + schema graph to any unauthenticated probe. Default is OFF in
+    # every environment; flip ``AGG_DOCS_ENABLED=true`` only on short-lived
+    # dev/test environments where you actively need the docs UI. Safer
+    # default than "on except in prod" — a misconfigured staging deploy
+    # never leaks the schema.
+    docs_enabled = settings.docs_enabled
+    if docs_enabled and is_prod:
+        # Defense-in-depth: refuse the combination. An operator who flips
+        # this on for "5 minutes of debugging" would otherwise leak the
+        # schema until they remember to flip it back.
+        logger.error(
+            "[startup] AGG_DOCS_ENABLED=true is forbidden in prod — "
+            "force-disabling. /docs, /redoc, /openapi.json will return 404. "
+            "If you need the docs UI, do it on a non-prod deploy."
+        )
+        docs_enabled = False
     docs_kwargs: dict = (
-        {"docs_url": None, "redoc_url": None, "openapi_url": None}
-        if is_prod
-        else {}
+        {}
+        if docs_enabled
+        else {"docs_url": None, "redoc_url": None, "openapi_url": None}
     )
 
     app = FastAPI(
@@ -224,9 +270,22 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Authorization", "X-Api-Key", "X-Client-App", "Content-Type"],
     )
+    # Session signing key. Prefer the dedicated AGG_SESSION_SECRET; fall
+    # back to jwt_secret with a WARNING so existing prod deploys don't
+    # break, but operators are nudged to split the keys.
+    if settings.session_secret:
+        session_signing_key = settings.session_secret
+    else:
+        session_signing_key = settings.jwt_secret
+        if is_prod:
+            logger.warning(
+                "[startup] AGG_SESSION_SECRET unset — reusing AGG_JWT_SECRET "
+                "for session cookies. Set a separate value so JWT and "
+                "session can be rotated independently."
+            )
     app.add_middleware(
         SessionMiddleware,
-        secret_key=settings.jwt_secret,
+        secret_key=session_signing_key,
         session_cookie="aggrigator_session",
         same_site="lax",
         https_only=is_prod,
@@ -248,6 +307,15 @@ def create_app() -> FastAPI:
             "microphone=(), payment=(), usb=()"
         )
         h["Cross-Origin-Opener-Policy"] = "same-origin"
+        # Minimal CSP. SQLAdmin uses inline scripts/styles, so a strict
+        # ``script-src 'self'`` would break the admin UI. We instead lock
+        # down the things we don't need — embedding (frame-ancestors),
+        # base href injection (base-uri), form posts to other origins
+        # (form-action). Together these blunt the impact of any future
+        # template-XSS without coupling to SQLAdmin's internals.
+        h["Content-Security-Policy"] = (
+            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        )
         # HSTS only in prod — we're always behind Railway's HTTPS edge
         # there. In dev (HTTP localhost) HSTS would lock the browser to
         # https for the host and break local testing.

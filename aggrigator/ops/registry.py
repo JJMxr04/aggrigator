@@ -17,7 +17,7 @@ from typing import Any, Awaitable, Callable
 
 from aggrigator.workers.tasks.full_refresh import run_full_refresh
 from aggrigator.workers.tasks.ingest import run_ingest_due_leagues
-from aggrigator.workers.tasks.seed import run_seed_sports_and_leagues
+from aggrigator.workers.tasks.seed import run_seed_leagues, run_seed_sports
 from aggrigator.workers.tasks.settle import run_settle_pending
 from aggrigator.workers.tasks.vacuum import run_vacuum_old_events
 from aggrigator.workers.tasks.webhook_deliver import run_deliver_due
@@ -46,14 +46,26 @@ REGISTRY: list[CronSpec] = [
         max_runtime_seconds=2400,
     ),
     CronSpec(
-        name="seed_sports_and_leagues",
+        name="seed_sports",
         description=(
-            "Pull every sport and league from SGO into the DB. Doesn't fetch "
-            "events — use ``full_refresh`` or ``ingest_due_leagues`` for that."
+            "Upsert the SGO sport list (basketball, football, baseball, …). "
+            "Single SGO call. Sports change essentially never, so this runs "
+            "weekly — most refreshes are no-ops."
+        ),
+        schedule_human="weekly Mon @ 01:30 UTC",
+        runner=run_seed_sports,
+        max_runtime_seconds=120,
+    ),
+    CronSpec(
+        name="seed_leagues",
+        description=(
+            "Upsert the SGO league list across all sports (one /leagues "
+            "call). Run daily so newly-added leagues become walkable on "
+            "the next ingest."
         ),
         schedule_human="daily @ 02:00 UTC",
-        runner=run_seed_sports_and_leagues,
-        max_runtime_seconds=600,
+        runner=run_seed_leagues,
+        max_runtime_seconds=300,
     ),
     CronSpec(
         name="ingest_due_leagues",

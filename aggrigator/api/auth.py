@@ -33,6 +33,7 @@ from aggrigator.security.passwords import (
     needs_rehash,
     verify_password,
 )
+from aggrigator.security.rate_limit import limiter
 
 
 def _ip(request: Request) -> str | None:
@@ -49,6 +50,7 @@ def _hash_refresh(token: str) -> str:
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
 async def register(
     request: Request, payload: RegisterIn, session: SessionDep,
 ) -> User:
@@ -72,6 +74,7 @@ async def register(
 
 
 @router.post("/login", response_model=TokenPair)
+@limiter.limit("5/minute")
 async def login(
     request: Request, payload: LoginIn, session: SessionDep, settings: SettingsDep,
 ) -> TokenPair:
@@ -119,8 +122,12 @@ async def login(
 
 
 @router.post("/refresh", response_model=AccessOnly)
+@limiter.limit("20/minute")
 async def refresh(
-    payload: RefreshIn, session: SessionDep, settings: SettingsDep
+    request: Request,
+    payload: RefreshIn,
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> AccessOnly:
     try:
         claims = verify_refresh_token(payload.refresh_token, settings.jwt_secret)

@@ -71,6 +71,11 @@ class Settings(BaseSettings):
 
     # auth
     jwt_secret: str = Field(default="dev-only-change-me", alias="AGG_JWT_SECRET")
+    # Independent secret for Starlette's SessionMiddleware (signs the
+    # admin/ops session cookie). Empty → falls back to jwt_secret with a
+    # WARNING. Set in prod so JWT and session can be rotated independently
+    # and a leak of one doesn't compromise the other.
+    session_secret: str = Field(default="", alias="AGG_SESSION_SECRET")
     jwt_access_ttl_seconds: int = Field(default=900, alias="AGG_JWT_ACCESS_TTL_SECONDS")
     jwt_refresh_ttl_seconds: int = Field(
         default=14 * 24 * 3600, alias="AGG_JWT_REFRESH_TTL_SECONDS"
@@ -98,6 +103,13 @@ class Settings(BaseSettings):
 
     # observability
     sentry_dsn: str = Field(default="", alias="AGG_SENTRY_DSN")
+
+    # FastAPI's auto-generated /docs, /redoc, /openapi.json. OFF BY
+    # DEFAULT — they leak the full route + schema graph, which is recon
+    # material for any unauthenticated probe. Flip to True only when
+    # actively developing/testing the API surface, and only on
+    # short-lived environments.
+    docs_enabled: bool = Field(default=False, alias="AGG_DOCS_ENABLED")
 
     # --- free-tier tuning ---
     # Comma-separated minute values for the ingest_due_leagues cron. Default

@@ -20,6 +20,12 @@ from aggrigator.db import session_scope
 from aggrigator.models.auth import User, UserRole, UserTier
 from aggrigator.security.passwords import hash_password
 
+# Operator-set passwords (CLI second arg) must clear this floor. The
+# generated default (``secrets.token_urlsafe(16)`` ≈ 22 chars) always
+# does. Floor exists because a typo of "a" or "test" on the bootstrap
+# command would otherwise create a trivially brute-forceable admin.
+_MIN_PASSWORD_LEN = 16
+
 
 async def main(email: str, password: str | None) -> None:
     async with session_scope() as session:
@@ -53,4 +59,12 @@ if __name__ == "__main__":
         sys.exit(1)
     email = sys.argv[1]
     password = sys.argv[2] if len(sys.argv) > 2 else None
+    if password is not None and len(password) < _MIN_PASSWORD_LEN:
+        print(
+            f"error: password must be at least {_MIN_PASSWORD_LEN} characters "
+            f"(got {len(password)}). Omit the password arg to auto-generate "
+            "a secure one.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     asyncio.run(main(email, password))
