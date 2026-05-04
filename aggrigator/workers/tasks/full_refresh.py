@@ -22,7 +22,8 @@ from __future__ import annotations
 import logging
 
 from aggrigator.config import get_settings
-from aggrigator.ingest.quota import is_monthly_quota_exhausted
+from aggrigator.ingest.quota import quota_status
+from aggrigator.ops.progress import set_progress
 from aggrigator.workers.tasks.ingest import _build_client, run_ingest_due_leagues
 from aggrigator.workers.tasks.seed import run_seed_sports_and_leagues
 
@@ -32,13 +33,23 @@ logger = logging.getLogger(__name__)
 async def run_full_refresh() -> dict:
     # Pre-flight quota check — skip BOTH halves when over budget, so we
     # don't burn the seed allowance (~5–15 calls) only to bail in the
-    # ingest step. Mirrors run_ingest_due_leagues' check; same bypass
-    # rules (test_mode + threshold>=100).
+    # ingest step. Uses the same proportional pacer as ``_run_ingest``
+    # so a daily auto full_refresh doesn't burn the monthly entity cap.
     settings = get_settings()
-    if not settings.test_mode and is_monthly_quota_exhausted(
-        _build_client(), threshold_pct=settings.sgo_quota_threshold_pct,
-    ):
-        return {"skipped": True, "reason": "sgo_monthly_quota"}
+    qs = quota_status(
+        _build_client(),
+        threshold_pct=settings.sgo_quota_threshold_pct,
+        reset_day=settings.sgo_quota_reset_day,
+        pace_floor_pct=settings.sgo_quota_pace_floor_pct,
+    )
+    for line in qs.summary_lines:
+        await set_progress(line)
+    if not settings.test_mode and qs.should_skip:
+        reason = "sgo_monthly_quota" if qs.exhausted else "sgo_quota_pace"
+        await set_progress(
+            f"full_refresh: SKIPPED — {qs.pace_reason if not qs.exhausted else 'absolute cap reached'}"
+        )
+        return {"skipped": True, "reason": reason, "pace_reason": qs.pace_reason}
 
     seed_summary = await run_seed_sports_and_leagues()
     ingest_summary = await run_ingest_due_leagues()

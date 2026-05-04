@@ -43,6 +43,8 @@ class SgoClient(Protocol):
         include_open_close: bool | None = None,
         include_opposing_odds: bool | None = None,
         include_alt_lines: bool | None = None,
+        # Single ID or comma-separated list (SGO accepts both, e.g.
+        # ``"draftkings,fanduel,betmgm"``). None / empty = all bookmakers.
         bookmaker_id: str | None = None,
         limit: int = 50,
         max_pages: int | None = None,

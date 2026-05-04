@@ -187,7 +187,9 @@
     display: grid; grid-template-columns: 70px 1fr; gap: .5rem;
     color: var(--text-soft);
   }
-  .run-live__line:last-child { color: var(--text); font-weight: 600; }
+  /* Newest message sits at the top (sse-swap="afterbegin") — emphasize
+     the first child so the eye lands on the most recent update. */
+  .run-live__line:first-child { color: var(--text); font-weight: 600; }
   .run-live__ts { color: var(--text-mute); font-variant-numeric: tabular-nums; }
   .run-live__msg { word-break: break-word; }
 

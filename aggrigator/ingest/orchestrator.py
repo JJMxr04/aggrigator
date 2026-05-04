@@ -270,11 +270,36 @@ async def ingest_league(
         now + timedelta(days=settings.ingest_window_days_ahead)
     ).isoformat(timespec="seconds")
 
+    odd_ids = [
+        s.strip() for s in (settings.ingest_odd_ids or "").split(",") if s.strip()
+    ] or None
+    bookmaker_id = settings.ingest_bookmaker_id or None
+
     logger.info(
-        "ingest_league %s: walking SGO events in window [%s, %s]",
+        "ingest_league %s: walking SGO events in window [%s, %s] "
+        "(alt_lines=%s, odd_ids=%s, bookmaker=%s)",
         league.id, starts_after_iso, starts_before_iso,
+        settings.ingest_include_alt_lines, odd_ids, bookmaker_id,
     )
-    await set_progress(f"{league.id} ({phase}): fetching events from SGO")
+    filters_summary_parts = []
+    if not settings.ingest_include_alt_lines:
+        filters_summary_parts.append("alt_lines=off")
+    if odd_ids:
+        filters_summary_parts.append(f"odd_ids={len(odd_ids)} filter")
+    if bookmaker_id:
+        # bookmaker_id may be a single ID or a CSV — show the count
+        # for legibility when there's more than one.
+        n_books = len([s for s in bookmaker_id.split(",") if s.strip()])
+        if n_books == 1:
+            filters_summary_parts.append(f"bookmaker={bookmaker_id}")
+        else:
+            filters_summary_parts.append(f"bookmakers={n_books} ({bookmaker_id})")
+    filters_str = (
+        f" [{', '.join(filters_summary_parts)}]" if filters_summary_parts else ""
+    )
+    await set_progress(
+        f"{league.id} ({phase}): fetching events from SGO{filters_str}"
+    )
 
     report = LeagueReport(league_id=league.id)
     event_idx = 0
@@ -287,6 +312,16 @@ async def ingest_league(
         # rows we have to upsert. If you ever need historical opens/closes,
         # flip this back on for the cron run that needs them.
         include_open_close=False,
+        # include_alt_lines: alt spreads/totals are 5–10× the entity cost
+        # of main lines and we don't render or grade them. Default off
+        # (AGG_INGEST_INCLUDE_ALT_LINES=true overrides per-deploy).
+        include_alt_lines=settings.ingest_include_alt_lines,
+        # odd_ids / bookmaker_id: server-side trimming for the per-month
+        # entity cap. Both default to "no filter" (None) — set the env
+        # vars only when you've decided to drop coverage in exchange
+        # for budget headroom.
+        odd_ids=odd_ids,
+        bookmaker_id=bookmaker_id,
         odds_available=None,
         starts_after=starts_after_iso,
         starts_before=starts_before_iso,

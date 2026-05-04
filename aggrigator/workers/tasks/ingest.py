@@ -10,7 +10,7 @@ from aggrigator.config import get_settings
 from aggrigator.db import session_scope
 from aggrigator.ingest.client import SgoClient
 from aggrigator.ingest.orchestrator import ingest_due_leagues
-from aggrigator.ingest.quota import is_monthly_quota_exhausted
+from aggrigator.ingest.quota import quota_status
 from aggrigator.ingest.sgo_http import SgoHttpClient
 from aggrigator.ingest.sgo_simulator import FixtureSgoClient
 from aggrigator.ops.progress import set_progress
@@ -43,18 +43,41 @@ async def _run_ingest(phase: str, cron_name: str) -> dict[str, Any]:
     the log lines so the deploy-log breadcrumbs match what's on /ops/crons.
     """
     logger.info("%s: starting", cron_name)
-    await set_progress(f"{phase}: checking quota")
+    await set_progress(f"{phase}: checking SGO monthly quota")
     settings = get_settings()
     client = _build_client()
-    if not settings.test_mode and is_monthly_quota_exhausted(
-        client, threshold_pct=settings.sgo_quota_threshold_pct,
-    ):
+    qs = quota_status(
+        client,
+        threshold_pct=settings.sgo_quota_threshold_pct,
+        reset_day=settings.sgo_quota_reset_day,
+        pace_floor_pct=settings.sgo_quota_pace_floor_pct,
+    )
+    # Surface the live numbers so operators can see "we're at 87% on
+    # entities" in the SSE log without grepping deploy logs or running
+    # scripts/check_quota.py. Emit each line separately so the log
+    # shows them stacked instead of as one long string.
+    for line in qs.summary_lines:
+        await set_progress(line)
+    if not settings.test_mode and qs.should_skip:
+        # Absolute guard tripped → already over threshold, can't run.
+        # Pace guard tripped → projected to overshoot by reset day,
+        # back off auto runs to leave headroom for manual ops.
+        reason = "sgo_monthly_quota" if qs.exhausted else "sgo_quota_pace"
         logger.warning(
-            "%s: skipped — SGO monthly quota past threshold (%s%%). "
-            "Bump AGG_SGO_QUOTA_THRESHOLD_PCT or wait for reset.",
-            cron_name, settings.sgo_quota_threshold_pct,
+            "%s: skipped — quota guard tripped (reason=%s). "
+            "Bump AGG_SGO_QUOTA_THRESHOLD_PCT, AGG_SGO_QUOTA_PACE_FLOOR_PCT, "
+            "or wait for reset.",
+            cron_name, reason,
         )
-        return {"skipped": True, "reason": "sgo_monthly_quota", "phase": phase}
+        await set_progress(
+            f"{phase}: SKIPPED — {qs.pace_reason if not qs.exhausted else 'absolute cap reached'}"
+        )
+        return {
+            "skipped": True,
+            "reason": reason,
+            "phase": phase,
+            "pace_reason": qs.pace_reason,
+        }
     await set_progress(f"{phase}: walking active leagues")
     async with session_scope() as session:
         reports = await ingest_due_leagues(session, client, phase=phase)

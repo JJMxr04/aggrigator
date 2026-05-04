@@ -154,6 +154,24 @@ class Settings(BaseSettings):
     sgo_quota_threshold_pct: int = Field(
         default=90, alias="AGG_SGO_QUOTA_THRESHOLD_PCT",
     )
+    # Day-of-month (1-28; clamped) when SGO's per-month entity counter
+    # resets. Free/amateur tier resets at calendar month start (=1) but
+    # paid tiers reset on the customer's signup-anniversary day.
+    # The proportional pacer (``quota_status``) uses this to compute
+    # how much of the cycle has elapsed and what % of cap is "fair to
+    # have used by now" — anything beyond projects to overshoot the
+    # threshold and skips the auto run.
+    sgo_quota_reset_day: int = Field(
+        default=1, alias="AGG_SGO_QUOTA_RESET_DAY",
+    )
+    # Warm-up grace: regardless of pacing, allow current usage up to
+    # this % of cap before the proportional check kicks in. Without
+    # this, every run at hour 1 of the cycle would block (any usage
+    # extrapolates to a huge end-of-cycle projection). Default 5%
+    # leaves room for one big seed/full_refresh at cycle start.
+    sgo_quota_pace_floor_pct: int = Field(
+        default=5, alias="AGG_SGO_QUOTA_PACE_FLOOR_PCT",
+    )
 
     # --- ingest window (storage + quota tuning) ---
     # ``ingest_due_leagues`` only walks SGO events whose ``start_time`` falls
@@ -169,6 +187,38 @@ class Settings(BaseSettings):
     )
     ingest_window_days_behind: int = Field(
         default=1, alias="AGG_INGEST_WINDOW_DAYS_BEHIND",
+    )
+
+    # --- ingest entity-cost tuning (per-month quota) ---
+    # Each ``/events`` call returns events × markets × selections ×
+    # bookmakers, all counted as entities against the per-month cap.
+    # These knobs trim the response server-side so you spend fewer
+    # entities per call without changing the call count.
+    #
+    # ``include_alt_lines``: SGO returns every alt spread/total by
+    # default (e.g. for an MLB total of 8.5, also 7.5/8/9/9.5/...).
+    # That's typically 5–10× the entities of main lines alone. Default
+    # False here — flip on per-cron only if you have a use case for
+    # alt lines (we don't currently render or grade them).
+    ingest_include_alt_lines: bool = Field(
+        default=False, alias="AGG_INGEST_INCLUDE_ALT_LINES",
+    )
+    # ``odd_ids``: comma-separated list of SGO oddID strings to
+    # restrict to (e.g. "points-game-ml-home,points-game-ml-away"
+    # for moneyline only). Empty → no filter, all markets returned.
+    # Use to skip player props / alt markets when you only need
+    # ML/spread/total.
+    ingest_odd_ids: str = Field(
+        default="", alias="AGG_INGEST_ODD_IDS",
+    )
+    # ``bookmaker_id``: SGO bookmaker ID(s) to restrict to. Comma-
+    # separated for multiple (SGO accepts e.g.
+    # ``bookmakerID=draftkings,fanduel,betmgm``). Empty → all bookmakers
+    # (the aggregator default). Restricting cuts per-event entity cost
+    # roughly linearly with the number of books selected. Don't narrow
+    # so far you lose the multi-bookmaker value prop.
+    ingest_bookmaker_id: str = Field(
+        default="", alias="AGG_INGEST_BOOKMAKER_ID",
     )
 
     # --- vacuum (storage tuning for free DB tiers) ---
