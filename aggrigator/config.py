@@ -152,10 +152,11 @@ class Settings(BaseSettings):
     odds_cron_minute: int = Field(
         default=15, alias="AGG_ODDS_CRON_MINUTE",
     )
-    # Optional weekday filter for the daily full_refresh cron. arq uses
-    # 0=Mon ... 6=Sun. Empty (default) → run every day at 02:30 UTC. Set to
-    # "0" to run only Mondays — usually enough to catch upstream schema
-    # changes on a free tier.
+    # Optional weekday filter for full_refresh. Currently UNUSED —
+    # full_refresh is manual-only on the auto schedule (it would
+    # duplicate seed_* + the hourly ingest cron). Kept on the model
+    # so existing deployments with the env var set don't error out;
+    # remove from your env once you've redeployed.
     full_refresh_weekday: str = Field(
         default="", alias="AGG_FULL_REFRESH_WEEKDAY",
     )

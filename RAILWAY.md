@@ -264,7 +264,6 @@ In Railway → `agg-web` AND `agg-worker` → **Variables** (set on both):
 ```
 AGG_INGEST_CRON_MINUTES=0
 AGG_INGEST_CRON_HOURS=0,8,16
-AGG_FULL_REFRESH_WEEKDAY=0
 AGG_SGO_QUOTA_THRESHOLD_PCT=85
 AGG_SGO_QUOTA_PACE_FLOOR_PCT=20
 ```
@@ -273,8 +272,10 @@ What this does:
 
 - `ingest_due_leagues` runs **3× per day** (00:00, 08:00, 16:00 UTC)
   via the combined cron (one `/events` call per league = 1 entity per
-  event returned, no double-counting from a split lifecycle/odds run).
-- `full_refresh` runs **only on Mondays** instead of daily.
+  event returned).
+- `full_refresh` is manual-only — duplicates seed_* + ingest_due_leagues
+  on the new auto schedule, so don't auto-run it. Trigger it once from
+  `/ops/crons` after a fresh deploy if you want to populate everything.
 - The worker calls `/account/usage` before each ingest and **skips
   the run if usage is past 85%** of any per-month cap.
 - The pacer's warm-up floor is raised to 20% so a one-time seed at

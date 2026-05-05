@@ -6,12 +6,17 @@ Run with::
 
 Auto-scheduled crons are sized for SGO's per-month entity cap (1 entity
 per event returned). The combined ``ingest_due_leagues`` runs hourly by
-default — half the entity burn of the previous lifecycle + odds split,
-which billed every event twice per cycle for the same per-bookmaker
-data. The split crons remain callable manually for niche cases (e.g.
-"refresh statuses without writing prices"), but are NOT on the auto
-schedule. Tune cadence via ``AGG_INGEST_CRON_MINUTES`` /
-``AGG_INGEST_CRON_HOURS`` in config.py.
+default — half the entity burn of the old lifecycle + odds split, which
+billed every event twice per cycle. Tune cadence via
+``AGG_INGEST_CRON_MINUTES`` / ``AGG_INGEST_CRON_HOURS`` in config.py.
+
+Manual-only (still callable via ``/ops/crons`` and as ad-hoc enqueue
+targets, but NOT on the auto schedule):
+
+- ``full_refresh`` — pure duplication of seed_* + ingest_due_leagues now
+  that ingest is hourly. Useful for one-shot post-deploy population.
+- ``ingest_event_lifecycle`` / ``ingest_event_odds`` — splitting these
+  doubles SGO entity cost vs the combined ``ingest_due_leagues``.
 """
 
 from __future__ import annotations
@@ -48,29 +53,29 @@ def _build_cron_jobs() -> list:
     """
     s = get_settings()
 
-    # full_refresh: daily 02:30 UTC by default; weekly when
-    # AGG_FULL_REFRESH_WEEKDAY is set (free-tier friendly).
-    full_refresh_kwargs: dict = {
-        "hour": {2},
-        "minute": {30},
-        "name": "full_refresh",
-    }
-    if s.full_refresh_weekday_set is not None:
-        full_refresh_kwargs["weekday"] = s.full_refresh_weekday_set
-
-    # Cascade order (top → bottom):
-    #   sports  →  leagues  →  events (combined)  →  webhook_deliver  →  …
-    # Each layer changes less often than the one below it, so each cron's
-    # cadence is matched to the cost / refresh rate of its data:
-    #   sports         weekly  — taxonomy practically never changes
-    #   leagues        daily   — new leagues / season turnovers
-    #   ingest_due_leagues  hourly by default — combined event + status +
-    #                       odds + settle + webhooks in ONE /events call
-    #                       per league (1 SGO entity per returned event)
+    # Auto schedule (top → bottom, by cadence):
+    #   seed_sports         weekly Mon 01:30 — taxonomy almost never changes
+    #   seed_leagues        daily 02:00      — catches new leagues / season starts
+    #   ingest_due_leagues  hourly @ :00     — combined event + status + odds +
+    #                                          settle + webhooks in ONE /events
+    #                                          call per league (1 SGO entity per
+    #                                          returned event); env-tunable
+    #   lifecycle_watchdog  hourly @ :45     — flags stale events (notstarted past
+    #                                          start_time); auto-VOIDs if enabled
+    #   webhook_deliver     every 30s        — drains pending outbound deliveries
+    #   settle_pending      nightly 03:30    — backfill for selections the hot
+    #                                          path missed (rare, defensive)
+    #   vacuum_old_events   nightly 04:00    — deletes terminal events past
+    #                                          AGG_VACUUM_DAYS
     #
-    # The split ``ingest_event_lifecycle`` and ``ingest_event_odds``
-    # crons stay callable manually but are NOT auto-scheduled — running
-    # both would charge SGO twice for the same events per cycle.
+    # Removed from auto schedule (still callable manually via /ops/crons):
+    #   full_refresh        — pure duplication of seed_* + ingest_due_leagues now
+    #                          that ingest is hourly. ~1 walk's worth of entities
+    #                          per fire, no added value. Trigger manually after
+    #                          a fresh deploy if you want to populate everything
+    #                          immediately.
+    #   ingest_event_lifecycle / ingest_event_odds — splitting these doubles SGO
+    #                          entity cost vs the combined ingest_due_leagues.
     ingest_kwargs: dict = {
         "minute": s.ingest_cron_minute_set,
         "run_at_startup": False,
@@ -82,21 +87,22 @@ def _build_cron_jobs() -> list:
     return [
         cron(
             seed_sports_task,
-            # Sports change essentially never. Weekly Mondays is enough
-            # to catch SGO adding a brand-new sport.
             weekday={0}, hour={1}, minute={30},
             name="seed_sports",
         ),
         cron(
             seed_leagues_task,
-            # Leagues drift more often than sports (new minor leagues,
-            # season transitions). Daily so newly-added leagues become
-            # walkable on the next ingest.
             hour={2}, minute={0},
             name="seed_leagues",
         ),
-        cron(full_refresh_task, **full_refresh_kwargs),
         cron(ingest_due_leagues_task, **ingest_kwargs),
+        cron(
+            lifecycle_watchdog_task,
+            # :45 keeps it clear of the default ingest tick at :00.
+            # DB-only, no SGO calls — cadence is not quota-sensitive.
+            minute={45},
+            name="lifecycle_watchdog",
+        ),
         cron(
             webhook_deliver_task,
             second={0, 30},
@@ -109,17 +115,8 @@ def _build_cron_jobs() -> list:
         ),
         cron(
             vacuum_old_events_task,
-            hour={4}, minute={0},  # 30 min after settle_pending finishes
+            hour={4}, minute={0},
             name="vacuum_old_events",
-        ),
-        cron(
-            lifecycle_watchdog_task,
-            # Hourly at :45 — well clear of the ingest cron (default :00).
-            # No SGO calls, just a DB scan, so cadence isn't quota-sensitive.
-            # If auto-void is enabled, this is what fires the
-            # ``event.voided`` webhooks for stuck events.
-            minute={45},
-            name="lifecycle_watchdog",
         ),
     ]
 

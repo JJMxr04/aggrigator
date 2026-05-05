@@ -43,10 +43,12 @@ REGISTRY: list[CronSpec] = [
     CronSpec(
         name="full_refresh",
         description=(
-            "Seed sports + leagues, then ingest events for every active "
-            "league. The end-to-end one-click refresh."
+            "One-shot: seed sports + leagues, then ingest events for every "
+            "active league. NOT auto-scheduled — pure duplication of seed_* "
+            "+ hourly ingest_due_leagues. Trigger manually after a fresh "
+            "deploy when you want to populate everything immediately."
         ),
-        schedule_human="daily @ 02:30 UTC",
+        schedule_human="manual only",
         runner=run_full_refresh,
         max_runtime_seconds=2400,
     ),
