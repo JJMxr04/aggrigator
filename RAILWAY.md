@@ -219,53 +219,80 @@ league refresh cadence.
 ## 6a. Free-tier SGO tuning (recommended if you're on the amateur tier)
 
 SportsGameOdds's free / amateur tier meters by **per-month entities**,
-not raw HTTP requests. The default cap is around **2,500 entities/month**
-— each `/events` response can return many entities (one per event +
-markets + selections), so the worker can burn through the cap days
-before month-end if left at default cadence.
+where **1 entity = 1 event** in the response — regardless of how many
+markets, selections, or bookmaker quotes that event ships back with.
+The default cap is around **2,500 entities/month**. So your monthly
+burn is governed by:
 
-Three env vars (all read by `aggrigator/config.py`) tune this:
+```
+entities = (events in window) × (walks per cycle)
+         = Σ over leagues of: events_returned_per_walk × walk_count
+```
 
-| Var | Default | Purpose |
+Quick sizing on the free tier (~2,500/mo budget):
+
+| Setup | Approx burn |
+| --- | --- |
+| 8 leagues × ~25 events × hourly walks | ~144,000/month → blown in 12h |
+| 3 leagues × ~10 events × hourly | ~21,600/month → blown in 3 days |
+| 3 leagues × ~10 events × every 6h | ~3,600/month → just over cap |
+| 2 leagues × ~10 events × every 8h | ~1,800/month → fits |
+| 1 league × ~10 events × every 4h | ~1,800/month → fits |
+
+The trim knobs (`AGG_INGEST_BOOKMAKER_ID`, `AGG_INGEST_ODD_IDS`,
+`AGG_INGEST_INCLUDE_ALT_LINES`) reduce **bandwidth + DB rows** but
+have **NO effect on entity quota** — SGO charges 1 per event whether
+the response carries 5 markets or 500.
+
+### Levers that actually reduce quota
+
+| Var | Default | Effect |
 | --- | --- | --- |
-| `AGG_INGEST_CRON_MINUTES` | `0,30` | Comma-separated minutes for the `ingest_due_leagues` cron. Default = every 30 min. |
-| `AGG_FULL_REFRESH_WEEKDAY` | *(unset)* | arq weekday (0=Mon … 6=Sun) for daily `full_refresh`. Unset = every day. |
-| `AGG_SGO_QUOTA_THRESHOLD_PCT` | `90` | Skip ingest crons when monthly usage is ≥ this percent. `100` disables the check. |
+| (League `active=False` flag) | n/a | Linear: fewer leagues = fewer walks per cycle. Mark unused ones inactive in `/admin/leagues`. |
+| `AGG_INGEST_CRON_MINUTES` | `0` | Comma-separated minutes for the auto cron. `0` = once per hour. `0,30` doubles burn. |
+| `AGG_INGEST_CRON_HOURS` | *(unset)* | Hour filter — e.g. `0,6,12,18` runs only every 6h. Empty = every hour. |
+| `AGG_INGEST_WINDOW_DAYS_AHEAD` | `7` | Smaller window = fewer events returned per walk. |
+| `AGG_INGEST_WINDOW_DAYS_BEHIND` | `2` | Same, for past events. Drop to 1 if you don't need to refresh post-game scores. |
+| `AGG_FULL_REFRESH_WEEKDAY` | *(unset)* | arq weekday (0=Mon…6=Sun) for daily `full_refresh`. Unset = every day. Set to `0` for Mondays only. |
+| `AGG_SGO_QUOTA_THRESHOLD_PCT` | `90` | Skip ingest crons when usage ≥ this percent. `100` disables. |
+| `AGG_SGO_QUOTA_PACE_FLOOR_PCT` | `5` | Below this % of cap, the proportional pace check is bypassed. **Bump to 20 if a single seed is enough to trip the pacer.** |
 
 ### Recommended free-tier preset
 
-In Railway → `agg-web` and `agg-worker` → **Variables**:
+In Railway → `agg-web` AND `agg-worker` → **Variables** (set on both):
 
 ```
 AGG_INGEST_CRON_MINUTES=0
+AGG_INGEST_CRON_HOURS=0,8,16
 AGG_FULL_REFRESH_WEEKDAY=0
 AGG_SGO_QUOTA_THRESHOLD_PCT=85
+AGG_SGO_QUOTA_PACE_FLOOR_PCT=20
 ```
 
 What this does:
 
-- `ingest_due_leagues` runs **hourly** instead of every 30 min — half
-  the entity burn.
-- `full_refresh` runs **only on Mondays** instead of daily — cuts the
-  taxonomy-walk cost by ~85%.
-- The worker calls `/account/usage` before each ingest and **skips the
-  run if usage is past 85%** of any per-month cap. The cron-run row
-  records `{"skipped": true, "reason": "sgo_monthly_quota"}` so the
-  ops console (`/ops/crons`) shows when it kicked in.
-
-You can tighten further by:
-
-- Marking unused leagues `active=False` (Django admin → `/admin/leagues`).
-  The worker only walks leagues with `active=True`. Cutting from "all
-  leagues" to just NFL + NBA can reduce burn 60%+.
-- Setting `AGG_INGEST_CRON_MINUTES=0` and only enabling specific hours
-  by combining with arq's hour filter — currently we don't expose an
-  `AGG_INGEST_CRON_HOURS` knob; if you need it, edit
-  `aggrigator/workers/settings.py`'s `_build_cron_jobs` directly.
+- `ingest_due_leagues` runs **3× per day** (00:00, 08:00, 16:00 UTC)
+  via the combined cron (one `/events` call per league = 1 entity per
+  event returned, no double-counting from a split lifecycle/odds run).
+- `full_refresh` runs **only on Mondays** instead of daily.
+- The worker calls `/account/usage` before each ingest and **skips
+  the run if usage is past 85%** of any per-month cap.
+- The pacer's warm-up floor is raised to 20% so a one-time seed at
+  cycle start doesn't block every subsequent cron.
 
 The skip is **bypassed when `AGG_TEST_MODE=true`** so dev / CI never
 short-circuit on synthetic usage payloads. Leave `AGG_TEST_MODE=false`
 in prod.
+
+### Want more freshness than 3×/day?
+
+Either:
+- Drop to 1-2 active leagues so each walk costs fewer entities, then
+  bump cadence (e.g. hourly with 2 leagues × ~10 events = ~14,400/mo
+  — still over cap, so go every 4h or every 6h).
+- Or pay for a higher SGO tier. The amateur tier is sized for
+  occasional checks; a multi-sport always-on aggregator wants the
+  Pro tier.
 
 ### Monitoring usage
 

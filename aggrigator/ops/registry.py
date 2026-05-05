@@ -76,39 +76,39 @@ REGISTRY: list[CronSpec] = [
         name="ingest_due_leagues",
         description=(
             "Combined walk: events + markets + per-bookmaker quotes + "
-            "lifecycle + webhooks in one SGO pass. Single most quota-"
-            "efficient way to refresh everything (one /events call per "
-            "league instead of two). Used by ``full_refresh`` and "
-            "available as a manual trigger here. Auto-scheduling is OFF "
-            "— the split lifecycle + odds crons cover steady-state."
+            "lifecycle + webhooks in ONE SGO /events call per active "
+            "league. SGO bills 1 entity per event returned, so this is "
+            "the quota-efficient default — half the burn of a split "
+            "lifecycle + odds run. Tune cadence via "
+            "AGG_INGEST_CRON_MINUTES / AGG_INGEST_CRON_HOURS."
         ),
-        schedule_human="manual / via full_refresh",
+        schedule_human="hourly @ :00 (env-tunable)",
         runner=run_ingest_due_leagues,
         max_runtime_seconds=1800,
     ),
     CronSpec(
         name="ingest_event_lifecycle",
         description=(
-            "Lightweight ingest: event rows + status + settlement + webhooks. "
-            "Skips the per-bookmaker quote writes (the dominant per-event "
-            "cost). Frequent cadence — keeps scores / lifecycle fresh "
-            "without the price-refresh overhead. Tune via "
-            "AGG_INGEST_CRON_MINUTES."
+            "Lightweight variant: event rows + status + settlement + "
+            "webhooks. Skips the per-bookmaker quote writes — useful "
+            "for a manual 'just refresh statuses' trigger. NOT on the "
+            "auto schedule (running this AND ingest_event_odds would "
+            "double SGO entity cost vs the combined ingest_due_leagues)."
         ),
-        schedule_human="every 30 min (env-tunable)",
+        schedule_human="manual only",
         runner=run_ingest_lifecycle_only,
         max_runtime_seconds=600,
     ),
     CronSpec(
         name="ingest_event_odds",
         description=(
-            "Heavy half: refreshes markets + per-bookmaker prices on events "
-            "that already exist in our DB. Skips lifecycle / webhooks — "
-            "those are the lifecycle phase's job. Sparser cadence (prices "
-            "don't need sub-minute freshness). Tune via AGG_ODDS_CRON_HOURS "
-            "/ AGG_ODDS_CRON_MINUTE."
+            "Markets + per-bookmaker prices for events already in our DB. "
+            "Skips lifecycle / webhooks. NOT on the auto schedule — pair "
+            "with ingest_event_lifecycle only when you have a specific "
+            "reason to keep them split (otherwise use ingest_due_leagues "
+            "which does both in one SGO call)."
         ),
-        schedule_human="every 2h @ :15 (env-tunable)",
+        schedule_human="manual only",
         runner=run_ingest_odds_only,
         max_runtime_seconds=1800,
     ),

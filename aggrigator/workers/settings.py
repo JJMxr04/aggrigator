@@ -4,11 +4,14 @@ Run with::
 
     arq aggrigator.workers.settings.WorkerSettings
 
-The schedule mirrors plan §5: ingest every 30m by default, webhook_deliver
-every 30s (short loop because retries clump near boundaries), settle nightly
-at 03:30 UTC. The ingest + full_refresh cadences are env-tunable for free
-SGO tier — see ``AGG_INGEST_CRON_MINUTES`` and ``AGG_FULL_REFRESH_WEEKDAY``
-in config.py.
+Auto-scheduled crons are sized for SGO's per-month entity cap (1 entity
+per event returned). The combined ``ingest_due_leagues`` runs hourly by
+default — half the entity burn of the previous lifecycle + odds split,
+which billed every event twice per cycle for the same per-bookmaker
+data. The split crons remain callable manually for niche cases (e.g.
+"refresh statuses without writing prices"), but are NOT on the auto
+schedule. Tune cadence via ``AGG_INGEST_CRON_MINUTES`` /
+``AGG_INGEST_CRON_HOURS`` in config.py.
 """
 
 from __future__ import annotations
@@ -56,18 +59,26 @@ def _build_cron_jobs() -> list:
         full_refresh_kwargs["weekday"] = s.full_refresh_weekday_set
 
     # Cascade order (top → bottom):
-    #   sports  →  leagues  →  events (lifecycle)  →  odds
+    #   sports  →  leagues  →  events (combined)  →  webhook_deliver  →  …
     # Each layer changes less often than the one below it, so each cron's
     # cadence is matched to the cost / refresh rate of its data:
     #   sports         weekly  — taxonomy practically never changes
     #   leagues        daily   — new leagues / season turnovers
-    #   lifecycle      every 30m by default — event rows + statuses + settle
-    #   odds           every 2h by default — heavy per-bookmaker writes
+    #   ingest_due_leagues  hourly by default — combined event + status +
+    #                       odds + settle + webhooks in ONE /events call
+    #                       per league (1 SGO entity per returned event)
     #
-    # The combined ``ingest_due_leagues`` cron is deliberately NOT on this
-    # auto-schedule — it stays available for manual trigger and as the
-    # one-button path from ``full_refresh``. Letting it auto-fire here
-    # would duplicate every lifecycle/odds run with a redundant SGO call.
+    # The split ``ingest_event_lifecycle`` and ``ingest_event_odds``
+    # crons stay callable manually but are NOT auto-scheduled — running
+    # both would charge SGO twice for the same events per cycle.
+    ingest_kwargs: dict = {
+        "minute": s.ingest_cron_minute_set,
+        "run_at_startup": False,
+        "name": "ingest_due_leagues",
+    }
+    if s.ingest_cron_hour_set is not None:
+        ingest_kwargs["hour"] = s.ingest_cron_hour_set
+
     return [
         cron(
             seed_sports_task,
@@ -85,27 +96,7 @@ def _build_cron_jobs() -> list:
             name="seed_leagues",
         ),
         cron(full_refresh_task, **full_refresh_kwargs),
-        cron(
-            ingest_lifecycle_only_task,
-            # Cheap half — event rows + status + settle + webhooks. The
-            # bookmaker-quote writes (the 131s killer) are NOT in this
-            # phase, so 30-min cadence is comfortable.
-            minute=s.ingest_cron_minute_set,
-            run_at_startup=False,
-            name="ingest_event_lifecycle",
-        ),
-        cron(
-            ingest_odds_only_task,
-            # Heavy half — per-bookmaker price writes. Run on a sparser
-            # cadence (every 2h by default) and offset to :15 so each
-            # odds run lands ~15 min AFTER a lifecycle run, which means
-            # any new event rows lifecycle just created are visible to
-            # the odds walk.
-            hour=s.odds_cron_hour_set,
-            minute={s.odds_cron_minute},
-            run_at_startup=False,
-            name="ingest_event_odds",
-        ),
+        cron(ingest_due_leagues_task, **ingest_kwargs),
         cron(
             webhook_deliver_task,
             second={0, 30},
@@ -123,10 +114,10 @@ def _build_cron_jobs() -> list:
         ),
         cron(
             lifecycle_watchdog_task,
-            # Hourly at :45 — well clear of the lifecycle (:00/:30) and
-            # odds (:15) crons. No SGO calls, just a DB scan, so cadence
-            # isn't quota-sensitive. If auto-void is enabled, this is
-            # what fires the ``event.voided`` webhooks for stuck events.
+            # Hourly at :45 — well clear of the ingest cron (default :00).
+            # No SGO calls, just a DB scan, so cadence isn't quota-sensitive.
+            # If auto-void is enabled, this is what fires the
+            # ``event.voided`` webhooks for stuck events.
             minute={45},
             name="lifecycle_watchdog",
         ),

@@ -115,27 +115,40 @@ class Settings(BaseSettings):
     docs_enabled: bool = Field(default=False, alias="AGG_DOCS_ENABLED")
 
     # --- free-tier tuning ---
-    # Comma-separated minute values for the ``ingest_event_lifecycle`` cron
-    # (formerly drove ``ingest_due_leagues`` — that combined cron is now
-    # manual-only / used by ``full_refresh``). Default "0,30" = every 30
-    # min. The lifecycle phase is the cheap half (event rows + status +
-    # settlement + webhooks) so this can run frequently without the
-    # bookmaker-quote write cost.
+    # Comma-separated minute values for the auto-scheduled
+    # ``ingest_due_leagues`` cron (the combined walk: events + markets
+    # + per-bookmaker quotes + lifecycle + webhooks in ONE /events call
+    # per league). Default "0" = hourly. Each tick fetches every event
+    # in the configured window for every active league — and SGO bills
+    # 1 entity per event. So a tighter cadence multiplies entity burn:
+    # "0,30" doubles it, "0,15,30,45" quadruples. Tune for your tier.
+    #
+    # Free amateur tier (~2,500 entities/month) rough sizing:
+    #   3 leagues × ~10 events/walk × hourly = ~21,600/month  → too hot
+    #   3 leagues × ~10 events × every 6 hours = ~3,600/month → still hot
+    #   2 leagues × ~10 events × every 8 hours = ~1,800/month → fits
+    # Use "0" for hourly only on a paid tier.
+    #
+    # The split crons (``ingest_event_lifecycle`` / ``ingest_event_odds``)
+    # remain available for manual triggers but are NOT auto-scheduled —
+    # running both would double entity cost vs the combined walk.
     ingest_cron_minutes: str = Field(
-        default="0,30", alias="AGG_INGEST_CRON_MINUTES",
+        default="0", alias="AGG_INGEST_CRON_MINUTES",
     )
-    # Comma-separated hour values for the ``ingest_event_odds`` cron. Default
-    # "0,2,4,...,22" = every 2 hours. The odds phase is the expensive half
-    # (per-bookmaker price writes) — run it less often so it doesn't dominate
-    # the worker. ALWAYS schedule odds AFTER lifecycle has had a chance to
-    # create event rows for that window — see odds_cron_minute below.
+    # Hour filter for the auto cron. Empty (default) = every hour. Set
+    # to e.g. "0,6,12,18" to run only every 6 hours — useful on the free
+    # tier where the entity budget can't cover hourly walks. Combined with
+    # ``ingest_cron_minutes``, this drives the schedule arq sees.
+    ingest_cron_hours: str = Field(
+        default="", alias="AGG_INGEST_CRON_HOURS",
+    )
+    # Legacy knobs — kept so ``ingest_event_odds`` still respects them
+    # if an operator manually triggers it. NOT auto-scheduled (see
+    # ``ingest_cron_minutes`` above for the rationale).
     odds_cron_hours: str = Field(
         default="0,2,4,6,8,10,12,14,16,18,20,22",
         alias="AGG_ODDS_CRON_HOURS",
     )
-    # Minute-of-the-hour for ``ingest_event_odds``. Defaults to 15 so it
-    # lands ~15 min AFTER a lifecycle run at :00 — by that point any new
-    # event rows lifecycle created are visible to the odds walk.
     odds_cron_minute: int = Field(
         default=15, alias="AGG_ODDS_CRON_MINUTE",
     )
@@ -189,34 +202,37 @@ class Settings(BaseSettings):
         default=2, alias="AGG_INGEST_WINDOW_DAYS_BEHIND",
     )
 
-    # --- ingest entity-cost tuning (per-month quota) ---
-    # Each ``/events`` call returns events × markets × selections ×
-    # bookmakers, all counted as entities against the per-month cap.
-    # These knobs trim the response server-side so you spend fewer
-    # entities per call without changing the call count.
+    # --- ingest response-shape tuning (bandwidth + DB rows) ---
+    # IMPORTANT: SGO bills 1 entity = 1 EVENT, regardless of how many
+    # markets/selections/bookmakers the response carries. The knobs
+    # below trim the SGO response server-side, which saves bandwidth
+    # and DB write cost — but does NOT reduce per-month entity quota.
+    # For real quota savings see ``ingest_window_days_*`` (smaller
+    # window = fewer events returned) or ``ingest_cron_minutes`` (less
+    # frequent walks = fewer event-fetches per cycle).
     #
     # ``include_alt_lines``: SGO returns every alt spread/total by
     # default (e.g. for an MLB total of 8.5, also 7.5/8/9/9.5/...).
-    # That's typically 5–10× the entities of main lines alone. Default
-    # False here — flip on per-cron only if you have a use case for
-    # alt lines (we don't currently render or grade them).
+    # Default False — we don't render or grade them and they bloat
+    # the bookmaker_selection table with rows we never read.
     ingest_include_alt_lines: bool = Field(
         default=False, alias="AGG_INGEST_INCLUDE_ALT_LINES",
     )
-    # ``odd_ids``: comma-separated list of SGO oddID strings to
-    # restrict to (e.g. "points-game-ml-home,points-game-ml-away"
-    # for moneyline only). Empty → no filter, all markets returned.
-    # Use to skip player props / alt markets when you only need
-    # ML/spread/total.
+    # ``odd_ids``: comma-separated SGO oddID list to restrict markets
+    # to (e.g. "points-game-ml-home,points-game-ml-away" for moneyline
+    # only). Empty → no filter, all markets returned. Use to skip
+    # player props / alt markets when you don't need them — saves DB
+    # rows + write time, not quota.
     ingest_odd_ids: str = Field(
         default="", alias="AGG_INGEST_ODD_IDS",
     )
     # ``bookmaker_id``: SGO bookmaker ID(s) to restrict to. Comma-
     # separated for multiple (SGO accepts e.g.
-    # ``bookmakerID=draftkings,fanduel,betmgm``). Empty → all bookmakers
-    # (the aggregator default). Restricting cuts per-event entity cost
-    # roughly linearly with the number of books selected. Don't narrow
-    # so far you lose the multi-bookmaker value prop.
+    # ``bookmakerID=draftkings,fanduel,betmgm``). Empty → all bookmakers.
+    # Cuts the bookmaker_selection rows per event linearly — saves
+    # storage on free Postgres tiers and shortens write time, not
+    # quota. Don't narrow so far that you lose the multi-bookmaker
+    # value prop.
     ingest_bookmaker_id: str = Field(
         default="", alias="AGG_INGEST_BOOKMAKER_ID",
     )
@@ -272,17 +288,36 @@ class Settings(BaseSettings):
     def ingest_cron_minute_set(self) -> set[int]:
         """Parsed AGG_INGEST_CRON_MINUTES → set[int] for arq.cron(minute=...).
 
-        Falls back to the 30-minute cadence on a malformed value rather than
-        crashing the worker on boot.
+        Falls back to the hourly default ({0}) on a malformed value rather
+        than crashing the worker on boot.
         """
         try:
             return {
                 int(p.strip())
                 for p in self.ingest_cron_minutes.split(",")
                 if p.strip()
-            } or {0, 30}
+            } or {0}
         except ValueError:
-            return {0, 30}
+            return {0}
+
+    @property
+    def ingest_cron_hour_set(self) -> set[int] | None:
+        """Parsed AGG_INGEST_CRON_HOURS → set[int] or None (= every hour).
+
+        ``None`` is meaningful: arq treats an unset hour as "every hour", so
+        we return None to omit the kwarg entirely when the env var is empty.
+        """
+        if not self.ingest_cron_hours.strip():
+            return None
+        try:
+            parsed = {
+                int(p.strip())
+                for p in self.ingest_cron_hours.split(",")
+                if p.strip()
+            }
+        except ValueError:
+            return None
+        return parsed or None
 
     @property
     def odds_cron_hour_set(self) -> set[int]:

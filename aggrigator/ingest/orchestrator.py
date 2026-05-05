@@ -246,17 +246,23 @@ async def ingest_league(
 ) -> LeagueReport:
     """Pull events for one league, ingest each, return a report.
 
-    Two storage / quota optimizations applied here:
+    SGO bills 1 entity per event, so the per-month quota is driven by
+    (events in window) × (walks per cycle) — NOT by markets/selections/
+    bookmakers. Two genuine quota optimizations apply here:
 
     1. **Time window** (``AGG_INGEST_WINDOW_DAYS_BEHIND`` /
        ``..._AHEAD``): SGO is asked for events in
-       ``[now - behind, now + ahead]`` only. SGO responds with fewer
-       entities (per-month quota) AND we never see far-future games we'd
-       just delete days later anyway.
+       ``[now - behind, now + ahead]`` only. Smaller window = fewer
+       events returned = fewer entities billed.
     2. **``skip_if_new_terminal=True``**: anything inside that window
        SGO reports as already terminal but our DB has never seen gets
-       dropped. Existing events still flow through their lifecycle
+       dropped (no DB writes, but SGO has already counted the entity).
+       Existing events still flow through their lifecycle
        (live → finished still triggers settlement).
+
+    The ``include_alt_lines`` / ``odd_ids`` / ``bookmaker_id`` knobs
+    below trim the response shape — they save bandwidth and DB write
+    time, NOT entity quota.
 
     ``phase`` forwards to ``ingest_event`` — see its docstring for the
     semantics of ``"all"`` / ``"lifecycle"`` / ``"odds"``.
@@ -308,18 +314,20 @@ async def ingest_league(
         league_id=league.id,
         # include_open_close=False: we expose ``opening_odds`` in the schema
         # but no internal code actually reads it. Dropping the flag halves
-        # the per-event SGO entity count AND halves the bookmaker_selection
-        # rows we have to upsert. If you ever need historical opens/closes,
-        # flip this back on for the cron run that needs them.
+        # the bookmaker_selection rows we have to upsert. Quota-neutral
+        # (1 entity per event regardless of payload shape) but saves
+        # bandwidth + DB writes. Flip back on only if a downstream
+        # consumer starts reading historical opens/closes.
         include_open_close=False,
-        # include_alt_lines: alt spreads/totals are 5–10× the entity cost
-        # of main lines and we don't render or grade them. Default off
-        # (AGG_INGEST_INCLUDE_ALT_LINES=true overrides per-deploy).
+        # include_alt_lines: alt spreads/totals balloon the markets +
+        # selections we'd persist (5–10× the row count) and we don't
+        # render or grade them. Default off saves DB rows, NOT quota
+        # (SGO still counts the event once regardless).
         include_alt_lines=settings.ingest_include_alt_lines,
-        # odd_ids / bookmaker_id: server-side trimming for the per-month
-        # entity cap. Both default to "no filter" (None) — set the env
-        # vars only when you've decided to drop coverage in exchange
-        # for budget headroom.
+        # odd_ids / bookmaker_id: response-shape filters. Cut DB write
+        # time + storage when set — but they DO NOT reduce per-month
+        # entity quota (SGO bills 1 per event). For real quota savings
+        # use a smaller window or less frequent cadence.
         odd_ids=odd_ids,
         bookmaker_id=bookmaker_id,
         odds_available=None,
