@@ -26,6 +26,7 @@ from aggrigator.workers.tasks.ingest import (
 from aggrigator.workers.tasks.seed import seed_leagues_task, seed_sports_task
 from aggrigator.workers.tasks.settle import settle_pending_task
 from aggrigator.workers.tasks.vacuum import vacuum_old_events_task
+from aggrigator.workers.tasks.watchdog import lifecycle_watchdog_task
 from aggrigator.workers.tasks.webhook_deliver import webhook_deliver_task
 
 
@@ -120,6 +121,15 @@ def _build_cron_jobs() -> list:
             hour={4}, minute={0},  # 30 min after settle_pending finishes
             name="vacuum_old_events",
         ),
+        cron(
+            lifecycle_watchdog_task,
+            # Hourly at :45 — well clear of the lifecycle (:00/:30) and
+            # odds (:15) crons. No SGO calls, just a DB scan, so cadence
+            # isn't quota-sensitive. If auto-void is enabled, this is
+            # what fires the ``event.voided`` webhooks for stuck events.
+            minute={45},
+            name="lifecycle_watchdog",
+        ),
     ]
 
 
@@ -138,6 +148,7 @@ class WorkerSettings:
         seed_sports_task,
         seed_leagues_task,
         vacuum_old_events_task,
+        lifecycle_watchdog_task,
     ]
 
     cron_jobs = _build_cron_jobs()

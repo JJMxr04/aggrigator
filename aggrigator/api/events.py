@@ -16,7 +16,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from aggrigator.config import get_settings
 from aggrigator.deps import SessionDep, require_user
+from aggrigator.ingest.lifecycle import compute_stale
 from aggrigator.models import BookmakerSelection, Event, Market, Selection, User
 from aggrigator.schemas.event import (
     EventDetailOut,
@@ -141,7 +143,11 @@ async def get_event(
         **base.model_dump(),
         markets=markets,
         odds_meta=OddsMeta(
-            stale=False,
+            stale=compute_stale(
+                status_type=event.status_type,
+                start_time=event.start_time,
+                grace_hours=get_settings().lifecycle_stale_grace_hours,
+            ),
             last_provider_refresh_at=event.last_provider_refresh_at,
         ),
     )
@@ -215,7 +221,11 @@ async def get_event_markets(
     return {
         "markets": [MarketOut.model_validate(m) for m in rows],
         "odds_meta": {
-            "stale": False,
+            "stale": compute_stale(
+                status_type=event.status_type,
+                start_time=event.start_time,
+                grace_hours=get_settings().lifecycle_stale_grace_hours,
+            ),
             "last_provider_refresh_at": event.last_provider_refresh_at,
         },
     }

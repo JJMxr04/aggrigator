@@ -18,6 +18,7 @@ Transitions:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 
 
@@ -68,3 +69,36 @@ def decide_transition(
     if previous is None or previous.status_type != new.status_type:
         return Transition.LIFECYCLE_CHANGED
     return Transition.NONE
+
+
+# Statuses that mean "should be over by now if start_time is in the past"
+# — used by the watchdog to flag/auto-void events SGO never finalized.
+# Excludes the terminal set (those are already settled one way or another)
+# and excludes any future status SGO might invent (we'd rather miss-flag
+# than wrongly void a status we don't know about).
+_NON_TERMINAL_STATUSES: tuple[str, ...] = ("notstarted", "inprogress")
+
+
+def compute_stale(
+    *,
+    status_type: str | None,
+    start_time: datetime | None,
+    grace_hours: int,
+    now: datetime | None = None,
+) -> bool:
+    """Pure predicate: is this event "stuck"?
+
+    True when the event's ``start_time`` is more than ``grace_hours`` in the
+    past AND its ``status_type`` is still ``notstarted`` / ``inprogress``.
+    Most often a postponed game SGO never re-statused.
+
+    Returns False for terminal statuses (already done), missing start_time,
+    future events, and any unknown status_type. ``now`` is injectable for
+    deterministic tests.
+    """
+    if not start_time or not status_type:
+        return False
+    if status_type.lower() not in _NON_TERMINAL_STATUSES:
+        return False
+    cutoff_now = now or datetime.now(tz=timezone.utc)
+    return start_time < cutoff_now - timedelta(hours=grace_hours)

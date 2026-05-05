@@ -24,6 +24,7 @@ from aggrigator.workers.tasks.ingest import (
 from aggrigator.workers.tasks.seed import run_seed_leagues, run_seed_sports
 from aggrigator.workers.tasks.settle import run_settle_pending
 from aggrigator.workers.tasks.vacuum import run_vacuum_old_events
+from aggrigator.workers.tasks.watchdog import run_lifecycle_watchdog
 from aggrigator.workers.tasks.webhook_deliver import run_deliver_due
 
 
@@ -135,6 +136,22 @@ REGISTRY: list[CronSpec] = [
         schedule_human="nightly @ 04:00 UTC",
         runner=run_vacuum_old_events,
         max_runtime_seconds=600,
+    ),
+    CronSpec(
+        name="lifecycle_watchdog",
+        description=(
+            "Find events past AGG_LIFECYCLE_STALE_GRACE_HOURS (default 12) "
+            "still in notstarted/inprogress — usually postponed games SGO "
+            "never re-statused. Surfaces them via the API ``stale`` flag. "
+            "If AGG_LIFECYCLE_AUTO_VOID_HOURS > 0, events past that longer "
+            "threshold are presumptively VOIDED (status_type=canceled, "
+            "PENDING selections → VOID, event.voided webhook fires). "
+            "Recovery: PROVIDER grading on a later lifecycle pass overrides "
+            "the COMPUTED VOID rows if SGO eventually ships scores."
+        ),
+        schedule_human="hourly @ :45",
+        runner=run_lifecycle_watchdog,
+        max_runtime_seconds=300,
     ),
 ]
 

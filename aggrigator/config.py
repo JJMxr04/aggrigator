@@ -178,7 +178,7 @@ class Settings(BaseSettings):
     # in [now - days_behind, now + days_ahead]. Cuts both directions of cost:
     #   - Fewer SGO entities returned per /events call (per-month quota).
     #   - Fewer Event/Market/Selection rows inserted (DB storage).
-    # The 1-day "behind" buffer catches events that are LIVE right now (they
+    # The "behind" buffer catches events that are LIVE right now (they
     # started in the past) plus just-finished games still flowing through
     # the lifecycle → settle pipeline. Combined with skip_if_new_terminal,
     # nothing older than this window leaks into the DB.
@@ -186,7 +186,7 @@ class Settings(BaseSettings):
         default=7, alias="AGG_INGEST_WINDOW_DAYS_AHEAD",
     )
     ingest_window_days_behind: int = Field(
-        default=1, alias="AGG_INGEST_WINDOW_DAYS_BEHIND",
+        default=2, alias="AGG_INGEST_WINDOW_DAYS_BEHIND",
     )
 
     # --- ingest entity-cost tuning (per-month quota) ---
@@ -233,6 +233,28 @@ class Settings(BaseSettings):
     # touched is much higher. Keep modest so a backlog doesn't lock the
     # DB or blow Neon's connection budget.
     vacuum_batch_size: int = Field(default=1000, alias="AGG_VACUUM_BATCH_SIZE")
+
+    # --- lifecycle watchdog (stale-event detection + auto-void) ---
+    # Events whose start_time is in the past but SGO still reports as
+    # ``notstarted`` / ``inprogress`` are "stale" — most often a postponed
+    # game SGO never updated. The watchdog runs hourly and surfaces them
+    # via the computed ``stale`` flag on the API + ops dashboard so an
+    # operator can investigate. After ``stale_grace_hours`` past start_time,
+    # an event is reported stale (informational only — no DB writes).
+    lifecycle_stale_grace_hours: int = Field(
+        default=12, alias="AGG_LIFECYCLE_STALE_GRACE_HOURS",
+    )
+    # If > 0, events still ``notstarted`` / ``inprogress`` more than this
+    # many hours past start_time are presumptively VOIDED: status_type
+    # flipped to ``canceled``, ``feed_locked=True``, all PENDING selections
+    # voided, ``event.voided`` webhook fires. 0 (default) DISABLES auto-void
+    # — the watchdog only flags stale events without touching them. Set to
+    # something like 48 once you trust it. Recovery: if SGO later returns
+    # real scores, the next ingest sees ``canceled → finished`` and
+    # PROVIDER grading overrides the COMPUTED-source VOID rows.
+    lifecycle_auto_void_hours: int = Field(
+        default=0, alias="AGG_LIFECYCLE_AUTO_VOID_HOURS",
+    )
 
     @property
     def cors_origin_list(self) -> list[str]:
