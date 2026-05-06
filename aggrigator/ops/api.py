@@ -31,6 +31,7 @@ from aggrigator.ingest.orchestrator import ingest_event as _ingest_event
 from aggrigator.models import League, User
 from aggrigator.ops.registry import REGISTRY
 from aggrigator.ops.service import CronService, LockUnavailable, TriggerRejected
+from aggrigator.ops.worker_status import get_worker_status
 from aggrigator.workers.tasks.ingest import _build_client
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,34 @@ router = APIRouter(
 
 def _redis() -> Redis:
     return Redis.from_url(get_settings().redis_url, decode_responses=True)
+
+
+# ---- worker status ---------------------------------------------------------
+
+
+@router.get(
+    "/worker-status",
+    summary="arq worker liveness — reads the heartbeat from Redis",
+)
+async def worker_status() -> dict:
+    """Tells you whether the ``agg-worker`` arq process is alive without
+    SSH'ing into Railway.
+
+    ``state`` is one of:
+
+    - ``online``  — heartbeat in Redis is fresh (within ~90s).
+    - ``stale``   — heartbeat key still exists but is older than the
+      stale window. Worker may be hung; scheduled crons aren't firing.
+    - ``offline`` — no heartbeat key at all. Worker isn't running.
+      Manual triggers via this API still work (they run inside agg-web),
+      but nothing on the auto schedule will fire.
+    - ``unknown`` — couldn't reach Redis to check.
+    """
+    redis = _redis()
+    try:
+        return (await get_worker_status(redis)).to_dict()
+    finally:
+        await redis.aclose()
 
 
 # ---- list / detail ---------------------------------------------------------

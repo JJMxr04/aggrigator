@@ -1,0 +1,43 @@
+{#-
+  Worker-status banner. Re-rendered every 10s by HTMX (see crons_index.html).
+  ``state`` is one of: online | stale | offline | unknown.
+-#}
+{% set ws = worker_status %}
+<div id="worker-status"
+     class="worker-status worker-status--{{ ws.state.value }}"
+     hx-get="/ops/crons/worker-status"
+     hx-trigger="every 10s"
+     hx-swap="outerHTML">
+  <span class="worker-status__dot" aria-hidden="true"></span>
+  <div class="worker-status__body">
+    <strong class="worker-status__label">
+      {% if ws.state.value == "online" %}arq worker — online
+      {% elif ws.state.value == "stale" %}arq worker — STALE (heartbeat too old)
+      {% elif ws.state.value == "offline" %}arq worker — OFFLINE (no heartbeat in Redis)
+      {% elif ws.state.value == "unknown" %}arq worker — UNKNOWN (Redis unreachable)
+      {% endif %}
+    </strong>
+    <div class="worker-status__meta">
+      {% if ws.state.value == "online" %}
+        last beat {{ '%.0f' % ws.age_seconds }}s ago
+        {% if ws.counters %}
+          · ongoing={{ ws.counters.get('j_ongoing', '?') }}
+          · queued={{ ws.counters.get('queued', '?') }}
+          · complete={{ ws.counters.get('j_complete', '?') }}
+          · failed={{ ws.counters.get('j_failed', '?') }}
+        {% endif %}
+      {% elif ws.state.value == "stale" %}
+        last beat {{ '%.0f' % ws.age_seconds }}s ago — worker may be hung,
+        crashed, or paused. Scheduled crons are NOT firing.
+      {% elif ws.state.value == "offline" %}
+        no <code>arq:queue:health-check</code> key in Redis. The
+        <code>agg-worker</code> service isn't running. Manual triggers
+        on this page still work (they run in-process), but nothing on
+        the auto schedule will fire.
+      {% elif ws.state.value == "unknown" %}
+        couldn't reach Redis to check.
+        {% if ws.error %}<code>{{ ws.error }}</code>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>

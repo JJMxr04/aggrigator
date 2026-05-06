@@ -101,6 +101,43 @@
   }
   .ops-nav a:hover { color: var(--accent); border-color: var(--accent); }
 
+  /* Worker status banner */
+  .worker-status {
+    display: flex; align-items: flex-start; gap: .85rem;
+    padding: .85rem 1.1rem;
+    border: 1px solid var(--border);
+    border-left-width: 4px;
+    border-radius: var(--radius);
+    background: var(--surface);
+    margin-bottom: 1.5rem;
+    box-shadow: var(--shadow-sm);
+  }
+  .worker-status__dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    margin-top: .45rem; flex-shrink: 0;
+    background: var(--text-mute);
+  }
+  .worker-status__body { flex: 1; }
+  .worker-status__label { display: block; font-size: .92rem; font-weight: 700; }
+  .worker-status__meta {
+    margin-top: .15rem; font-size: .82rem; color: var(--text-soft);
+  }
+  .worker-status__meta code {
+    font-family: var(--mono); font-size: .78rem;
+    background: var(--surface-2); padding: .05rem .35rem; border-radius: 3px;
+  }
+  .worker-status--online   { border-left-color: var(--success); }
+  .worker-status--online   .worker-status__dot {
+    background: var(--success);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .worker-status--stale    { border-left-color: var(--warning); }
+  .worker-status--stale    .worker-status__dot { background: var(--warning); }
+  .worker-status--offline  { border-left-color: var(--danger);  background: var(--danger-soft); }
+  .worker-status--offline  .worker-status__dot { background: var(--danger); }
+  .worker-status--unknown  { border-left-color: var(--text-mute); }
+  .worker-status--unknown  .worker-status__dot { background: var(--text-mute); }
+
   /* Card grid */
   .cron-grid {
     display: grid; gap: 1rem;

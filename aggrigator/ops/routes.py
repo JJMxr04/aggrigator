@@ -42,6 +42,7 @@ from aggrigator.ops.progress import (
     subscribe_progress,
 )
 from aggrigator.ops.service import CronService, LockUnavailable, TriggerRejected
+from aggrigator.ops.worker_status import get_worker_status
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ async def crons_page(request: Request):
         try:
             svc = CronService(session, redis)
             items = await svc.list_crons()
+            worker_status = await get_worker_status(redis)
         finally:
             await redis.aclose()
 
@@ -86,7 +88,30 @@ async def crons_page(request: Request):
             "items": items,
             "actor_email": user.email,
             "csrf_token": _csrf_token(request),
+            "worker_status": worker_status,
         },
+    )
+
+
+@router.get("/crons/worker-status", response_class=HTMLResponse)
+async def worker_status_partial(request: Request) -> HTMLResponse:
+    """HTMX poll target — returns just the worker-status banner.
+
+    The /ops/crons page polls this every 10s so the operator sees the
+    worker flip from online → offline within seconds of a deploy /
+    crash, without reloading the whole grid.
+    """
+    user = await _admin_from_session(request)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+    redis = _redis()
+    try:
+        worker_status = await get_worker_status(redis)
+    finally:
+        await redis.aclose()
+    return templates.TemplateResponse(
+        request, "_worker_status.html",
+        {"worker_status": worker_status},
     )
 
 

@@ -21,6 +21,8 @@ targets, but NOT on the auto schedule):
 
 from __future__ import annotations
 
+import logging
+
 from arq.connections import RedisSettings
 from arq.cron import cron
 
@@ -36,6 +38,8 @@ from aggrigator.workers.tasks.settle import settle_pending_task
 from aggrigator.workers.tasks.vacuum import vacuum_old_events_task
 from aggrigator.workers.tasks.watchdog import lifecycle_watchdog_task
 from aggrigator.workers.tasks.webhook_deliver import webhook_deliver_task
+
+logger = logging.getLogger(__name__)
 
 
 def _redis_settings() -> RedisSettings:
@@ -121,6 +125,59 @@ def _build_cron_jobs() -> list:
     ]
 
 
+async def _on_startup(ctx: dict) -> None:
+    """Loud boot banner — one block, easy to grep in Railway logs.
+
+    Prints the registered cron schedule + Redis target + heartbeat
+    cadence so an operator can confirm at a glance that the worker
+    booted with the schedule it was supposed to. Pairs with the
+    Worker status banner on /ops/crons (which reads the heartbeat
+    key written by ``record_health``).
+    """
+    s = get_settings()
+    lines = [
+        "=" * 64,
+        "[arq-worker] booted — cron schedule registered:",
+    ]
+    for job in WorkerSettings.cron_jobs:
+        lines.append(f"  - {job.name:<22}  {_cron_human(job)}")
+    lines.append(
+        f"[arq-worker] redis={_redacted(s.redis_url)}  "
+        f"queue=arq:queue  heartbeat_every={WorkerSettings.health_check_interval}s"
+    )
+    lines.append(
+        "[arq-worker] heartbeat key: arq:queue:health-check "
+        "(read by /ops/crons banner + /v1/admin/crons/worker-status)"
+    )
+    lines.append("=" * 64)
+    for line in lines:
+        logger.info(line)
+
+
+def _cron_human(job) -> str:
+    """Best-effort one-line summary of an arq CronJob's schedule."""
+    parts = []
+    for attr in ("month", "day", "weekday", "hour", "minute", "second"):
+        val = getattr(job, attr, None)
+        if val is None:
+            continue
+        if isinstance(val, set):
+            shown = ",".join(str(v) for v in sorted(val))
+        else:
+            shown = str(val)
+        parts.append(f"{attr}={shown}")
+    return " ".join(parts) if parts else "(every tick)"
+
+
+def _redacted(url: str) -> str:
+    if "@" not in url or "://" not in url:
+        return url
+    scheme, rest = url.split("://", 1)
+    creds, host = rest.split("@", 1)
+    user = creds.split(":", 1)[0] if ":" in creds else creds
+    return f"{scheme}://{user}:***@{host}"
+
+
 class WorkerSettings:
     redis_settings = _redis_settings()
 
@@ -143,3 +200,12 @@ class WorkerSettings:
 
     keep_result = 3600  # one hour of job results visible in Redis
     max_jobs = 10
+
+    # Heartbeat cadence — arq's default is 3600s (one hour), which is
+    # useless for a live "is the worker alive?" dashboard. 30s gives the
+    # /ops/crons banner sub-minute fidelity. The key TTL arq sets is
+    # (interval+1)*1000ms, so the key disappears within ~31s of the
+    # worker dying — that's our "OFFLINE" signal.
+    health_check_interval = 30
+
+    on_startup = _on_startup
