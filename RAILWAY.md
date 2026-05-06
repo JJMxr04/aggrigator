@@ -178,21 +178,29 @@ python -m scripts.make_admin --email admin@yourdomain.com --password 'CHANGE_ME'
 
 In the project canvas → **+ New → GitHub Repo** → pick the **same**
 `JJMxr04/aggrigator` repo. This creates a second service from the same
-source.
+source. Rename it to `agg-worker`.
 
-Rename it to `agg-worker`. Then in **Settings**:
+Then in **Settings**:
 
-- **Custom Start Command**: `/app/docker-entrypoint.sh worker`
+- **Config Path**: `railway.worker.toml`
 
-  ⚠️ **Must be the full command, not just `worker`.** For
-  Dockerfile-based services Railway's start command **replaces** the
-  image's `ENTRYPOINT` rather than appending to it — setting
-  `worker` alone makes Railway try to exec a `worker` binary that
-  doesn't exist. Spelling out the entrypoint path runs our script with
-  `worker` as `$1`, which the entrypoint's case statement handles.
-- **Healthcheck path**: clear it (the worker doesn't expose HTTP).
+  This is the only Settings field you need to change manually.
+  `railway.worker.toml` (in the repo root) defines the worker's start
+  command, restart policy, and the disabled healthcheck — all
+  version-controlled so the next operator doesn't have to remember.
+  Without this override Railway would read the default `railway.toml`
+  (which configures `agg-web`) and the worker would try to come up as
+  a second web instance.
+
 - **Networking**: do not generate a domain — the worker has no public
   ingress.
+
+> **Why two `railway.*.toml` files?** Railway has no way to define
+> multiple services from one config file, so we ship one file per
+> service and each service points at its own. Per-service overrides
+> like `Custom Start Command` and `Healthcheck Path` set in the UI
+> would still work, but they live outside the repo and tend to drift
+> — TOML files keep them next to the Dockerfile.
 
 In **Variables**, copy **all** the env vars from `agg-web`. Easiest
 path: Railway has **Shared Variables** at the project level — define
@@ -203,6 +211,33 @@ contents into both services; less elegant but works.)
 Hit **Deploy**. The worker has no public ingress — it just consumes
 the queue and runs the cron schedule from
 `aggrigator.workers.settings.WorkerSettings`.
+
+### Verify the worker is running
+
+Two ways to confirm:
+
+1. **`/ops/crons` banner** (the easy one). Load
+   `https://<your-aggregator-domain>/ops/crons` — the banner at the
+   top should show **arq worker — online** (green) within ~30 seconds
+   of the worker booting. If it shows **OFFLINE** or **STALE**, the
+   worker isn't writing its heartbeat → check the worker's
+   **Deployments → Logs**.
+
+2. **Worker logs.** Look for the boot banner that
+   `aggrigator/workers/settings.py` prints once at startup:
+
+   ```
+   [arq-worker] booted — cron schedule registered:
+     - seed_sports         weekday=0 hour=1 minute=30 second=0
+     - seed_leagues        hour=2 minute=0 second=0
+     - ingest_due_leagues  minute=0 second=0
+     ...
+   [arq-worker] redis=redis://default:***@...  queue=arq:queue  heartbeat_every=30s
+   ```
+
+   No banner = the worker never reached its `on_startup` hook (almost
+   always missing/wrong env vars — most often `AGG_REDIS_URL` not
+   matching the one `agg-web` uses).
 
 ---
 

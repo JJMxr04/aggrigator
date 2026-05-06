@@ -1,6 +1,9 @@
-## Railway service config — applied automatically by the GitHub connector.
-## Two services point at this repo (agg-web and agg-worker); both share
-## the build + healthcheck config below.
+## Railway service config for `agg-web` (the FastAPI app).
+##
+## This file is the project default — Railway reads `railway.toml` from
+## the repo root. The `agg-worker` service uses a sibling file,
+## `railway.worker.toml`, configured per-service via Settings → Config
+## Path. See RAILWAY.md §5 for the one-time setup.
 ##
 ## DO NOT set `startCommand` here. For Dockerfile-based services Railway's
 ## startCommand REPLACES the image's ENTRYPOINT entirely (it does NOT
@@ -8,15 +11,6 @@
 ## "web" binary that doesn't exist. Leaving it unset lets the Dockerfile's
 ## ENTRYPOINT ["/app/docker-entrypoint.sh"] + CMD ["web"] apply naturally
 ## — that's the right default for the web service.
-##
-## The worker service uses the same image but needs to run the entrypoint
-## with a different arg. Because startCommand replaces ENTRYPOINT, the
-## worker's Custom Start Command (set in the Railway UI) must be the
-## FULL command:
-##
-##     /app/docker-entrypoint.sh worker
-##
-## Not just "worker".
 
 [build]
 builder = "DOCKERFILE"

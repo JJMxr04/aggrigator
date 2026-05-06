@@ -1,0 +1,38 @@
+## Railway service config for `agg-worker` (the arq background worker).
+##
+## Used INSTEAD of the default `railway.toml` — point the worker service's
+## **Config Path** at `railway.worker.toml` in its Settings tab. (Railway
+## reads `railway.toml` from repo root by default; per-service overrides
+## live under Service → Settings → Config Path.)
+##
+## Why a separate file:
+## - Same Dockerfile, same image — only the start command differs.
+## - The web service must NOT set startCommand (the Dockerfile's CMD ["web"]
+##   handles it). The worker service MUST set startCommand to the full
+##   entrypoint path because Railway's startCommand REPLACES ENTRYPOINT
+##   for Dockerfile-based services (it does not append to CMD).
+## - Healthcheck must be disabled — the worker has no HTTP server to probe.
+##   Leaving the default healthcheckPath would mark every deployment
+##   unhealthy and Railway would crashloop the container forever.
+## - Restart policy is ALWAYS, not ON_FAILURE — if the worker exits cleanly
+##   (e.g. a deploy / kill signal), we still want it back up. Without
+##   ALWAYS, a graceful arq shutdown would leave the cron schedule dead
+##   until the next manual redeploy.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+## Full path required: Railway replaces ENTRYPOINT for Dockerfile services
+## rather than appending to CMD, so just "worker" would try to exec a
+## binary called "worker" that doesn't exist and the container would
+## crashloop. The entrypoint script's `case` block dispatches on $1.
+startCommand = "/app/docker-entrypoint.sh worker"
+
+## No healthcheckPath — worker has no HTTP listener. Liveness is
+## visible via the arq heartbeat key in Redis (read by the
+## /ops/crons banner + /v1/admin/crons/worker-status endpoint).
+
+restartPolicyType = "ALWAYS"
+restartPolicyMaxRetries = 10
