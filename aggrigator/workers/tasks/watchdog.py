@@ -16,6 +16,7 @@ from aggrigator.config import get_settings
 from aggrigator.db import session_scope
 from aggrigator.ingest.watchdog import run_watchdog
 from aggrigator.ops.progress import set_progress
+from aggrigator.webhooks.notify import notify_webhook_worker
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,10 @@ async def run_lifecycle_watchdog() -> dict[str, Any]:
             stale_grace_hours=settings.lifecycle_stale_grace_hours,
             auto_void_hours=settings.lifecycle_auto_void_hours,
         )
+    # session_scope commits on exit. Push-on-write: kick the webhook
+    # worker if the watchdog inserted any voided-event deliveries.
+    if report.deliveries_enqueued > 0:
+        await notify_webhook_worker()
 
     await set_progress(
         f"watchdog: {report.stale_count} stale, {report.voided_count} voided, "

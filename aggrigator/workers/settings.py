@@ -17,6 +17,13 @@ targets, but NOT on the auto schedule):
   that ingest is hourly. Useful for one-shot post-deploy population.
 - ``ingest_event_lifecycle`` / ``ingest_event_odds`` — splitting these
   doubles SGO entity cost vs the combined ``ingest_due_leagues``.
+- ``webhook_deliver`` — push-driven, no schedule. The orchestrator +
+  watchdog enqueue this task right after they commit new delivery
+  rows, and failed deliveries re-enqueue themselves with
+  ``_defer_until=next_retry_at``. The cron stays registered so
+  operators can recover from a Redis outage by clicking Run once
+  Redis is back, but it never auto-fires (would write a no-op
+  ``cron_run`` row every tick).
 """
 
 from __future__ import annotations
@@ -66,7 +73,6 @@ def _build_cron_jobs() -> list:
     #                                          returned event); env-tunable
     #   lifecycle_watchdog  hourly @ :45     — flags stale events (notstarted past
     #                                          start_time); auto-VOIDs if enabled
-    #   webhook_deliver     every 30s        — drains pending outbound deliveries
     #   settle_pending      nightly 03:30    — backfill for selections the hot
     #                                          path missed (rare, defensive)
     #   vacuum_old_events   nightly 04:00    — deletes terminal events past
@@ -80,6 +86,11 @@ def _build_cron_jobs() -> list:
     #                          immediately.
     #   ingest_event_lifecycle / ingest_event_odds — splitting these doubles SGO
     #                          entity cost vs the combined ingest_due_leagues.
+    #   webhook_deliver     — push-driven (see module docstring + webhooks/notify).
+    #                          The orchestrator/watchdog enqueue it on commit
+    #                          and failed deliveries re-enqueue themselves with
+    #                          _defer_until=next_retry_at. A scheduled run would
+    #                          just write no-op cron_run rows.
     ingest_kwargs: dict = {
         "minute": s.ingest_cron_minute_set,
         "run_at_startup": False,
@@ -107,11 +118,10 @@ def _build_cron_jobs() -> list:
             minute={45},
             name="lifecycle_watchdog",
         ),
-        cron(
-            webhook_deliver_task,
-            second={0, 30},
-            name="webhook_deliver",
-        ),
+        # webhook_deliver is intentionally NOT on the auto schedule —
+        # it's push-driven (see module docstring). Still registered as a
+        # ``functions`` target below so push-enqueues + manual /ops/crons
+        # triggers work.
         cron(
             settle_pending_task,
             hour={3}, minute={30},

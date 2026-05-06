@@ -150,8 +150,15 @@ REGISTRY: list[CronSpec] = [
     ),
     CronSpec(
         name="webhook_deliver",
-        description="Drain pending webhook deliveries.",
-        schedule_human="every 30s",
+        description=(
+            "Drain pending webhook deliveries. Push-driven — the ingest "
+            "orchestrator + watchdog enqueue this on commit, and failed "
+            "deliveries re-enqueue themselves with a deferred job at "
+            "next_retry_at. NOT on the auto schedule (would write a "
+            "no-op cron_run row every tick). Click Run here only to "
+            "recover after a Redis outage that swallowed the push."
+        ),
+        schedule_human="push-driven (manual recovery)",
         runner=run_deliver_due,
         max_runtime_seconds=120,
     ),

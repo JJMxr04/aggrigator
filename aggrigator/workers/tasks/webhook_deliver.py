@@ -1,10 +1,17 @@
 """Webhook delivery worker — drains due rows, calls send_one, commits.
 
-ARQ cron fires this every N seconds. Inside, we:
-1. Select up to BATCH_SIZE rows from ``webhook_delivery`` where
-   ``delivered_at IS NULL`` and (``next_retry_at IS NULL OR <= now``).
-2. For each, look up the endpoint, decrypt the secret, POST.
-3. Commit per-delivery so a network hang on one doesn't roll back the rest.
+Triggered by push, NOT a polling cron:
+- ``webhooks.notify.notify_webhook_worker`` is called from the ingest
+  orchestrator + watchdog right after they commit new delivery rows.
+  arq runs this task within milliseconds.
+- Failed rows re-enqueue themselves via
+  ``webhooks.notify.notify_webhook_retry`` with ``_defer_until=
+  next_retry_at``, so retries pop out of arq's delayed-job queue at
+  the right moment instead of being polled for.
+
+The task body still SELECTs everything currently due — the queue
+trigger just decides *when* to wake up, not *what* to deliver. That
+keeps batching simple: one wake-up sweeps all pending rows.
 """
 
 from __future__ import annotations
@@ -13,6 +20,7 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
+from arq.connections import ArqRedis
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,14 +29,25 @@ from aggrigator.db import async_session_factory
 from aggrigator.models import WebhookDelivery, WebhookEndpoint
 from aggrigator.security.webhook_signing import InvalidSignature, decrypt_secret
 from aggrigator.webhooks.deliver import send_one
+from aggrigator.webhooks.notify import notify_webhook_retry
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 50
 
 
-async def run_deliver_due(now: datetime | None = None) -> dict[str, int]:
-    """Send everything that's due. Returns summary counts."""
+async def run_deliver_due(
+    now: datetime | None = None,
+    *,
+    redis: ArqRedis | None = None,
+) -> dict[str, int]:
+    """Send everything that's due. Returns summary counts.
+
+    ``redis`` is the arq pool from the calling task's ``ctx`` (or
+    ``None`` for direct/test invocations). When set, transient failures
+    re-enqueue themselves via ``notify_webhook_retry`` with
+    ``_defer_until=next_retry_at`` so we don't need a polling cron.
+    """
     settings = get_settings()
     moment = now or datetime.now(tz=timezone.utc)
     sent = 0
@@ -69,6 +88,17 @@ async def run_deliver_due(now: datetime | None = None) -> dict[str, int]:
                     failed += 1
                 else:
                     retried += 1
+                    # Schedule a deferred re-run at the row's next_retry_at.
+                    # Per-row _job_id dedupes if the same row is touched
+                    # again before arq pops the deferred job. Without
+                    # this push there is no polling cron to catch the
+                    # retry — the row would sit forever.
+                    if outcome.next_retry_at is not None:
+                        await notify_webhook_retry(
+                            str(row.id),
+                            outcome.next_retry_at,
+                            redis=redis,
+                        )
         logger.info(
             "webhook_deliver: sent=%d retried=%d failed=%d", sent, retried, failed,
         )
@@ -113,11 +143,13 @@ async def _send_with_endpoint(
 
 
 async def webhook_deliver_task(ctx: dict) -> dict:
-    """ARQ-callable wrapper. Records each scheduled run in ``cron_run``."""
+    """ARQ-callable wrapper. Records each run in ``cron_run`` for /ops
+    visibility and forwards the arq pool from ``ctx`` so retry pushes
+    can reuse the existing connection instead of opening a new one."""
     from aggrigator.ops.recorder import cron_run_recorder
 
     @cron_run_recorder("webhook_deliver")
     async def _runner(ctx_):
-        return await run_deliver_due()
+        return await run_deliver_due(redis=ctx_.get("redis"))
 
     return await _runner(ctx)

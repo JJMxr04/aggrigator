@@ -31,6 +31,7 @@ from aggrigator.ingest.upserts import (
 from aggrigator.models import Event, League
 from aggrigator.ops.progress import raise_if_cancelled, set_progress
 from aggrigator.webhooks.enqueue import enqueue_for_event
+from aggrigator.webhooks.notify import notify_webhook_worker
 
 logger = logging.getLogger(__name__)
 
@@ -382,6 +383,12 @@ async def ingest_league(
         # mid-walk. Each event is idempotent on retry, so a partial
         # league walk is recoverable on the next run.
         await session.commit()
+        # Push-on-write: kick the webhook worker to drain the row(s) we
+        # just inserted. Coalesces on a fixed _job_id so a busy league
+        # walk produces ONE queued job, not one per event. Failure here
+        # is non-fatal — see webhooks/notify.py for the recovery story.
+        if result is not None and result.deliveries_enqueued > 0:
+            await notify_webhook_worker()
     league.last_refreshed_at = datetime.now(tz=timezone.utc)
     logger.info(
         "ingest_league %s: %d events processed, %d failed",
