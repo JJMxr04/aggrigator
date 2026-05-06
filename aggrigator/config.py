@@ -237,6 +237,16 @@ class Settings(BaseSettings):
     ingest_bookmaker_id: str = Field(
         default="", alias="AGG_INGEST_BOOKMAKER_ID",
     )
+    # When True (default), the cron drops events arriving in a terminal
+    # status (finished/postponed/canceled) if our DB has never seen them
+    # — avoids backfilling ancient games every walk in steady state.
+    # Flip to False for one run after wiping the DB or seeding a fresh
+    # deployment so today's already-finished games actually get inserted.
+    # Then either flip back to True (matches old behavior) or leave it
+    # False (the time window already prevents ancient backfill).
+    ingest_skip_new_terminal: bool = Field(
+        default=True, alias="AGG_INGEST_SKIP_NEW_TERMINAL",
+    )
 
     # --- vacuum (storage tuning for free DB tiers) ---
     # Delete terminal events older than this many days. The vacuum cron

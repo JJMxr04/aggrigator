@@ -354,7 +354,7 @@ async def ingest_league(
         try:
             result = await ingest_event(
                 session, payload,
-                skip_if_new_terminal=True,
+                skip_if_new_terminal=settings.ingest_skip_new_terminal,
                 phase=phase,
             )
         except Exception:  # noqa: BLE001

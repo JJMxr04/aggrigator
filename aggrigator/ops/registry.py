@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from aggrigator.config import get_settings
 from aggrigator.workers.tasks.full_refresh import run_full_refresh
 from aggrigator.workers.tasks.ingest import (
     run_ingest_due_leagues,
@@ -26,6 +27,39 @@ from aggrigator.workers.tasks.settle import run_settle_pending
 from aggrigator.workers.tasks.vacuum import run_vacuum_old_events
 from aggrigator.workers.tasks.watchdog import run_lifecycle_watchdog
 from aggrigator.workers.tasks.webhook_deliver import run_deliver_due
+
+
+def _format_ingest_schedule() -> str:
+    """Format the actual ``ingest_due_leagues`` cadence based on env vars.
+
+    Read at module-load time. Reflects whatever ``AGG_INGEST_CRON_MINUTES``
+    and ``AGG_INGEST_CRON_HOURS`` resolve to on this deployment, so /ops/crons
+    shows the real schedule rather than a stale default.
+    """
+    s = get_settings()
+    minutes = sorted(s.ingest_cron_minute_set)
+    hours = s.ingest_cron_hour_set  # None = every hour
+
+    if hours is None:
+        if minutes == [0]:
+            return "hourly @ :00 UTC (env-tunable)"
+        if len(minutes) == 1:
+            return f"hourly @ :{minutes[0]:02d} UTC (env-tunable)"
+        mins = ", ".join(f":{m:02d}" for m in minutes)
+        return f"every hour @ {mins} UTC (env-tunable)"
+
+    hours_sorted = sorted(hours)
+    if len(hours_sorted) == 1 and len(minutes) == 1:
+        return (
+            f"daily @ {hours_sorted[0]:02d}:{minutes[0]:02d} UTC (env-tunable)"
+        )
+    if len(minutes) == 1:
+        times = ", ".join(f"{h:02d}:{minutes[0]:02d}" for h in hours_sorted)
+        return f"@ {times} UTC (env-tunable)"
+    times = ", ".join(
+        f"{h:02d}:{m:02d}" for h in hours_sorted for m in minutes
+    )
+    return f"@ {times} UTC (env-tunable)"
 
 
 @dataclass
@@ -84,7 +118,7 @@ REGISTRY: list[CronSpec] = [
             "lifecycle + odds run. Tune cadence via "
             "AGG_INGEST_CRON_MINUTES / AGG_INGEST_CRON_HOURS."
         ),
-        schedule_human="hourly @ :00 (env-tunable)",
+        schedule_human=_format_ingest_schedule(),
         runner=run_ingest_due_leagues,
         max_runtime_seconds=1800,
     ),
