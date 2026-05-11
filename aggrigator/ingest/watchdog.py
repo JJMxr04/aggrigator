@@ -86,6 +86,36 @@ async def scan_stale_events(
     return list(rows)
 
 
+async def scan_disappeared_events(
+    session: AsyncSession,
+    *,
+    grace_hours: int,
+    now: datetime | None = None,
+    limit: int = 500,
+) -> list[Event]:
+    """Return pending Event rows whose ``last_seen_upstream_at`` is older
+    than ``grace_hours``. These are events the upstream feed has stopped
+    returning — the disappearance signal for odds-api.io cancellations
+    (see cancelled-suspended.md §3 Layer 2).
+
+    Independent of ``start_time``: a pre-match cancellation 6h before
+    kickoff disappears from upstream while still in the future.
+    """
+    cutoff = (now or datetime.now(tz=timezone.utc)) - timedelta(hours=grace_hours)
+    rows = await session.scalars(
+        select(Event)
+        .where(
+            Event.status_type.in_(_STUCK_STATUSES),
+            Event.is_finalized.is_(False),
+            Event.last_seen_upstream_at.is_not(None),
+            Event.last_seen_upstream_at < cutoff,
+        )
+        .order_by(Event.last_seen_upstream_at.asc())
+        .limit(limit)
+    )
+    return list(rows)
+
+
 async def auto_void_stale_events(
     session: AsyncSession,
     *,
@@ -160,15 +190,86 @@ async def auto_void_stale_events(
     return voided_ids, total_selections_voided, total_deliveries
 
 
+async def auto_void_disappeared_events(
+    session: AsyncSession,
+    *,
+    void_hours: int,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> tuple[list[str], int, int]:
+    """Disappearance-clock companion to ``auto_void_stale_events``: VOID
+    pending events whose ``last_seen_upstream_at`` has been older than
+    ``void_hours``. Returns ``(voided_event_ids, selections_voided,
+    deliveries_enqueued)``.
+
+    Shares VOID semantics with ``auto_void_stale_events``: flips
+    ``status_type=canceled`` + ``feed_locked=True``, voids PENDING
+    selections, enqueues ``event.voided`` for every webhook endpoint.
+    """
+    if void_hours <= 0:
+        return [], 0, 0
+
+    candidates = await scan_disappeared_events(
+        session, grace_hours=void_hours, now=now, limit=limit,
+    )
+    if not candidates:
+        return [], 0, 0
+
+    voided_ids: list[str] = []
+    total_selections_voided = 0
+    total_deliveries = 0
+
+    for event in candidates:
+        prev_status = event.status_type
+        event.status_type = "canceled"
+        event.feed_locked = True
+        event.is_finalized = False
+        result = await session.execute(
+            update(Selection)
+            .where(
+                Selection.settlement_status == "PENDING",
+                Selection.market_id.in_(
+                    select(Market.id).where(Market.event_id == event.id)
+                ),
+            )
+            .values(
+                settlement_status="VOID",
+                settled_at=datetime.now(tz=timezone.utc),
+                settlement_source="COMPUTED",
+            )
+        )
+        sel_voided = result.rowcount or 0
+        total_selections_voided += sel_voided
+        await session.flush()
+        deliveries = await enqueue_for_event(session, event, Transition.VOIDED)
+        total_deliveries += len(deliveries)
+        voided_ids.append(event.id)
+        logger.warning(
+            "watchdog auto-voided disappeared event=%s (was %s, "
+            "last_seen=%s) — %d PENDING selections → VOID, %d webhook(s) "
+            "enqueued",
+            event.id, prev_status, event.last_seen_upstream_at,
+            sel_voided, len(deliveries),
+        )
+
+    return voided_ids, total_selections_voided, total_deliveries
+
+
 async def run_watchdog(
     session: AsyncSession,
     *,
     stale_grace_hours: int,
     auto_void_hours: int,
+    disappeared_void_hours: int = 0,
     now: datetime | None = None,
 ) -> WatchdogReport:
     """Top-level: scan stale events, then auto-void the older subset if
     enabled. Single transaction — caller commits.
+
+    ``disappeared_void_hours`` (>0) enables the disappearance auto-void
+    branch — pending events the upstream feed has stopped returning for
+    that many hours flip to VOID. Independent of ``start_time``. Used
+    primarily on odds-api.io where cancellations have no explicit status.
     """
     stale = await scan_stale_events(
         session, grace_hours=stale_grace_hours, now=now,
@@ -182,6 +283,15 @@ async def run_watchdog(
         voided_ids, selections_voided, deliveries = await auto_void_stale_events(
             session, void_hours=auto_void_hours, now=now,
         )
+
+    if disappeared_void_hours > 0:
+        dvoided, dsel, ddel = await auto_void_disappeared_events(
+            session, void_hours=disappeared_void_hours, now=now,
+        )
+        # Merge — same VOID semantics, separate triggers.
+        voided_ids.extend(eid for eid in dvoided if eid not in voided_ids)
+        selections_voided += dsel
+        deliveries += ddel
 
     if stale_ids or voided_ids:
         logger.info(

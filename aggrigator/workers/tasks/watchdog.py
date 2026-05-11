@@ -23,10 +23,19 @@ logger = logging.getLogger(__name__)
 
 async def run_lifecycle_watchdog() -> dict[str, Any]:
     settings = get_settings()
+    # Enable the disappearance branch only when on odds-api.io — SGO emits
+    # explicit ``status.cancelled`` so its events never go missing without a
+    # status flag. Leaving disappearance void_hours at 0 on SGO is a no-op.
+    disappeared_void_hours = (
+        settings.lifecycle_disappeared_void_hours
+        if settings.odds_provider == "oddsapi"
+        else 0
+    )
     await set_progress(
         f"watchdog: scanning (stale>{settings.lifecycle_stale_grace_hours}h, "
         f"auto_void>{settings.lifecycle_auto_void_hours}h"
         + (" — DISABLED" if settings.lifecycle_auto_void_hours == 0 else "")
+        + (f", disappeared>{disappeared_void_hours}h" if disappeared_void_hours > 0 else "")
         + ")"
     )
     async with session_scope() as session:
@@ -34,6 +43,7 @@ async def run_lifecycle_watchdog() -> dict[str, Any]:
             session,
             stale_grace_hours=settings.lifecycle_stale_grace_hours,
             auto_void_hours=settings.lifecycle_auto_void_hours,
+            disappeared_void_hours=disappeared_void_hours,
         )
     # session_scope commits on exit. Push-on-write: kick the webhook
     # worker if the watchdog inserted any voided-event deliveries.

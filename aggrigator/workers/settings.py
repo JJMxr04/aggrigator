@@ -34,6 +34,7 @@ from arq.connections import RedisSettings
 from arq.cron import cron
 
 from aggrigator.config import get_settings
+from aggrigator.observability.logging import configure_logging
 from aggrigator.workers.tasks.full_refresh import full_refresh_task
 from aggrigator.workers.tasks.ingest import (
     ingest_due_leagues_task,
@@ -145,6 +146,10 @@ async def _on_startup(ctx: dict) -> None:
     key written by ``record_health``).
     """
     s = get_settings()
+    # Match the API's logging config — same formatter, same level, plus
+    # the progress-forward handler so logs from the ingest pipeline
+    # surface in /ops/crons via SSE.
+    configure_logging(s.log_level)
     lines = [
         "=" * 64,
         "[arq-worker] booted — cron schedule registered:",

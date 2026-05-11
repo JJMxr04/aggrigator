@@ -22,6 +22,7 @@ from aggrigator.ingest.client import SgoClient
 from aggrigator.ingest.ingester import write_markets
 from aggrigator.ingest.lifecycle import EventState, Transition, decide_transition
 from aggrigator.ingest.normalize import EventSpec, event_spec_from_payload
+from aggrigator.ingest.odds_api_reconcile import reconcile_disappeared
 from aggrigator.ingest.settlement_computed import settle_event, void_remaining_pending
 from aggrigator.ingest.settlement_provider import grade_event
 from aggrigator.ingest.upserts import (
@@ -311,6 +312,12 @@ async def ingest_league(
     report = LeagueReport(league_id=league.id)
     event_idx = 0
     first_event_seen = False
+    # Track event ids the adapter returned this cycle so the disappearance
+    # reconcile pass (oddsapi-only) can flag rows that vanished from
+    # upstream. See cancelled-suspended.md §3 Layer 2.
+    seen_event_ids: set[str] = set()
+    window_start = now - timedelta(days=settings.ingest_window_days_behind)
+    window_end = now + timedelta(days=settings.ingest_window_days_ahead)
     for payload in client.get_events(
         league_id=league.id,
         # include_open_close=False: we expose ``opening_odds`` in the schema
@@ -349,6 +356,8 @@ async def ingest_league(
         await raise_if_cancelled()
         event_idx += 1
         event_id = payload.get("eventID") or "?"
+        if event_id and event_id != "?":
+            seen_event_ids.add(event_id)
         await set_progress(
             f"{league.id} event {event_idx} ({event_id}): writing odds"
         )
@@ -389,6 +398,32 @@ async def ingest_league(
         # is non-fatal — see webhooks/notify.py for the recovery story.
         if result is not None and result.deliveries_enqueued > 0:
             await notify_webhook_worker()
+    # Disappearance reconcile pass — only meaningful on odds-api.io where
+    # cancellations manifest as absence (no status flag). Cheap no-op for
+    # SGO since SGO emits ``status.cancelled`` directly and the rows
+    # already track lifecycle through normalize.py. We run it for both
+    # providers because (a) it's idempotent and (b) it produces useful
+    # telemetry on missing events regardless of provider.
+    try:
+        missing = await reconcile_disappeared(
+            session,
+            league_id=league.id,
+            seen_event_ids=seen_event_ids,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        await session.commit()
+        if missing:
+            await set_progress(
+                f"{league.id}: {len(missing)} event(s) missing from upstream "
+                f"this cycle — watchdog will auto-void after grace"
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "ingest_league %s: reconcile pass failed — continuing", league.id,
+        )
+        await session.rollback()
+
     league.last_refreshed_at = datetime.now(tz=timezone.utc)
     logger.info(
         "ingest_league %s: %d events processed, %d failed",

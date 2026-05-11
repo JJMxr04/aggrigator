@@ -177,6 +177,7 @@ async def upsert_event_from_spec(
             away_score=existing.away_score,
         )
 
+    now = datetime.now(tz=timezone.utc)
     payload = dict(
         league_id=league.id if league else None,
         sport_id=sport_id,
@@ -196,7 +197,11 @@ async def upsert_event_from_spec(
         winner_code=spec.winner_code,
         winner=_winner_name(spec.winner_code, home, away),
         feed_locked=bool(spec.feed_locked),
-        last_provider_refresh_at=datetime.now(tz=timezone.utc),
+        last_provider_refresh_at=now,
+        # Reset on every successful upsert. The watchdog's disappearance
+        # branch reads this to detect events that stop appearing in
+        # /events. See cancelled-suspended.md §3 Layer 2.
+        last_seen_upstream_at=now,
     )
 
     if existing is None:

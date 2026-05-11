@@ -78,6 +78,16 @@ class Event(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # Disappearance clock for the odds-api.io watchdog branch — refreshed
+    # on every successful upsert. When this falls behind the current time
+    # by more than ``AGG_LIFECYCLE_DISAPPEARED_VOID_HOURS``, the event has
+    # stopped appearing upstream and the watchdog will auto-VOID it
+    # (subject to ``..._GRACE_HOURS``). Nullable so existing rows pre-
+    # migration don't trip the watchdog until they get refreshed.
+    last_seen_upstream_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Aggregator-only — outbound webhook idempotency state.
     last_webhook_sent_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_webhook_sent_at: Mapped[datetime | None] = mapped_column(

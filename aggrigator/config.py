@@ -1,13 +1,15 @@
 """Pydantic-settings — env-driven config for the aggregator.
 
 All env vars are prefixed ``AGG_`` except those that already have an upstream
-convention (``SPORTSGAMEODDS_*``). See ``.env.example`` for the full list.
+convention (``SPORTSGAMEODDS_*`` for SGO, ``ODDSAPI_*`` for odds-api.io).
+See ``.env.example`` for the full list.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -56,6 +58,35 @@ class Settings(BaseSettings):
         default="aggrigator-dev", alias="SPORTSGAMEODDS_API_KEY",
     )
     sgo_fixture_dir: str = Field(default="", alias="SPORTSGAMEODDS_FIXTURE_DIR")
+
+    # --- provider selection ---
+    # "sgo" preserves current behavior. "oddsapi" routes ingest through
+    # OddsApiHttpClient (see aggrigator-plan/odds-api/odds-api.md). Flip
+    # in Railway env to cut over; rollback is the same flip back.
+    odds_provider: Literal["sgo", "oddsapi"] = Field(
+        default="sgo", alias="AGG_ODDS_PROVIDER",
+    )
+
+    # --- odds-api.io ---
+    # Base URL. NOTE: the SDK hardcodes ``api2.odds-api.io/v3`` while docs
+    # use ``api.``; Phase 0 probe resolves which is the live host. Default
+    # tracks the docs.
+    odds_api_base_url: str = Field(
+        default="https://api.odds-api.io/v3", alias="ODDSAPI_BASE_URL",
+    )
+    odds_api_key: str = Field(default="", alias="ODDSAPI_API_KEY")
+    # Per-hour throttle: skip auto crons when current usage is ≥ this %% of
+    # the live ``x-ratelimit-limit``. 80 means "skip when 80/100 req used on
+    # free, 4000/5000 on paid Starter." Equivalent of SGO's
+    # AGG_SGO_QUOTA_THRESHOLD_PCT but on a per-hour bucket.
+    odds_api_throttle_pct: int = Field(
+        default=80, alias="AGG_ODDSAPI_THROTTLE_PCT",
+    )
+    # NOTE: bookmaker list is HARDCODED at 2 in code (see
+    # aggrigator/ingest/odds_api_http.py:ODDSAPI_BOOKMAKERS) by design —
+    # rationale in aggrigator-plan/odds-api/best-practices.md §4.1. Even
+    # on paid tiers we stay at 2 books. There is intentionally no env var
+    # for this.
 
     # Pre-emptive throttle: minimum seconds between SGO HTTP requests on a
     # single client instance. Default 0 — burst 5–10 calls in <1s and let
@@ -281,6 +312,23 @@ class Settings(BaseSettings):
     # PROVIDER grading overrides the COMPUTED-source VOID rows.
     lifecycle_auto_void_hours: int = Field(
         default=0, alias="AGG_LIFECYCLE_AUTO_VOID_HOURS",
+    )
+
+    # --- disappearance detection (odds-api.io) ---
+    # Independent of the stale-pending clock above: a pre-match cancellation
+    # 6h before kickoff has to be catchable even though stale-pending only
+    # fires after start time. See cancelled-suspended.md §3 Layer 2.
+    #
+    # ``..._grace_hours``: an event that hasn't been seen upstream for
+    # this many hours is reported as disappeared (informational).
+    # ``..._void_hours``: past this threshold, the watchdog auto-voids it
+    # (same VOID path as the stale-pending branch). 0 disables auto-void
+    # for the disappearance signal.
+    lifecycle_disappeared_grace_hours: int = Field(
+        default=6, alias="AGG_LIFECYCLE_DISAPPEARED_GRACE_HOURS",
+    )
+    lifecycle_disappeared_void_hours: int = Field(
+        default=12, alias="AGG_LIFECYCLE_DISAPPEARED_VOID_HOURS",
     )
 
     @property

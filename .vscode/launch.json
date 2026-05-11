@@ -15,7 +15,8 @@
       ],
       "cwd": "${workspaceFolder}",
       "env": {
-        "PYTHONUNBUFFERED": "1"
+        "PYTHONUNBUFFERED": "1",
+        "TZ": "UTC"
       },
       "console": "integratedTerminal",
       "justMyCode": false
@@ -29,7 +30,8 @@
       "args": ["aggrigator.workers.settings.WorkerSettings"],
       "cwd": "${workspaceFolder}",
       "env": {
-        "PYTHONUNBUFFERED": "1"
+        "PYTHONUNBUFFERED": "1",
+        "TZ": "UTC"
       },
       "console": "integratedTerminal"
     },
