@@ -66,10 +66,9 @@ async def ingest_event(
     payload: dict,
     *,
     skip_if_new_terminal: bool = False,
-    phase: str = "all",
 ) -> IngestResult | None:
-    """Normalize one SGO event payload, upsert the row, write its markets,
-    PROVIDER-grade if finalized, return the lifecycle transition.
+    """Normalize one event payload (SGO-shape), upsert the row, write its
+    markets, PROVIDER-grade if finalized, return the lifecycle transition.
 
     The caller is responsible for committing the session — this function only
     issues writes and ``flush`` calls. Idempotent on repeated input.
@@ -80,58 +79,17 @@ async def ingest_event(
     (``ingest_league``) sets this; the manual ad-hoc ingest endpoint
     leaves it off so operators can backfill on demand.
 
-    ``phase`` controls which writes happen:
-
-    - ``"all"`` (default): everything — upsert event + markets + selections +
-      odds quotes + bookmaker quotes + grading + webhook enqueue. Slowest.
-    - ``"lifecycle"``: upsert event row + status, run grading/settle/void on
-      finalized events, enqueue webhooks. **Skip the entire markets walk.**
-      Fast — useful when you only care about scores and lifecycle transitions
-      and the per-bookmaker price snapshot can wait.
-    - ``"odds"``: write only the markets/selections/odds-quotes/bookmaker-quotes
-      for an existing event. Skip lifecycle, settle, webhooks. Requires the
-      event row to already exist (lifecycle phase or full ``"all"`` walk
-      must have created it). New events not in our DB are skipped.
+    Every successful call performs the full pipeline: upsert event +
+    markets + selections + odds quotes + bookmaker quotes + grading +
+    webhook enqueue. (The historical ``phase="lifecycle"`` / ``"odds"``
+    split was removed when the registry was trimmed — the combined walk
+    was always the cost-efficient default; splitting was an SGO-era
+    optimization that didn't carry over to per-hour request budgets.)
     """
     spec = event_spec_from_payload(payload)
     if spec is None:
         return None  # non-match event or malformed
 
-    if phase == "odds":
-        # Odds-only: existing event row is required. We don't touch the
-        # event metadata — just refresh the per-bookmaker prices.
-        event = await session.get(Event, spec.event_id)
-        if event is None:
-            logger.debug(
-                "odds phase: event %s not in DB yet "
-                "(run lifecycle/all phase first to create the row)",
-                spec.event_id,
-            )
-            return None
-        # Even in odds-only mode, skip when finalized + scores haven't
-        # moved — the prices on a final-and-graded game are immutable.
-        if (
-            event.is_finalized
-            and (spec.status_type or "").lower() == "finished"
-            and event.home_score == spec.home_score
-            and event.away_score == spec.away_score
-        ):
-            return IngestResult(
-                event=event, transition=Transition.NONE,
-                selections_written=0, selections_graded=0,
-                selections_computed=0, selections_voided=0,
-                deliveries_enqueued=0,
-            )
-        selections_written = await write_markets(session, event, spec.markets)
-        await session.flush()
-        return IngestResult(
-            event=event, transition=Transition.NONE,
-            selections_written=selections_written,
-            selections_graded=0, selections_computed=0, selections_voided=0,
-            deliveries_enqueued=0,
-        )
-
-    # phase == "lifecycle" or "all" — full event upsert path
     home = await upsert_team_from_spec(session, spec.home_team)
     away = await upsert_team_from_spec(session, spec.away_team)
     if home is None or away is None:
@@ -184,11 +142,7 @@ async def ingest_event(
             deliveries_enqueued=0,
         )
 
-    # Lifecycle phase deliberately skips write_markets — that's the
-    # whole point. Status / settlement / webhook work below still runs.
-    selections_written = 0
-    if phase == "all":
-        selections_written = await write_markets(session, event, spec.markets)
+    selections_written = await write_markets(session, event, spec.markets)
 
     selections_graded = 0
     selections_computed = 0
@@ -243,31 +197,24 @@ async def ingest_league(
     session: AsyncSession,
     league: League,
     client: SgoClient,
-    *,
-    phase: str = "all",
 ) -> LeagueReport:
     """Pull events for one league, ingest each, return a report.
 
-    SGO bills 1 entity per event, so the per-month quota is driven by
-    (events in window) × (walks per cycle) — NOT by markets/selections/
-    bookmakers. Two genuine quota optimizations apply here:
+    Two genuine cost optimizations apply here:
 
     1. **Time window** (``AGG_INGEST_WINDOW_DAYS_BEHIND`` /
-       ``..._AHEAD``): SGO is asked for events in
+       ``..._AHEAD``): the upstream is asked for events in
        ``[now - behind, now + ahead]`` only. Smaller window = fewer
-       events returned = fewer entities billed.
+       events returned = fewer per-event writes (and on SGO, fewer
+       billed entities).
     2. **``skip_if_new_terminal=True``**: anything inside that window
-       SGO reports as already terminal but our DB has never seen gets
-       dropped (no DB writes, but SGO has already counted the entity).
-       Existing events still flow through their lifecycle
-       (live → finished still triggers settlement).
+       the provider reports as already terminal but our DB has never
+       seen gets dropped (no DB writes). Existing events still flow
+       through their lifecycle (live → finished still triggers
+       settlement).
 
     The ``include_alt_lines`` / ``odd_ids`` / ``bookmaker_id`` knobs
-    below trim the response shape — they save bandwidth and DB write
-    time, NOT entity quota.
-
-    ``phase`` forwards to ``ingest_event`` — see its docstring for the
-    semantics of ``"all"`` / ``"lifecycle"`` / ``"odds"``.
+    below trim the SGO response shape; oddsapi adapter ignores them.
     """
     settings = get_settings()
     now = datetime.now(tz=timezone.utc)
@@ -284,7 +231,7 @@ async def ingest_league(
     bookmaker_id = settings.ingest_bookmaker_id or None
 
     logger.info(
-        "ingest_league %s: walking SGO events in window [%s, %s] "
+        "ingest_league %s: walking upstream events in window [%s, %s] "
         "(alt_lines=%s, odd_ids=%s, bookmaker=%s)",
         league.id, starts_after_iso, starts_before_iso,
         settings.ingest_include_alt_lines, odd_ids, bookmaker_id,
@@ -306,7 +253,7 @@ async def ingest_league(
         f" [{', '.join(filters_summary_parts)}]" if filters_summary_parts else ""
     )
     await set_progress(
-        f"{league.id} ({phase}): fetching events from SGO{filters_str}"
+        f"{league.id}: fetching events from upstream{filters_str}"
     )
 
     report = LeagueReport(league_id=league.id)
@@ -365,7 +312,6 @@ async def ingest_league(
             result = await ingest_event(
                 session, payload,
                 skip_if_new_terminal=settings.ingest_skip_new_terminal,
-                phase=phase,
             )
         except Exception:  # noqa: BLE001
             logger.exception("ingest failed for event=%s", payload.get("eventID"))
@@ -439,25 +385,17 @@ async def ingest_league(
 async def ingest_due_leagues(
     session: AsyncSession,
     client: SgoClient,
-    *,
-    phase: str = "all",
 ) -> list[LeagueReport]:
     """Walk every active League in the DB and ingest each one. Cadence-gating
     is intentionally omitted for v1 — the ARQ cron decides scheduling. Inside
     a single call, every active league is touched once.
-
-    ``phase`` forwards to ``ingest_league`` / ``ingest_event``. The default
-    ``"all"`` matches historical behavior (used by ``full_refresh`` and the
-    standalone ``ingest_due_leagues`` cron).
     """
     from sqlalchemy import select
 
     leagues = list(await session.scalars(
         select(League).where(League.active.is_(True))
     ))
-    await set_progress(
-        f"walking {len(leagues)} active league(s) [phase={phase}]"
-    )
+    await set_progress(f"walking {len(leagues)} active league(s)")
     reports: list[LeagueReport] = []
     for idx, league in enumerate(leagues, start=1):
         # Cooperative cancellation point — operator's Stop click takes
@@ -468,7 +406,7 @@ async def ingest_due_leagues(
             f"[{idx}/{len(leagues)}] starting {league.id}"
         )
         reports.append(
-            await ingest_league(session, league, client, phase=phase)
+            await ingest_league(session, league, client)
         )
         # Commit per-league so a cancellation (or a single league's
         # failure) doesn't roll back leagues we've already finished.

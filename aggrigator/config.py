@@ -152,36 +152,20 @@ class Settings(BaseSettings):
     # per league). Default "0" = hourly. Each tick fetches every event
     # in the configured window for every active league — and SGO bills
     # 1 entity per event. So a tighter cadence multiplies entity burn:
-    # "0,30" doubles it, "0,15,30,45" quadruples. Tune for your tier.
+    # "0,30" doubles request volume, "0,15,30,45" quadruples. Tune for
+    # your tier.
     #
-    # Free amateur tier (~2,500 entities/month) rough sizing:
-    #   3 leagues × ~10 events/walk × hourly = ~21,600/month  → too hot
-    #   3 leagues × ~10 events × every 6 hours = ~3,600/month → still hot
-    #   2 leagues × ~10 events × every 8 hours = ~1,800/month → fits
-    # Use "0" for hourly only on a paid tier.
-    #
-    # The split crons (``ingest_event_lifecycle`` / ``ingest_event_odds``)
-    # remain available for manual triggers but are NOT auto-scheduled —
-    # running both would double entity cost vs the combined walk.
+    # SGO free tier (~2,500 entities/month) rough sizing — the dominant
+    # cost on SGO. Use a sparse schedule (AGG_INGEST_CRON_HOURS=0,8,16):
+    #   3 leagues × ~10 events × every 8 hours ≈ 2,700 entities/month.
+    # oddsapi free tier (100 req/hr) — hourly is fine; cycle costs ~6-9 req.
     ingest_cron_minutes: str = Field(
         default="0", alias="AGG_INGEST_CRON_MINUTES",
     )
     # Hour filter for the auto cron. Empty (default) = every hour. Set
-    # to e.g. "0,6,12,18" to run only every 6 hours — useful on the free
-    # tier where the entity budget can't cover hourly walks. Combined with
-    # ``ingest_cron_minutes``, this drives the schedule arq sees.
+    # to e.g. "0,6,12,18" to run only every 6 hours.
     ingest_cron_hours: str = Field(
         default="", alias="AGG_INGEST_CRON_HOURS",
-    )
-    # Legacy knobs — kept so ``ingest_event_odds`` still respects them
-    # if an operator manually triggers it. NOT auto-scheduled (see
-    # ``ingest_cron_minutes`` above for the rationale).
-    odds_cron_hours: str = Field(
-        default="0,2,4,6,8,10,12,14,16,18,20,22",
-        alias="AGG_ODDS_CRON_HOURS",
-    )
-    odds_cron_minute: int = Field(
-        default=15, alias="AGG_ODDS_CRON_MINUTE",
     )
     # Optional weekday filter for full_refresh. Currently UNUSED —
     # full_refresh is manual-only on the auto schedule (it would
@@ -377,20 +361,6 @@ class Settings(BaseSettings):
         except ValueError:
             return None
         return parsed or None
-
-    @property
-    def odds_cron_hour_set(self) -> set[int]:
-        """Parsed AGG_ODDS_CRON_HOURS → set[int] for arq.cron(hour=...)."""
-        try:
-            parsed = {
-                int(p.strip())
-                for p in self.odds_cron_hours.split(",")
-                if p.strip()
-            }
-        except ValueError:
-            parsed = set()
-        # Sane fallback: every 2 hours.
-        return parsed or {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22}
 
     @property
     def full_refresh_weekday_set(self) -> set[int] | None:

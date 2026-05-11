@@ -1,5 +1,5 @@
-"""Ingest tasks — runnable both as ARQ jobs and as plain async functions
-(so tests can call them without a Redis dependency)."""
+"""Ingest task — runnable both as an ARQ job and as a plain async function
+(so tests can call it without a Redis dependency)."""
 
 from __future__ import annotations
 
@@ -46,16 +46,23 @@ def _build_client() -> SgoClient:
     )
 
 
-async def _run_ingest(phase: str, cron_name: str) -> dict[str, Any]:
-    """Common body for the three ingest phases. ``phase`` forwards to
-    ``ingest_due_leagues`` / ``ingest_event``; ``cron_name`` shows up in
-    the log lines so the deploy-log breadcrumbs match what's on /ops/crons.
+async def run_ingest_due_leagues() -> dict[str, Any]:
+    """Walk every active League once with the full pipeline (events +
+    markets + selections + bookmaker quotes + lifecycle + webhooks).
+
+    This is the auto-scheduled cron and also what ``full_refresh`` calls
+    after seeding. The lifecycle-only / odds-only split variants were
+    removed when the cron registry was trimmed — the combined walk is
+    always the cost-efficient default on both providers.
     """
-    logger.info("%s: starting", cron_name)
     settings = get_settings()
-    is_oddsapi = settings.odds_provider == "oddsapi" and settings.sgo_fixture_path is None
+    is_oddsapi = (
+        settings.odds_provider == "oddsapi"
+        and settings.sgo_fixture_path is None
+    )
     quota_label = "odds-api per-hour" if is_oddsapi else "SGO monthly"
-    await set_progress(f"{phase}: checking {quota_label} quota")
+    logger.info("ingest_due_leagues: starting")
+    await set_progress(f"checking {quota_label} quota")
     client = _build_client()
     if is_oddsapi:
         qs = oddsapi_quota_status(
@@ -68,48 +75,40 @@ async def _run_ingest(phase: str, cron_name: str) -> dict[str, Any]:
             reset_day=settings.sgo_quota_reset_day,
             pace_floor_pct=settings.sgo_quota_pace_floor_pct,
         )
-    # Surface the live numbers so operators can see "we're at 87% on
-    # entities" in the SSE log without grepping deploy logs or running
-    # scripts/check_quota.py. Emit each line separately so the log
-    # shows them stacked instead of as one long string.
+    # Surface each quota line as its own progress entry so /ops/crons
+    # shows the stack instead of one mega-string.
     for line in qs.summary_lines:
         await set_progress(line)
     if not settings.test_mode and qs.should_skip:
-        # Absolute guard tripped → already over threshold, can't run.
-        # Pace guard tripped → projected to overshoot by reset day,
-        # back off auto runs to leave headroom for manual ops.
         if is_oddsapi:
             reason = "oddsapi_per_hour_quota"
         else:
             reason = "sgo_monthly_quota" if qs.exhausted else "sgo_quota_pace"
         logger.warning(
-            "%s: skipped — quota guard tripped (reason=%s). "
-            "Bump AGG_SGO_QUOTA_THRESHOLD_PCT, AGG_SGO_QUOTA_PACE_FLOOR_PCT, "
-            "or wait for reset.",
-            cron_name, reason,
+            "ingest_due_leagues: skipped — quota guard tripped (reason=%s). "
+            "Bump the relevant threshold env var or wait for reset.",
+            reason,
         )
         await set_progress(
-            f"{phase}: SKIPPED — {qs.pace_reason if not qs.exhausted else 'absolute cap reached'}"
+            "SKIPPED — "
+            f"{qs.pace_reason if not qs.exhausted else 'absolute cap reached'}"
         )
         return {
             "skipped": True,
             "reason": reason,
-            "phase": phase,
             "pace_reason": qs.pace_reason,
         }
-    await set_progress(f"{phase}: walking active leagues")
+    await set_progress("walking active leagues")
     async with session_scope() as session:
-        reports = await ingest_due_leagues(session, client, phase=phase)
+        reports = await ingest_due_leagues(session, client)
     summary: dict[str, Any] = {
-        "phase": phase,
         "leagues_walked": len(reports),
         "events_processed": sum(r.events_processed for r in reports),
         "events_failed": sum(r.events_failed for r in reports),
     }
     # Provider-specific telemetry (best-practices.md §8). Lands in
     # cron_run.summary; surfaces in /ops/crons. p50/p95 are computed
-    # client-side from per-request durations so a slow upstream doesn't
-    # need a separate metric store.
+    # client-side from per-request durations.
     if is_oddsapi:
         durs = sorted(client.request_durations_ms)
         n = len(durs)
@@ -122,73 +121,20 @@ async def _run_ingest(phase: str, cron_name: str) -> dict[str, Any]:
             "oddsapi_ratelimit_limit": client.last_ratelimit_limit,
             "oddsapi_ratelimit_remaining_min": client.last_ratelimit_remaining,
         })
-    logger.info("%s: complete %s", cron_name, summary)
+    logger.info("ingest_due_leagues: complete %s", summary)
     return summary
 
 
-async def run_ingest_due_leagues() -> dict[str, Any]:
-    """Walk every active League once with the FULL pipeline (events +
-    markets + selections + bookmaker quotes + lifecycle + webhooks).
-
-    Used by ``full_refresh`` and the standalone scheduled cron. Heavy —
-    if the per-league walk is consistently slow, prefer running
-    ``ingest_event_lifecycle`` frequently and ``ingest_event_odds``
-    less often (cheaper per run, same total work).
-    """
-    return await _run_ingest("all", "ingest_due_leagues")
-
-
-async def run_ingest_lifecycle_only() -> dict[str, Any]:
-    """Lightweight variant: event row + status + settle + webhooks.
-
-    Skips the bookmaker-quote upserts (the dominant per-event cost). Use
-    when you need score / lifecycle freshness without per-bookmaker price
-    refreshes (e.g. live game tracking).
-    """
-    return await _run_ingest("lifecycle", "ingest_event_lifecycle")
-
-
-async def run_ingest_odds_only() -> dict[str, Any]:
-    """Counterpart to lifecycle: refreshes markets + per-bookmaker prices
-    on events that already exist in our DB.
-
-    New events not yet in the DB are skipped — run lifecycle (or a full
-    ingest) first to create their rows. No webhooks fire from this
-    phase; transitions happen exclusively in the lifecycle pass.
-    """
-    return await _run_ingest("odds", "ingest_event_odds")
-
-
-# ---- ARQ entry points ------------------------------------------------------
+# ---- ARQ entry point -------------------------------------------------------
 
 
 async def ingest_due_leagues_task(ctx: dict) -> dict:
     """ARQ-callable wrapper. Wrapped by ``cron_run_recorder`` so every
-    scheduled run lands in the ``cron_run`` table (plan §2.1.4)."""
+    scheduled run lands in the ``cron_run`` table."""
     from aggrigator.ops.recorder import cron_run_recorder
 
     @cron_run_recorder("ingest_due_leagues")
     async def _runner(ctx_):
         return await run_ingest_due_leagues()
-
-    return await _runner(ctx)
-
-
-async def ingest_lifecycle_only_task(ctx: dict) -> dict:
-    from aggrigator.ops.recorder import cron_run_recorder
-
-    @cron_run_recorder("ingest_event_lifecycle")
-    async def _runner(ctx_):
-        return await run_ingest_lifecycle_only()
-
-    return await _runner(ctx)
-
-
-async def ingest_odds_only_task(ctx: dict) -> dict:
-    from aggrigator.ops.recorder import cron_run_recorder
-
-    @cron_run_recorder("ingest_event_odds")
-    async def _runner(ctx_):
-        return await run_ingest_odds_only()
 
     return await _runner(ctx)

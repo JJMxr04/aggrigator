@@ -13,10 +13,7 @@ billed every event twice per cycle. Tune cadence via
 Manual-only (still callable via ``/ops/crons`` and as ad-hoc enqueue
 targets, but NOT on the auto schedule):
 
-- ``full_refresh`` — pure duplication of seed_* + ingest_due_leagues now
-  that ingest is hourly. Useful for one-shot post-deploy population.
-- ``ingest_event_lifecycle`` / ``ingest_event_odds`` — splitting these
-  doubles SGO entity cost vs the combined ``ingest_due_leagues``.
+- ``full_refresh`` — one-shot seed + ingest, used after a fresh deploy.
 - ``webhook_deliver`` — push-driven, no schedule. The orchestrator +
   watchdog enqueue this task right after they commit new delivery
   rows, and failed deliveries re-enqueue themselves with
@@ -36,11 +33,7 @@ from arq.cron import cron
 from aggrigator.config import get_settings
 from aggrigator.observability.logging import configure_logging
 from aggrigator.workers.tasks.full_refresh import full_refresh_task
-from aggrigator.workers.tasks.ingest import (
-    ingest_due_leagues_task,
-    ingest_lifecycle_only_task,
-    ingest_odds_only_task,
-)
+from aggrigator.workers.tasks.ingest import ingest_due_leagues_task
 from aggrigator.workers.tasks.seed import seed_leagues_task, seed_sports_task
 from aggrigator.workers.tasks.settle import settle_pending_task
 from aggrigator.workers.tasks.vacuum import vacuum_old_events_task
@@ -80,13 +73,9 @@ def _build_cron_jobs() -> list:
     #                                          AGG_VACUUM_DAYS
     #
     # Removed from auto schedule (still callable manually via /ops/crons):
-    #   full_refresh        — pure duplication of seed_* + ingest_due_leagues now
-    #                          that ingest is hourly. ~1 walk's worth of entities
-    #                          per fire, no added value. Trigger manually after
-    #                          a fresh deploy if you want to populate everything
-    #                          immediately.
-    #   ingest_event_lifecycle / ingest_event_odds — splitting these doubles SGO
-    #                          entity cost vs the combined ingest_due_leagues.
+    #   full_refresh        — one-shot seed + ingest, used after a fresh deploy.
+    #                          Manual only because the hourly cron reaches the
+    #                          same steady state within an hour anyway.
     #   webhook_deliver     — push-driven (see module docstring + webhooks/notify).
     #                          The orchestrator/watchdog enqueue it on commit
     #                          and failed deliveries re-enqueue themselves with
@@ -201,8 +190,6 @@ class WorkerSettings:
     functions = [
         full_refresh_task,
         ingest_due_leagues_task,
-        ingest_lifecycle_only_task,
-        ingest_odds_only_task,
         webhook_deliver_task,
         settle_pending_task,
         seed_sports_task,
