@@ -29,7 +29,7 @@ from aggrigator.ingest.upserts import (
     upsert_event_from_spec,
     upsert_team_from_spec,
 )
-from aggrigator.models import Event, League
+from aggrigator.models import Event, League, Sport
 from aggrigator.ops.progress import raise_if_cancelled, set_progress
 from aggrigator.webhooks.enqueue import enqueue_for_event
 from aggrigator.webhooks.notify import notify_webhook_worker
@@ -386,16 +386,26 @@ async def ingest_due_leagues(
     session: AsyncSession,
     client: SgoClient,
 ) -> list[LeagueReport]:
-    """Walk every active League in the DB and ingest each one. Cadence-gating
-    is intentionally omitted for v1 — the ARQ cron decides scheduling. Inside
-    a single call, every active league is touched once.
+    """Walk every active League whose parent Sport is also active and
+    ingest each one.
+
+    The two-level gate (``League.active`` AND ``Sport.active``) lets an
+    operator disable an entire sport in one click without flipping every
+    child league individually. Cadence-gating is intentionally omitted
+    for v1 — the ARQ cron decides scheduling. Inside a single call, every
+    qualifying league is touched once.
     """
     from sqlalchemy import select
 
     leagues = list(await session.scalars(
-        select(League).where(League.active.is_(True))
+        select(League)
+        .join(Sport, League.sport_id == Sport.id)
+        .where(League.active.is_(True), Sport.active.is_(True))
     ))
-    await set_progress(f"walking {len(leagues)} active league(s)")
+    await set_progress(
+        f"walking {len(leagues)} league(s) "
+        f"(active league AND active sport)"
+    )
     reports: list[LeagueReport] = []
     for idx, league in enumerate(leagues, start=1):
         # Cooperative cancellation point — operator's Stop click takes

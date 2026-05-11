@@ -96,11 +96,14 @@ REGISTRY: list[CronSpec] = [
     CronSpec(
         name="seed_leagues",
         description=(
-            "Upsert the league list across all sports. Runs daily so newly-"
-            "added leagues become walkable on the next ingest tick. "
-            "On odds-api.io, only leagues with a mapping in "
-            "SGO_TO_ODDSAPI_LEAGUE are persisted — unmapped slugs are "
-            "logged and skipped."
+            "Upsert leagues whose parent Sport is ``active=True`` in the "
+            "DB. Sports default to inactive — flip one on in SQLAdmin and "
+            "re-run this to bring its leagues in (new leagues default to "
+            "``active=True``; ingest then requires active league AND "
+            "active sport). Runs daily so newly-added leagues land in "
+            "time for the next ingest tick. On odds-api.io, only leagues "
+            "with a mapping in SGO_TO_ODDSAPI_LEAGUE are persisted — "
+            "unmapped slugs are logged and skipped."
         ),
         schedule_human="daily @ 02:00 UTC",
         runner=run_seed_leagues,
@@ -110,11 +113,13 @@ REGISTRY: list[CronSpec] = [
         name="ingest_due_leagues",
         description=(
             "The combined walk: events + markets + per-bookmaker quotes + "
-            "lifecycle + webhooks for every active league. One upstream "
-            "call per league plus batched /odds/multi (oddsapi) or embedded "
-            "odds (SGO). Provider-aware quota check runs first and skips "
-            "the cycle if the threshold is tripped. Cadence tunable via "
-            "AGG_INGEST_CRON_MINUTES / AGG_INGEST_CRON_HOURS."
+            "lifecycle + webhooks for every active league whose parent "
+            "sport is also active (League.active AND Sport.active). One "
+            "upstream call per league plus batched /odds/multi (oddsapi) "
+            "or embedded odds (SGO). Provider-aware quota check runs "
+            "first and skips the cycle if the threshold is tripped. "
+            "Cadence tunable via AGG_INGEST_CRON_MINUTES / "
+            "AGG_INGEST_CRON_HOURS."
         ),
         schedule_human=_format_ingest_schedule(),
         runner=run_ingest_due_leagues,

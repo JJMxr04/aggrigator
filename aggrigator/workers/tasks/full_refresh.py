@@ -1,14 +1,20 @@
-"""Composite task — seed sports + leagues, then ingest events for every active
-league. The natural "one button gives me everything" entry point.
+"""Composite task — seed sports + leagues, then ingest events for every
+league whose League AND Sport are both active. The natural "one button
+gives me everything" entry point.
 
 When the operator clicks "Refresh all" (or the cron fires), this:
 
-1. Pulls sports + leagues from SGO, upserts them. New rows default to
-   ``active=True`` (per ``upsert_sport_from_sgo`` / ``upsert_league_from_sgo``)
-   so the freshly-seeded leagues are immediately walkable.
-2. Walks every active league once and ingests events + markets + selections
-   + per-bookmaker quotes. Lifecycle transitions enqueue webhook deliveries
-   automatically (orchestrator handles that — plan §3).
+1. Pulls sports + leagues from the upstream provider and upserts them.
+   New Sport rows default to ``active=False`` (operator gate); new
+   League rows default to ``active=True`` but are filtered at seed
+   time to those whose parent Sport is already active. On a fresh DB
+   with no enabled sports, this step inserts the sports inactive and
+   inserts zero leagues until an operator flips a sport on and
+   re-runs.
+2. Walks every league where ``League.active AND Sport.active`` and
+   ingests events + markets + selections + per-bookmaker quotes.
+   Lifecycle transitions enqueue webhook deliveries automatically
+   (orchestrator handles that — plan §3).
 
 Returns a combined summary so the cron-run row records both halves.
 

@@ -70,17 +70,17 @@ async def upsert_league_from_sgo(session: AsyncSession, payload: dict) -> League
             sport_id=sport.id,
             name=payload.get("name") or league_id,
             short_name=(payload.get("shortName") or "")[:48],
-            active=False,
+            active=True,
         )
         session.add(row)
     else:
         row.sport_id = sport.id
         row.name = payload.get("name") or league_id
         row.short_name = (payload.get("shortName") or "")[:48]
-        # Re-seed preserves operator choices: see ``upsert_sport_from_sgo``.
-        # ``ingest_due_leagues`` walks ``active=True`` leagues only, so a
-        # fresh DB walks zero leagues until the operator turns something
-        # on; that decision then sticks across daily seeds.
+        # Re-seed preserves operator choices: a league an operator flipped
+        # off stays off across daily seeds. New leagues land active=True
+        # but are still gated by their parent Sport's ``active`` flag —
+        # ``ingest_due_leagues`` requires both.
     return row
 
 
