@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aggrigator.db import session_scope
 from aggrigator.models import CronRun, CronRunSource, CronRunStatus, User
 from aggrigator.ops import lock as lock_module
-from aggrigator.ops.progress import ProgressUpdate, get_progress
 from aggrigator.ops.recorder import run_with_recording
 from aggrigator.ops.registry import CronSpec, REGISTRY, by_name
 
@@ -68,12 +67,8 @@ class CronListItem:
     schedule_human: str
     last_run: CronRunOut | None
     is_running: bool
-    # Live status, populated only when ``is_running=True``. Both come from
-    # outside the ``cron_run`` row: ``progress_messages`` is the backlog
-    # read from Redis (oldest-first), ``elapsed_seconds`` is computed at
-    # render time. The template seeds the SSE log with these and then
-    # appends new ones live as they arrive on the channel.
-    progress_messages: list[ProgressUpdate] = field(default_factory=list)
+    # Computed at render time when is_running=True so the card shows
+    # how long the in-flight run has been going.
     elapsed_seconds: float | None = None
     run_id: int | None = None
 
@@ -118,18 +113,13 @@ class CronService:
     async def _build_list_item(
         self, spec: CronSpec, row: CronRun | None, email: str | None,
     ) -> CronListItem:
-        """Compose the UI item — for running rows, fold in live progress
-        message (from Redis) and elapsed-time (computed) so the cron card
-        shows real-time signal instead of a static "running" pill."""
         is_running = row is not None and row.status == CronRunStatus.RUNNING
-        progress_messages: list[ProgressUpdate] = []
         elapsed_seconds: float | None = None
         run_id: int | None = None
         if is_running and row is not None:
             elapsed_seconds = (
                 datetime.now(tz=row.started_at.tzinfo) - row.started_at
             ).total_seconds()
-            progress_messages = await get_progress(row.id)
             run_id = row.id
         return CronListItem(
             name=spec.name,
@@ -137,7 +127,6 @@ class CronService:
             schedule_human=spec.schedule_human,
             last_run=CronRunOut.from_row(row, email) if row else None,
             is_running=is_running,
-            progress_messages=progress_messages,
             elapsed_seconds=elapsed_seconds,
             run_id=run_id,
         )

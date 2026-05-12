@@ -1,7 +1,6 @@
 {% set lr = item.last_run %}
 <article id="cron-row-{{ item.name }}"
-         class="cron-card {% if item.is_running %}is-running{% endif %}"
-         {% if item.is_running %}hx-get="/ops/crons/{{ item.name }}/row" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+         class="cron-card {% if item.is_running %}is-running{% endif %}">
 
   <header class="cron-head">
     <div>
@@ -17,42 +16,9 @@
         <span class="run-live__spinner" aria-hidden="true">⏳</span>
         <span class="run-live__elapsed">
           running {% if item.elapsed_seconds is not none %}{{ '%.0f' % item.elapsed_seconds }}s{% endif %}
+          — check worker logs for live detail
         </span>
       </div>
-      {#-
-        SSE-driven progress log, newest-first. ``hx-preserve`` keeps this
-        DOM node alive across the parent row's 2s outerHTML swap so the
-        EventSource connection isn't torn down and re-opened every tick
-        (which would drop in-flight messages).
-
-        The seed ``<div>`` rows below are the backlog at page-load time
-        — rendered in REVERSE so the most recent message sits at the top.
-        New updates arrive over SSE and get prepended via
-        ``hx-swap="afterbegin"`` so the latest line is always the first
-        thing the operator's eye lands on (no scrolling needed for a
-        live read). When the run completes the server publishes a
-        ``__complete__`` sentinel which the SSE endpoint translates to
-        a ``stream-end`` event — that closes the EventSource cleanly
-        and the next 2s row poll re-renders the row in its non-running
-        state.
-      -#}
-      {% if item.run_id is not none %}
-      <div id="run-live-log-{{ item.name }}"
-           class="run-live__log"
-           hx-preserve="true"
-           hx-ext="sse"
-           sse-connect="/ops/crons/{{ item.name }}/progress/stream"
-           sse-swap="message"
-           sse-close="stream-end"
-           hx-swap="afterbegin">
-        {% for upd in item.progress_messages | reverse %}
-          <div class="run-live__line">
-            <span class="run-live__ts">{{ upd.ts.split('T')[1][:8] if 'T' in upd.ts else upd.ts }}</span>
-            <span class="run-live__msg">{{ upd.message }}</span>
-          </div>
-        {% endfor %}
-      </div>
-      {% endif %}
     </div>
   {% endif %}
 
@@ -91,16 +57,7 @@
   {% endif %}
 
   <div style="display:flex; align-items:center; justify-content:space-between; gap:.75rem;">
-    {#-
-      hx-preserve keeps this element (and its children) intact across the
-      2s outerHTML polls that fire while the cron is running. Without it
-      every poll wipes the open ``<details>`` panel and forces the user
-      to re-click "Show last 25 runs". Stable ``id`` is required by HTMX
-      for preservation to work.
-    -#}
-    <details class="disclosure"
-             id="history-{{ item.name }}"
-             hx-preserve="true">
+    <details class="disclosure" id="history-{{ item.name }}">
       <summary>Show last 25 runs</summary>
       <div class="history-panel"
            hx-get="/ops/crons/{{ item.name }}/history"
@@ -111,16 +68,12 @@
     </details>
 
     <div style="display:flex; gap:.5rem;">
-      {% if item.is_running %}
-        <button class="btn btn--danger"
-                hx-post="/ops/crons/{{ item.name }}/cancel"
-                hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'
-                hx-target="#cron-row-{{ item.name }}"
-                hx-swap="outerHTML"
-                hx-confirm="Stop this cron run? Already-completed work is preserved.">
-          Stop
-        </button>
-      {% endif %}
+      <button class="btn"
+              hx-get="/ops/crons/{{ item.name }}/row"
+              hx-target="#cron-row-{{ item.name }}"
+              hx-swap="outerHTML">
+        Refresh
+      </button>
       <button class="btn btn--primary"
               {% if item.is_running %}disabled{% endif %}
               hx-post="/ops/crons/{{ item.name }}/run"

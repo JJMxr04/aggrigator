@@ -1,4 +1,4 @@
-"""structlog configuration + cron-progress forwarding."""
+"""structlog configuration."""
 
 from __future__ import annotations
 
@@ -6,10 +6,6 @@ import logging
 import sys
 
 import structlog
-
-from aggrigator.observability.progress_log_handler import (
-    install_progress_forwarding,
-)
 
 
 def configure_logging(level: str = "INFO") -> None:
@@ -32,8 +28,3 @@ def configure_logging(level: str = "INFO") -> None:
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
         cache_logger_on_first_use=True,
     )
-    # Mirror ingest / worker logs into the cron progress stream so the
-    # /ops/crons SSE log surfaces the same lines the worker prints.
-    # No-op outside a cron run context — API-side request logs stay in
-    # their own terminal as before.
-    install_progress_forwarding(level=log_level)

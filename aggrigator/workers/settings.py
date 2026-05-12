@@ -25,6 +25,7 @@ targets, but NOT on the auto schedule):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from arq.connections import RedisSettings
@@ -148,19 +149,25 @@ def _build_cron_jobs() -> list:
     ]
 
 
+_LIVENESS_INTERVAL_SECONDS = 600  # 10-minute stdout "alive" log
+
+
+async def _log_liveness_forever() -> None:
+    while True:
+        await asyncio.sleep(_LIVENESS_INTERVAL_SECONDS)
+        logger.info("[arq-worker] alive")
+
+
 async def _on_startup(ctx: dict) -> None:
     """Loud boot banner — one block, easy to grep in Railway logs.
 
-    Prints the registered cron schedule + Redis target + heartbeat
-    cadence so an operator can confirm at a glance that the worker
-    booted with the schedule it was supposed to. Pairs with the
-    Worker status banner on /ops/crons (which reads the heartbeat
-    key written by ``record_health``).
+    Prints the registered cron schedule + Redis target so an operator
+    can confirm at a glance that the worker booted with the schedule
+    it was supposed to. Also kicks off a background task that logs
+    "alive" every 10 minutes so absence in the log stream is the
+    liveness signal (no Redis writes involved).
     """
     s = get_settings()
-    # Match the API's logging config — same formatter, same level, plus
-    # the progress-forward handler so logs from the ingest pipeline
-    # surface in /ops/crons via SSE.
     configure_logging(s.log_level)
     lines = [
         "=" * 64,
@@ -170,15 +177,14 @@ async def _on_startup(ctx: dict) -> None:
         lines.append(f"  - {job.name:<22}  {_cron_human(job)}")
     lines.append(
         f"[arq-worker] redis={_redacted(s.redis_url)}  "
-        f"queue=arq:queue  heartbeat_every={WorkerSettings.health_check_interval}s"
-    )
-    lines.append(
-        "[arq-worker] heartbeat key: arq:queue:health-check "
-        "(read by /ops/crons banner + /v1/admin/crons/worker-status)"
+        f"queue=arq:queue  liveness_log_every={_LIVENESS_INTERVAL_SECONDS}s"
     )
     lines.append("=" * 64)
     for line in lines:
         logger.info(line)
+    # Fire-and-forget — the task lives for the worker's lifetime; arq
+    # cancels it when the event loop shuts down.
+    asyncio.create_task(_log_liveness_forever())
 
 
 def _cron_human(job) -> str:
@@ -227,11 +233,16 @@ class WorkerSettings:
     keep_result = 3600  # one hour of job results visible in Redis
     max_jobs = 10
 
-    # Heartbeat cadence — arq's default is 3600s (one hour), which is
-    # useless for a live "is the worker alive?" dashboard. 30s gives the
-    # /ops/crons banner sub-minute fidelity. The key TTL arq sets is
-    # (interval+1)*1000ms, so the key disappears within ~31s of the
-    # worker dying — that's our "OFFLINE" signal.
-    health_check_interval = 30
+    # Redis cadence knobs — kept low to stay under our monthly command
+    # budget. Liveness is read from container logs (see
+    # ``_log_liveness_forever``), not from a Redis heartbeat key, so
+    # health_check_interval is bumped to once every 10 min — arq still
+    # uses it internally but it's effectively a no-op for our dashboard.
+    health_check_interval = 600
+
+    # Job-queue poll cadence. Default is 0.5s (~7k cmds/hr per worker
+    # even when idle). webhook_deliver_task is the only ad-hoc-enqueued
+    # job; a few seconds of pickup latency is fine for webhook delivery.
+    poll_delay = 5
 
     on_startup = _on_startup

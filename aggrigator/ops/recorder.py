@@ -29,13 +29,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aggrigator.db import session_scope
 from aggrigator.ingest.odds_api_errors import RateLimitExceededError
 from aggrigator.models import CronRun, CronRunSource, CronRunStatus
-from aggrigator.ops.progress import (
-    CronCancelled,
-    clear_cancel,
-    clear_progress,
-    current_run_id,
-    publish_complete,
-)
 from aggrigator.ops.registry import CronSpec, by_name
 
 logger = logging.getLogger(__name__)
@@ -48,8 +41,8 @@ ERROR_TRUNCATE_CHARS = 4000
 #
 # - asyncio.TimeoutError: arq's job_timeout fired or upstream stalled.
 # - RateLimitExceededError: per-hour bucket exhausted; defers past reset.
-# - redis.RedisError + ConnectionError: transient infra hiccup; the
-#   recorder + progress writer both touch Redis on the hot path.
+# - redis.RedisError + ConnectionError: transient infra hiccup on the
+#   arq queue / lock path.
 RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
     asyncio.TimeoutError,
     RateLimitExceededError,
@@ -91,18 +84,12 @@ async def close_run(
 ) -> None:
     row.finished_at = datetime.now(tz=timezone.utc)
     if error is not None:
-        if isinstance(error, CronCancelled):
-            # Operator clicked Stop. Distinct status, no traceback —
-            # cancellation isn't an error condition.
-            row.status = CronRunStatus.CANCELLED
-            row.error = str(error)[:ERROR_TRUNCATE_CHARS]
-        else:
-            row.status = CronRunStatus.FAILED
-            # truncate at write time (plan §2.1.8)
-            row.error = (
-                f"{type(error).__name__}: {error}\n\n"
-                + "".join(traceback.format_exception(error))
-            )[:ERROR_TRUNCATE_CHARS]
+        row.status = CronRunStatus.FAILED
+        # truncate at write time (plan §2.1.8)
+        row.error = (
+            f"{type(error).__name__}: {error}\n\n"
+            + "".join(traceback.format_exception(error))
+        )[:ERROR_TRUNCATE_CHARS]
     else:
         row.status = CronRunStatus.SUCCESS
         row.summary = summary
@@ -142,27 +129,10 @@ async def run_with_recording(
         await session.commit()
         run_id = row.id
 
-    # Make run_id ambient so ``ops.progress.set_progress`` calls inside
-    # the runner know where to write. Reset on the way out so progress
-    # writes from outside a cron context (manual shell, tests) are no-ops.
-    progress_token = current_run_id.set(run_id)
     try:
         summary = await spec.runner()
     except BaseException as exc:  # noqa: BLE001 — we re-raise after recording
         error = exc
-    finally:
-        current_run_id.reset(progress_token)
-        # Tell live SSE subscribers the stream is done so their
-        # EventSource closes cleanly. Publish *before* clearing the
-        # backlog so any client currently reading the channel gets
-        # the sentinel — a deleted key with no publisher would just
-        # leave the connection hanging until the proxy timed it out.
-        await publish_complete(run_id)
-        # Best-effort cleanup. TTL on both keys would handle this
-        # eventually, but the UI re-renders within 2s and we want
-        # subsequent runs to have a clean slate.
-        await clear_progress(run_id)
-        await clear_cancel(run_id)
 
     async with session_scope() as session:
         row = await session.get(CronRun, run_id)

@@ -15,7 +15,6 @@ from aggrigator.ingest.orchestrator import ingest_due_leagues
 from aggrigator.ingest.quota import quota_status as sgo_quota_status
 from aggrigator.ingest.sgo_http import SgoHttpClient
 from aggrigator.ingest.sgo_simulator import FixtureSgoClient
-from aggrigator.ops.progress import set_progress
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +67,7 @@ async def run_ingest_due_leagues(
         and settings.sgo_fixture_path is None
     )
     quota_label = "odds-api per-hour" if is_oddsapi else "SGO monthly"
-    logger.info("ingest_due_leagues: starting")
-    await set_progress(f"checking {quota_label} quota")
+    logger.info("ingest_due_leagues: starting — checking %s quota", quota_label)
     client = _build_client()
     if is_oddsapi:
         qs = oddsapi_quota_status(
@@ -82,23 +80,18 @@ async def run_ingest_due_leagues(
             reset_day=settings.sgo_quota_reset_day,
             pace_floor_pct=settings.sgo_quota_pace_floor_pct,
         )
-    # Surface each quota line as its own progress entry so /ops/crons
-    # shows the stack instead of one mega-string.
     for line in qs.summary_lines:
-        await set_progress(line)
+        logger.info("ingest_due_leagues: quota — %s", line)
     if not settings.test_mode and qs.should_skip:
         if is_oddsapi:
             reason = "oddsapi_per_hour_quota"
         else:
             reason = "sgo_monthly_quota" if qs.exhausted else "sgo_quota_pace"
         logger.warning(
-            "ingest_due_leagues: skipped — quota guard tripped (reason=%s). "
+            "ingest_due_leagues: SKIPPED — quota guard tripped (reason=%s, %s). "
             "Bump the relevant threshold env var or wait for reset.",
             reason,
-        )
-        await set_progress(
-            "SKIPPED — "
-            f"{qs.pace_reason if not qs.exhausted else 'absolute cap reached'}"
+            qs.pace_reason if not qs.exhausted else "absolute cap reached",
         )
         return {
             "skipped": True,
@@ -106,7 +99,7 @@ async def run_ingest_due_leagues(
             "pace_reason": qs.pace_reason,
         }
     mode = "discovery" if discover_new_events else "refresh-only"
-    await set_progress(f"walking active leagues ({mode})")
+    logger.info("ingest_due_leagues: walking active leagues (%s)", mode)
     async with session_scope() as session:
         reports = await ingest_due_leagues(
             session, client,

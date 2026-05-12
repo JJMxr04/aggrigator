@@ -15,7 +15,6 @@ from typing import Any
 from aggrigator.config import get_settings
 from aggrigator.db import session_scope
 from aggrigator.ingest.watchdog import run_watchdog
-from aggrigator.ops.progress import set_progress
 from aggrigator.webhooks.notify import notify_webhook_worker
 
 logger = logging.getLogger(__name__)
@@ -31,12 +30,12 @@ async def run_lifecycle_watchdog() -> dict[str, Any]:
         if settings.odds_provider == "oddsapi"
         else 0
     )
-    await set_progress(
-        f"watchdog: scanning (stale>{settings.lifecycle_stale_grace_hours}h, "
-        f"auto_void>{settings.lifecycle_auto_void_hours}h"
-        + (" — DISABLED" if settings.lifecycle_auto_void_hours == 0 else "")
-        + (f", disappeared>{disappeared_void_hours}h" if disappeared_void_hours > 0 else "")
-        + ")"
+    logger.info(
+        "watchdog: scanning (stale>%dh, auto_void>%dh%s%s)",
+        settings.lifecycle_stale_grace_hours,
+        settings.lifecycle_auto_void_hours,
+        " — DISABLED" if settings.lifecycle_auto_void_hours == 0 else "",
+        f", disappeared>{disappeared_void_hours}h" if disappeared_void_hours > 0 else "",
     )
     async with session_scope() as session:
         report = await run_watchdog(
@@ -50,11 +49,6 @@ async def run_lifecycle_watchdog() -> dict[str, Any]:
     if report.deliveries_enqueued > 0:
         await notify_webhook_worker()
 
-    await set_progress(
-        f"watchdog: {report.stale_count} stale, {report.voided_count} voided, "
-        f"{report.selections_voided} selections → VOID, "
-        f"{report.deliveries_enqueued} webhook(s) enqueued"
-    )
     summary = {
         "stale_count": report.stale_count,
         "stale_event_ids": report.stale_event_ids,

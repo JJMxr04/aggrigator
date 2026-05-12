@@ -11,8 +11,7 @@ If any check fails:
   re-authenticates).
 
 The HTML page builds on top of the JSON API at ``/v1/admin/crons/*`` — no
-business logic in the templates; service-layer calls only. Replaces v0
-``api/ops_console.py`` (plan §2.1.10).
+business logic in the templates; service-layer calls only.
 """
 
 from __future__ import annotations
@@ -23,9 +22,8 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from markupsafe import escape
 from redis.asyncio import Redis
 
 from aggrigator.config import get_settings
@@ -36,13 +34,7 @@ from aggrigator.ops.data_reset import (
     list_table_info,
     truncate_table,
 )
-from aggrigator.ops.progress import (
-    ProgressUpdate,
-    request_cancel,
-    subscribe_progress,
-)
 from aggrigator.ops.service import CronService, LockUnavailable, TriggerRejected
-from aggrigator.ops.worker_status import get_worker_status
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +55,6 @@ def _redis() -> Redis:
 async def crons_page(request: Request):
     user = await _admin_from_session(request)
     if user is None:
-        # Bounce to SQLAdmin login. After login, SQLAdmin's "next" handling
-        # will return them here. Status 303 (see-other) is the right verb
-        # for a GET that turns into a different GET — also avoids browser
-        # cache hits if the user previously viewed the page as admin.
         return RedirectResponse(
             url=f"/admin/login?next={request.url.path}",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -77,7 +65,6 @@ async def crons_page(request: Request):
         try:
             svc = CronService(session, redis)
             items = await svc.list_crons()
-            worker_status = await get_worker_status(redis)
         finally:
             await redis.aclose()
 
@@ -88,30 +75,7 @@ async def crons_page(request: Request):
             "items": items,
             "actor_email": user.email,
             "csrf_token": _csrf_token(request),
-            "worker_status": worker_status,
         },
-    )
-
-
-@router.get("/crons/worker-status", response_class=HTMLResponse)
-async def worker_status_partial(request: Request) -> HTMLResponse:
-    """HTMX poll target — returns just the worker-status banner.
-
-    The /ops/crons page polls this every 10s so the operator sees the
-    worker flip from online → offline within seconds of a deploy /
-    crash, without reloading the whole grid.
-    """
-    user = await _admin_from_session(request)
-    if user is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
-    redis = _redis()
-    try:
-        worker_status = await get_worker_status(redis)
-    finally:
-        await redis.aclose()
-    return templates.TemplateResponse(
-        request, "_worker_status.html",
-        {"worker_status": worker_status},
     )
 
 
@@ -120,7 +84,7 @@ async def worker_status_partial(request: Request) -> HTMLResponse:
 
 @router.get("/crons/{name}/row", response_class=HTMLResponse)
 async def cron_row(request: Request, name: str) -> HTMLResponse:
-    """Single row partial — HTMX polls this every 2s while a run is in flight."""
+    """Single row partial — used by manual refresh after a Run-now click."""
     user = await _admin_from_session(request)
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED)
@@ -138,120 +102,6 @@ async def cron_row(request: Request, name: str) -> HTMLResponse:
         request, "_cron_row.html",
         {"item": item, "csrf_token": _csrf_token(request)},
     )
-
-
-@router.get("/crons/{name}/progress/stream")
-async def progress_stream(request: Request, name: str) -> StreamingResponse:
-    """Server-Sent Events stream of live progress updates for a cron run.
-
-    The browser opens this once per running row (via HTMX SSE extension on
-    ``#run-live-log-{name}``). For the lifetime of the connection we:
-
-    1. Look up the in-flight ``cron_run`` for ``name``. No row → 404.
-    2. Subscribe to the per-run pub/sub channel
-       (``aggrigator:cronprogress:<run_id>:ch``).
-    3. Forward each ``set_progress`` write as a ``message`` SSE event
-       containing the rendered ``<div class="run-live__line">`` HTML
-       (HTMX appends with ``hx-swap="beforeend"``).
-    4. When the recorder publishes the ``__complete__`` sentinel, emit a
-       ``stream-end`` event — HTMX SSE's ``sse-close`` directive closes
-       the EventSource on that event name. The next 2s row poll will
-       re-render the row in its non-running state.
-
-    Disconnects (operator closes the tab, browser sleeps): the
-    ``request.is_disconnected()`` poll inside the loop terminates the
-    generator; the ``finally`` in ``subscribe_progress`` unsubscribes
-    and closes the Redis connection.
-    """
-    user = await _admin_from_session(request)
-    if user is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
-
-    async with async_session_factory() as session:
-        redis = _redis()
-        try:
-            svc = CronService(session, redis)
-            item = await svc.get_cron(name)
-        finally:
-            await redis.aclose()
-    if item is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND)
-    if not item.is_running or item.run_id is None:
-        # Run already finished by the time the SSE connect attempt
-        # arrived. Send the close event immediately so the client
-        # tears down its EventSource.
-        async def _empty():
-            yield "event: stream-end\ndata: done\n\n"
-        return StreamingResponse(
-            _empty(),
-            media_type="text/event-stream",
-            headers=_SSE_HEADERS,
-        )
-
-    run_id = item.run_id
-
-    async def _event_stream():
-        # We deliberately do NOT replay the backlog here — the initial
-        # row render already injected those <div> lines as DOM children
-        # of the SSE container, and ``hx-preserve`` keeps them in place
-        # across row swaps. Replaying would duplicate them.
-        async for upd in subscribe_progress(run_id):
-            if await request.is_disconnected():
-                return
-            if upd is None:
-                # COMPLETE_SENTINEL — recorder finished, tell the
-                # browser to close its EventSource.
-                yield "event: stream-end\ndata: done\n\n"
-                return
-            yield _sse_message(_render_log_line(upd))
-
-    return StreamingResponse(
-        _event_stream(),
-        media_type="text/event-stream",
-        headers=_SSE_HEADERS,
-    )
-
-
-_SSE_HEADERS = {
-    "Cache-Control": "no-cache, no-transform",
-    # Disable proxy buffering — Nginx/Cloudflare/Railway-edge will hold
-    # the response until the buffer fills otherwise, which defeats the
-    # whole "real-time" point.
-    "X-Accel-Buffering": "no",
-    "Connection": "keep-alive",
-}
-
-
-def _render_log_line(upd: ProgressUpdate) -> str:
-    """Render one ProgressUpdate as the HTML chunk the SSE swap appends.
-
-    Mirror of the Jinja loop in ``_cron_row.html`` — kept here as a tiny
-    string template so the SSE endpoint doesn't have to load a Jinja
-    environment per message. Both must stay in sync; if you change the
-    line markup in the template, change it here too.
-    """
-    ts = upd.ts
-    if "T" in ts:
-        ts = ts.split("T", 1)[1][:8]
-    return (
-        f'<div class="run-live__line">'
-        f'<span class="run-live__ts">{escape(ts)}</span>'
-        f'<span class="run-live__msg">{escape(upd.message)}</span>'
-        f"</div>"
-    )
-
-
-def _sse_message(html: str) -> str:
-    """Pack one HTML chunk as an SSE ``message`` event.
-
-    SSE wire format: each ``data:`` line is one line of the payload;
-    blank line terminates the event. ``htmx-sse`` joins multi-line
-    ``data:`` blocks with ``\\n``, so we collapse newlines defensively
-    to keep our payload single-line (the rendered log line is always
-    a single tag anyway, but defense-in-depth costs nothing).
-    """
-    safe = html.replace("\n", " ")
-    return f"data: {safe}\n\n"
 
 
 @router.post("/crons/{name}/run", response_class=HTMLResponse)
@@ -269,17 +119,10 @@ async def trigger_run_html(request: Request, name: str) -> HTMLResponse:
             try:
                 await svc.trigger(name, actor=user)
             except TriggerRejected:
-                # Lock collision — render the row anyway (the UI shows
-                # "running" because the existing row is still in flight).
                 pass
             except KeyError:
                 raise HTTPException(status.HTTP_404_NOT_FOUND)
             except LockUnavailable as exc:
-                # Redis lock died. service.trigger already wrote a FAILED
-                # cron_run row + logged the underlying error. Return 503
-                # so the HTMX swap shows a clear failure (not a generic
-                # blank 500), and the operator knows to fix
-                # AGG_REDIS_URL or the Redis plugin.
                 logger.warning(
                     "trigger_run_html: lock unavailable for cron=%s: %s",
                     name, exc,
@@ -291,44 +134,6 @@ async def trigger_run_html(request: Request, name: str) -> HTMLResponse:
                         "from agg-web. Check AGG_REDIS_URL and the Redis plugin."
                     ),
                 )
-            item = await svc.get_cron(name)
-        finally:
-            await redis.aclose()
-    return templates.TemplateResponse(
-        request, "_cron_row.html",
-        {"item": item, "csrf_token": _csrf_token(request)},
-    )
-
-
-@router.post("/crons/{name}/cancel", response_class=HTMLResponse)
-async def cancel_run_html(request: Request, name: str) -> HTMLResponse:
-    """Set the cancel flag for whatever run of ``name`` is currently
-    in flight. Cooperative — the runner picks it up at the next
-    breakpoint (typically the next league boundary)."""
-    user = await _admin_from_session(request)
-    if user is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
-    await _require_csrf(request)
-
-    async with async_session_factory() as session:
-        redis = _redis()
-        try:
-            svc = CronService(session, redis)
-            item = await svc.get_cron(name)
-            if item is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND)
-            if item.is_running and item.last_run is not None:
-                ok = await request_cancel(item.last_run.id)
-                if not ok:
-                    logger.warning(
-                        "cancel_run_html: request_cancel returned False for %s "
-                        "(Redis blip?). UI will keep showing running.",
-                        name,
-                    )
-            # Re-fetch so the UI shows the updated progress message
-            # (set_progress wrote "cancellation requested..." inside the
-            # runner's next breakpoint, but it may not be visible yet —
-            # next 2s poll picks it up).
             item = await svc.get_cron(name)
         finally:
             await redis.aclose()
@@ -455,7 +260,6 @@ async def data_reset_truncate(request: Request, table: str):
     form = await request.form()
     confirm = (form.get("confirm") or "").strip()
     if confirm != table:
-        # Confirmation mismatch — bounce back with a flash.
         return RedirectResponse(
             url=f"/ops/data-reset?flash=mismatch:{table}",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -496,13 +300,7 @@ async def _admin_from_session(request: Request) -> User | None:
 
 
 def _csrf_token(request: Request) -> str:
-    """Mint a CSRF token bound to the current session.
-
-    Cheap impl: store the token on the session itself; the form posts it back
-    in a hidden field. ``itsdangerous`` is overkill here since Starlette's
-    SessionMiddleware already signs the cookie — anything written to
-    ``request.session`` is integrity-checked end to end.
-    """
+    """Mint a CSRF token bound to the current session."""
     token = request.session.get("ops_csrf")
     if not token:
         token = uuid.uuid4().hex
@@ -512,8 +310,6 @@ def _csrf_token(request: Request) -> str:
 
 async def _require_csrf(request: Request) -> None:
     expected = request.session.get("ops_csrf")
-    # Prefer header (HTMX hx-post path), fall back to form field (vanilla
-    # ``<form>`` submit — used by the data-reset confirmation modal).
     submitted = (
         request.headers.get("X-CSRF-Token")
         or request.headers.get("X-CSRFToken")
@@ -524,9 +320,6 @@ async def _require_csrf(request: Request) -> None:
             submitted = form.get("csrf_token")
         except Exception:  # noqa: BLE001
             submitted = None
-    # Constant-time compare — protects against timing-based token recovery
-    # (Starlette session is signed so the attack surface is narrow, but
-    # str-eq leaks character-level timing in principle).
     if not expected or not submitted or not hmac.compare_digest(
         expected, submitted,
     ):

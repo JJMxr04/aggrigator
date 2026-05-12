@@ -30,7 +30,6 @@ from aggrigator.ingest.upserts import (
     upsert_team_from_spec,
 )
 from aggrigator.models import Event, League, Sport
-from aggrigator.ops.progress import raise_if_cancelled, set_progress
 from aggrigator.webhooks.enqueue import enqueue_for_event
 from aggrigator.webhooks.notify import notify_webhook_worker
 
@@ -256,9 +255,7 @@ async def ingest_league(
     filters_str = (
         f" [{', '.join(filters_summary_parts)}]" if filters_summary_parts else ""
     )
-    await set_progress(
-        f"{league.id}: fetching events from upstream{filters_str}"
-    )
+    logger.info("ingest_league %s: fetching events from upstream%s", league.id, filters_str)
 
     report = LeagueReport(league_id=league.id)
     event_idx = 0
@@ -307,24 +304,13 @@ async def ingest_league(
         starts_before=starts_before_iso,
         limit=50,
     ):
-        # First payload arriving means the provider returned its first
-        # page — signal "fetch done, processing begins" so operators can
-        # distinguish a slow upstream from a slow ingest. Fires at most
-        # once per league.
         if not first_event_seen:
             first_event_seen = True
-            await set_progress(
-                f"{league.id}: provider returned first batch — starting ingest"
-            )
+            logger.info("ingest_league %s: provider returned first batch", league.id)
         event_idx += 1
         event_id = payload.get("eventID") or "?"
         if event_id and event_id != "?":
             seen_event_ids.add(event_id)
-        # Per-event set_progress used to fire here (2 calls × 4 Redis
-        # cmds = 8 cmds/event). On a 200-event walk that's the dominant
-        # source of Redis command burn — see plan/redis-budget.md. The
-        # league-boundary summary at the bottom is enough for human
-        # operators; per-event detail lives in the worker logs.
         try:
             # SAVEPOINT per event — a single bad payload rolls back its
             # own writes without poisoning the prior events in this
@@ -374,9 +360,10 @@ async def ingest_league(
         )
         await session.commit()
         if missing:
-            await set_progress(
-                f"{league.id}: {len(missing)} event(s) missing from upstream "
-                f"this cycle — watchdog will auto-void after grace"
+            logger.info(
+                "ingest_league %s: %d event(s) missing from upstream this cycle "
+                "— watchdog will auto-void after grace",
+                league.id, len(missing),
             )
     except Exception:  # noqa: BLE001
         logger.exception(
@@ -385,18 +372,10 @@ async def ingest_league(
         await session.rollback()
 
     league.last_refreshed_at = datetime.now(tz=timezone.utc)
-    logger.info(
-        "ingest_league %s: %d events processed, %d failed",
-        league.id, report.events_processed, report.events_failed,
-    )
-    # League-level summary — one Redis write per league instead of
-    # per-event. Roll up the transition counts so operators can spot
-    # interesting state changes (settlements, voids) without per-event
-    # detail.
     n_transitions = sum(1 for t in report.transitions if t != Transition.NONE)
-    await set_progress(
-        f"{league.id}: finished — {report.events_processed} processed, "
-        f"{report.events_failed} failed, {n_transitions} transitions"
+    logger.info(
+        "ingest_league %s: finished — %d processed, %d failed, %d transitions",
+        league.id, report.events_processed, report.events_failed, n_transitions,
     )
     return report
 
@@ -435,31 +414,23 @@ async def ingest_due_leagues(
         .join(Sport, League.sport_id == Sport.id)
         .where(League.active.is_(True), Sport.active.is_(True))
     ))
-    await set_progress(
-        f"walking {len(leagues)} league(s) "
-        f"(active league AND active sport)"
-    )
+    logger.info("ingest_due_leagues: walking %d league(s)", len(leagues))
     reports: list[LeagueReport] = []
     for idx, league in enumerate(leagues, start=1):
-        # Cooperative cancellation point — operator's Stop click takes
-        # effect at the next league boundary (worst case: end of current
-        # league's walk, typically 5–30s).
-        await raise_if_cancelled()
-        await set_progress(
-            f"[{idx}/{len(leagues)}] starting {league.id}"
-        )
+        logger.info("ingest_due_leagues: [%d/%d] starting %s", idx, len(leagues), league.id)
         reports.append(
             await ingest_league(
                 session, league, client,
                 discover_new_events=discover_new_events,
             )
         )
-        # Commit per-league so a cancellation (or a single league's
-        # failure) doesn't roll back leagues we've already finished.
-        # Each league is self-contained — no cross-league constraints.
+        # Per-league commit so a single league's failure doesn't roll
+        # back leagues we've already finished. Each league is
+        # self-contained — no cross-league constraints.
         await session.commit()
-    await set_progress(
-        f"all leagues done — {sum(r.events_processed for r in reports)} events processed, "
-        f"{sum(r.events_failed for r in reports)} failed"
+    logger.info(
+        "ingest_due_leagues: done — %d events processed, %d failed",
+        sum(r.events_processed for r in reports),
+        sum(r.events_failed for r in reports),
     )
     return reports

@@ -29,7 +29,6 @@ import logging
 
 from aggrigator.config import get_settings
 from aggrigator.ingest.quota import quota_status
-from aggrigator.ops.progress import set_progress
 from aggrigator.workers.tasks.ingest import _build_client, run_ingest_due_leagues
 from aggrigator.workers.tasks.seed import run_seed_sports_and_leagues
 
@@ -49,11 +48,12 @@ async def run_full_refresh() -> dict:
         pace_floor_pct=settings.sgo_quota_pace_floor_pct,
     )
     for line in qs.summary_lines:
-        await set_progress(line)
+        logger.info("full_refresh: quota — %s", line)
     if not settings.test_mode and qs.should_skip:
         reason = "sgo_monthly_quota" if qs.exhausted else "sgo_quota_pace"
-        await set_progress(
-            f"full_refresh: SKIPPED — {qs.pace_reason if not qs.exhausted else 'absolute cap reached'}"
+        logger.warning(
+            "full_refresh: SKIPPED — %s",
+            qs.pace_reason if not qs.exhausted else "absolute cap reached",
         )
         return {"skipped": True, "reason": reason, "pace_reason": qs.pace_reason}
 

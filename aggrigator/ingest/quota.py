@@ -50,9 +50,8 @@ class QuotaStatus:
 
     ``summary_lines`` is one human-readable line per logical fact (tier,
     reset estimate, each rate-limit window, pace verdict). The worker
-    emits each line as a separate ``set_progress`` call so the SSE log
-    shows them stacked. ``summary`` joins them with ``·`` for one-line
-    consumers.
+    emits each line as its own log entry. ``summary`` joins them with
+    ``·`` for one-line consumers.
 
     ``exhausted`` — True when current usage is already at or past
     threshold (the original guard). Reactive.
