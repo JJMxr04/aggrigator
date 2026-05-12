@@ -33,7 +33,10 @@ from arq.cron import cron
 from aggrigator.config import get_settings
 from aggrigator.observability.logging import configure_logging
 from aggrigator.workers.tasks.full_refresh import full_refresh_task
-from aggrigator.workers.tasks.ingest import ingest_due_leagues_task
+from aggrigator.workers.tasks.ingest import (
+    ingest_due_leagues_task,
+    refresh_existing_events_task,
+)
 from aggrigator.workers.tasks.seed import seed_leagues_task, seed_sports_task
 from aggrigator.workers.tasks.settle import settle_pending_task
 from aggrigator.workers.tasks.vacuum import vacuum_old_events_task
@@ -49,50 +52,41 @@ def _redis_settings() -> RedisSettings:
 
 
 def _build_cron_jobs() -> list:
-    """Assemble the cron schedule, honoring env-driven cadence knobs.
+    """Assemble the cron schedule. All times hardcoded — cadence is
+    product policy, not infra. To change a time, edit this function and
+    redeploy.
 
-    Done at module load, not inside WorkerSettings, so arq sees a plain
-    ``cron_jobs`` attribute. Re-importing this module after changing env
-    vars yields a fresh schedule — that matches the worker's
-    deploy-on-restart lifecycle.
+    Schedule (top → bottom, by cadence):
+
+      seed_sports             daily 01:30   — catches new sports
+      seed_leagues            daily 02:00   — catches new leagues
+      ingest_due_leagues      daily 02:30   — DISCOVERY walk: inserts
+                                              new events + refreshes
+                                              existing
+      refresh_existing_events hourly @ :00  — REFRESH walk for events
+                                              already in DB; skips the
+                                              02:00 slot to avoid racing
+                                              the daily discovery
+      lifecycle_watchdog      hourly @ :45  — flags stale events;
+                                              auto-VOIDs if enabled
+      settle_pending          nightly 03:30 — grading backfill
+      vacuum_old_events       nightly 04:00 — deletes terminal events
+                                              past AGG_VACUUM_DAYS
+
+    Manual-only (registered as ARQ functions but NOT scheduled):
+
+      full_refresh    — one-shot seed + ingest after a fresh deploy.
+                        The daily discovery walk reaches the same steady
+                        state within a day anyway.
+      webhook_deliver — push-driven; the orchestrator + watchdog enqueue
+                        it on commit, failed deliveries re-enqueue
+                        themselves. A scheduled run would write no-op
+                        cron_run rows.
     """
-    s = get_settings()
-
-    # Auto schedule (top → bottom, by cadence):
-    #   seed_sports         weekly Mon 01:30 — taxonomy almost never changes
-    #   seed_leagues        daily 02:00      — catches new leagues / season starts
-    #   ingest_due_leagues  hourly @ :00     — combined event + status + odds +
-    #                                          settle + webhooks in ONE /events
-    #                                          call per league (1 SGO entity per
-    #                                          returned event); env-tunable
-    #   lifecycle_watchdog  hourly @ :45     — flags stale events (notstarted past
-    #                                          start_time); auto-VOIDs if enabled
-    #   settle_pending      nightly 03:30    — backfill for selections the hot
-    #                                          path missed (rare, defensive)
-    #   vacuum_old_events   nightly 04:00    — deletes terminal events past
-    #                                          AGG_VACUUM_DAYS
-    #
-    # Removed from auto schedule (still callable manually via /ops/crons):
-    #   full_refresh        — one-shot seed + ingest, used after a fresh deploy.
-    #                          Manual only because the hourly cron reaches the
-    #                          same steady state within an hour anyway.
-    #   webhook_deliver     — push-driven (see module docstring + webhooks/notify).
-    #                          The orchestrator/watchdog enqueue it on commit
-    #                          and failed deliveries re-enqueue themselves with
-    #                          _defer_until=next_retry_at. A scheduled run would
-    #                          just write no-op cron_run rows.
-    ingest_kwargs: dict = {
-        "minute": s.ingest_cron_minute_set,
-        "run_at_startup": False,
-        "name": "ingest_due_leagues",
-    }
-    if s.ingest_cron_hour_set is not None:
-        ingest_kwargs["hour"] = s.ingest_cron_hour_set
-
     return [
         cron(
             seed_sports_task,
-            weekday={0}, hour={1}, minute={30},
+            hour={1}, minute={30},
             name="seed_sports",
         ),
         cron(
@@ -100,18 +94,29 @@ def _build_cron_jobs() -> list:
             hour={2}, minute={0},
             name="seed_leagues",
         ),
-        cron(ingest_due_leagues_task, **ingest_kwargs),
+        cron(
+            ingest_due_leagues_task,
+            hour={2}, minute={30},
+            run_at_startup=False,
+            name="ingest_due_leagues",
+        ),
+        cron(
+            refresh_existing_events_task,
+            # Hourly except hour 2, which is the daily discovery slot —
+            # avoids both walks racing on the same league.
+            hour={0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                  13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23},
+            minute={0},
+            run_at_startup=False,
+            name="refresh_existing_events",
+        ),
         cron(
             lifecycle_watchdog_task,
-            # :45 keeps it clear of the default ingest tick at :00.
-            # DB-only, no SGO calls — cadence is not quota-sensitive.
+            # :45 keeps it clear of the refresh tick at :00.
+            # DB-only, no provider calls — cadence is not quota-sensitive.
             minute={45},
             name="lifecycle_watchdog",
         ),
-        # webhook_deliver is intentionally NOT on the auto schedule —
-        # it's push-driven (see module docstring). Still registered as a
-        # ``functions`` target below so push-enqueues + manual /ops/crons
-        # triggers work.
         cron(
             settle_pending_task,
             hour={3}, minute={30},
@@ -190,6 +195,7 @@ class WorkerSettings:
     functions = [
         full_refresh_task,
         ingest_due_leagues_task,
+        refresh_existing_events_task,
         webhook_deliver_task,
         settle_pending_task,
         seed_sports_task,

@@ -66,6 +66,7 @@ async def ingest_event(
     payload: dict,
     *,
     skip_if_new_terminal: bool = False,
+    discover_new_events: bool = True,
 ) -> IngestResult | None:
     """Normalize one event payload (SGO-shape), upsert the row, write its
     markets, PROVIDER-grade if finalized, return the lifecycle transition.
@@ -105,6 +106,7 @@ async def ingest_event(
     upserted = await upsert_event_from_spec(
         session, spec, home=home, away=away,
         skip_if_new_terminal=skip_if_new_terminal,
+        skip_if_unknown_event=not discover_new_events,
     )
     if upserted is None:
         # New + already-terminal — see upsert_event_from_spec's docstring.
@@ -197,6 +199,8 @@ async def ingest_league(
     session: AsyncSession,
     league: League,
     client: SgoClient,
+    *,
+    discover_new_events: bool = True,
 ) -> LeagueReport:
     """Pull events for one league, ingest each, return a report.
 
@@ -263,8 +267,21 @@ async def ingest_league(
     # reconcile pass (oddsapi-only) can flag rows that vanished from
     # upstream. See cancelled-suspended.md §3 Layer 2.
     seen_event_ids: set[str] = set()
+    deliveries_enqueued_this_walk = 0
     window_start = now - timedelta(days=settings.ingest_window_days_behind)
     window_end = now + timedelta(days=settings.ingest_window_days_ahead)
+
+    # Bulk-prefetch existing in-window Event rows into the session identity
+    # map. Subsequent ``session.get(Event, id)`` calls inside ``ingest_event``
+    # hit the identity map without a roundtrip. Cheap one-time cost; replaces
+    # ~30 per-event SELECT round-trips on a typical league walk.
+    from sqlalchemy import select  # local import — keeps top-level light
+    await session.scalars(
+        select(Event).where(
+            Event.league_id == league.id,
+            Event.start_time.between(window_start, window_end),
+        )
+    )
     for payload in client.get_events(
         league_id=league.id,
         # include_open_close=False: we expose ``opening_odds`` in the schema
@@ -309,13 +326,19 @@ async def ingest_league(
             f"{league.id} event {event_idx} ({event_id}): writing odds"
         )
         try:
-            result = await ingest_event(
-                session, payload,
-                skip_if_new_terminal=settings.ingest_skip_new_terminal,
-            )
+            # SAVEPOINT per event — a single bad payload rolls back its
+            # own writes without poisoning the prior events in this
+            # league. We commit ONCE at end of league walk (below) so
+            # writes happen in one DB transaction instead of N.
+            async with session.begin_nested():
+                result = await ingest_event(
+                    session, payload,
+                    skip_if_new_terminal=settings.ingest_skip_new_terminal,
+                    discover_new_events=discover_new_events,
+                )
         except Exception:  # noqa: BLE001
             logger.exception("ingest failed for event=%s", payload.get("eventID"))
-            await session.rollback()
+            # savepoint already rolled back by the context manager
             report.events_failed += 1
             await set_progress(
                 f"{league.id} event {event_idx} ({event_id}): FAILED — see logs"
@@ -324,9 +347,11 @@ async def ingest_league(
         if result is not None:
             report.events_processed += 1
             report.transitions.append(result.transition)
+            if result.deliveries_enqueued > 0:
+                deliveries_enqueued_this_walk += result.deliveries_enqueued
             await set_progress(
-                f"{league.id} event {event_idx} ({event_id}): committed "
-                f"(written={result.selections_written} "
+                f"{league.id} event {event_idx} ({event_id}): written "
+                f"(selections={result.selections_written} "
                 f"graded={result.selections_graded} "
                 f"transition={result.transition.name})"
             )
@@ -334,16 +359,15 @@ async def ingest_league(
             await set_progress(
                 f"{league.id} event {event_idx} ({event_id}): skipped"
             )
-        # Commit per-event so markets/selections/quotes become visible
-        # mid-walk. Each event is idempotent on retry, so a partial
-        # league walk is recoverable on the next run.
-        await session.commit()
-        # Push-on-write: kick the webhook worker to drain the row(s) we
-        # just inserted. Coalesces on a fixed _job_id so a busy league
-        # walk produces ONE queued job, not one per event. Failure here
-        # is non-fatal — see webhooks/notify.py for the recovery story.
-        if result is not None and result.deliveries_enqueued > 0:
-            await notify_webhook_worker()
+    # Single commit for the whole league walk — drops per-event commit
+    # cost (~5-10ms each) and lets Postgres batch WAL flushes.
+    await session.commit()
+    # Push-on-write: ONE webhook worker notification per league regardless
+    # of how many deliveries were enqueued. notify_webhook_worker
+    # coalesces on a fixed _job_id so multiple calls would have collapsed
+    # to one anyway; saving the calls saves Redis roundtrips.
+    if deliveries_enqueued_this_walk > 0:
+        await notify_webhook_worker()
     # Disappearance reconcile pass — only meaningful on odds-api.io where
     # cancellations manifest as absence (no status flag). Cheap no-op for
     # SGO since SGO emits ``status.cancelled`` directly and the rows
@@ -385,6 +409,8 @@ async def ingest_league(
 async def ingest_due_leagues(
     session: AsyncSession,
     client: SgoClient,
+    *,
+    discover_new_events: bool = True,
 ) -> list[LeagueReport]:
     """Walk every active League whose parent Sport is also active and
     ingest each one.
@@ -394,6 +420,18 @@ async def ingest_due_leagues(
     child league individually. Cadence-gating is intentionally omitted
     for v1 — the ARQ cron decides scheduling. Inside a single call, every
     qualifying league is touched once.
+
+    ``discover_new_events`` distinguishes the two scheduled walks:
+
+    - **Discovery walk** (daily, ``True``): inserts new events the
+      provider has surfaced since the last run, plus refreshes everything
+      already in DB.
+    - **Refresh walk** (intra-day, ``False``): refreshes odds + scores +
+      lifecycle for events ALREADY in DB; new events are skipped and
+      will be picked up on the next discovery walk.
+
+    Cuts intra-day write volume on the per-event upsert path: refresh
+    walks never touch ``Team`` / ``Event`` insert paths for unknown ids.
     """
     from sqlalchemy import select
 
@@ -416,7 +454,10 @@ async def ingest_due_leagues(
             f"[{idx}/{len(leagues)}] starting {league.id}"
         )
         reports.append(
-            await ingest_league(session, league, client)
+            await ingest_league(
+                session, league, client,
+                discover_new_events=discover_new_events,
+            )
         )
         # Commit per-league so a cancellation (or a single league's
         # failure) doesn't roll back leagues we've already finished.

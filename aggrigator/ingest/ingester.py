@@ -1,11 +1,23 @@
-"""Persist normalized ``MarketSpec`` lists to the DB.
+"""Persist normalized ``MarketSpec`` lists to the DB — bulk-upsert path.
 
-Async port of MDProject's ``core/event/odds/sgo_ingest.write_markets``.
+Hot path of the ingest pipeline. Each ``write_markets`` call used to issue
+~30-40 Postgres roundtrips per event:
 
-Pure-spec parsing lives in ``normalize.py`` (Django-free, unit-testable).
-This module is the side-effecting layer: every upsert is keyed on the
-deterministic IDs ``normalize`` produces, so the writes are idempotent and a
-re-ingest of the same payload doesn't create duplicate rows.
+  - ``session.get(Market)`` then INSERT/UPDATE per market   (~3-6 RTT)
+  - ``session.get(Selection)`` + INSERT/UPDATE + flush     (~6-18 RTT)
+  - SELECT last OddsQuote + maybe INSERT                   (~12 RTT)
+  - bulk INSERT Bookmaker + BookmakerSelection             (~2 RTT)
+
+With a typical 30-event MLB walk that's >1000 roundtrips/cycle.
+
+Rewrite (May 2026): collapse each kind of write into a single bulk
+``INSERT … ON CONFLICT DO UPDATE`` statement per event. Per-event cost
+drops to ~4-5 RTT regardless of selection count.
+
+Idempotency: every upsert uses ``pg_insert(...).on_conflict_do_update(...)``
+keyed on the deterministic IDs ``normalize.py`` produces. Re-running on
+the same payload converges to the same rows; no duplicates, no
+double-INSERT exceptions.
 """
 
 from __future__ import annotations
@@ -32,68 +44,6 @@ from aggrigator.models import (
 logger = logging.getLogger(__name__)
 
 
-async def write_markets(
-    session: AsyncSession, event: Event, market_specs: Iterable[MarketSpec]
-) -> int:
-    """Upsert markets / selections / per-book quotes for one event.
-
-    Returns the count of selections written.
-    """
-    written = 0
-    for mspec in market_specs:
-        market = await _upsert_market(session, event, mspec)
-        for sspec in mspec.selections:
-            sel = await _upsert_selection(session, market, sspec)
-            written += 1
-            await _maybe_record_quote(session, sel, sspec)
-            await _upsert_bookmaker_quotes(session, sel, sspec.by_bookmaker)
-    return written
-
-
-# ---- market ----------------------------------------------------------------
-
-
-async def _resolve_subject_team_id(event: Event, side_marker: str) -> str | None:
-    if side_marker == "HOME":
-        return event.home_team_id
-    if side_marker == "AWAY":
-        return event.away_team_id
-    return None
-
-
-async def _upsert_market(
-    session: AsyncSession, event: Event, spec: MarketSpec
-) -> Market:
-    subject_team_id = await _resolve_subject_team_id(event, spec.side)
-    row = await session.get(Market, spec.market_id)
-    payload = dict(
-        event_id=event.id,
-        sport_id=event.sport_id,
-        category=spec.category,
-        type=spec.market_type[:64],
-        scope=spec.scope,
-        line=spec.line,
-        side=spec.side,
-        provider="sportsgameodds",
-        provider_market_id=(spec.provider_market_id or "")[:128],
-        provider_choice_group="",
-        subject_team_id=subject_team_id,
-        is_live=spec.is_live,
-        suspended=spec.suspended,
-        last_updated=spec.last_updated_at,
-    )
-    if row is None:
-        row = Market(id=spec.market_id, **payload)
-        session.add(row)
-    else:
-        for k, v in payload.items():
-            setattr(row, k, v)
-    return row
-
-
-# ---- selection -------------------------------------------------------------
-
-
 def _movement(opening: Decimal | None, current: Decimal | None) -> int:
     if opening is None or current is None:
         return 0
@@ -104,132 +54,219 @@ def _movement(opening: Decimal | None, current: Decimal | None) -> int:
     return 0
 
 
-async def _upsert_selection(
-    session: AsyncSession, market: Market, spec: SelectionSpec
-) -> Selection:
-    row = await session.get(Selection, spec.selection_id)
-    payload = dict(
-        market_id=market.id,
-        type=spec.selection_type,
-        label=spec.label[:128],
-        decimal_odds=spec.decimal_odds,
-        opening_decimal_odds=spec.opening_decimal_odds,
-        movement=_movement(spec.opening_decimal_odds, spec.decimal_odds),
-        suspended=spec.suspended,
-    )
-    if row is None:
-        row = Selection(id=spec.selection_id, **payload)
-        session.add(row)
-    else:
-        for k, v in payload.items():
-            setattr(row, k, v)
-    # Flush so the FK is satisfied for any rows inserted next (OddsQuote,
-    # BookmakerSelection) before we get to the end of the parent transaction.
-    await session.flush()
-    return row
+def _resolve_subject_team_id(event: Event, side_marker: str) -> str | None:
+    if side_marker == "HOME":
+        return event.home_team_id
+    if side_marker == "AWAY":
+        return event.away_team_id
+    return None
 
 
-async def _maybe_record_quote(
-    session: AsyncSession, sel: Selection, spec: SelectionSpec
-) -> None:
-    """One movement row per real price change. Latest price denormalized on
-    ``Selection.decimal_odds`` already covers list reads — this is the
-    time-series."""
-    if spec.decimal_odds is None:
-        return
-    last = await session.scalar(
-        select(OddsQuote.decimal_odds)
-        .where(OddsQuote.selection_id == sel.id)
-        .order_by(OddsQuote.captured_at.desc())
-        .limit(1)
-    )
-    if last is not None and last == spec.decimal_odds:
-        return
-    captured_at = datetime.now(tz=timezone.utc)
-    # Avoid the unique (selection_id, captured_at) collision on rapid retries.
-    existing = await session.scalar(
-        select(OddsQuote)
-        .where(OddsQuote.selection_id == sel.id, OddsQuote.captured_at == captured_at)
-    )
-    if existing is None:
-        session.add(OddsQuote(
-            selection_id=sel.id,
-            decimal_odds=spec.decimal_odds,
-            captured_at=captured_at,
-        ))
+async def write_markets(
+    session: AsyncSession, event: Event, market_specs: Iterable[MarketSpec],
+) -> int:
+    """Upsert markets / selections / per-book quotes for one event.
 
+    Returns the count of selections written.
 
-async def _upsert_bookmaker_quotes(
-    session: AsyncSession,
-    sel: Selection,
-    books: Iterable[BookmakerQuoteSpec],
-) -> None:
-    """Bulk upsert all per-bookmaker quotes for one selection.
-
-    Old shape: 2 DB roundtrips per quote (``session.get(Bookmaker)`` +
-    ``select(BookmakerSelection).where(...)``). For ~10 bookmakers per
-    selection × ~100 selections per event × ~50 events per league, that's
-    ~100,000 sequential roundtrips per league walk — at Neon's ~30ms RTT,
-    several minutes of pure latency.
-
-    New shape: 2 DB statements TOTAL per selection — one bulk INSERT
-    for unknown bookmakers (``ON CONFLICT DO NOTHING``) and one bulk
-    INSERT for the per-book selection rows
-    (``ON CONFLICT (selection_id, bookmaker_id) DO UPDATE``). The unique
-    constraint on the second is declared on the model — see
-    ``BookmakerSelection.__table_args__``.
+    Bulk pattern: one INSERT statement per kind of row, regardless of how
+    many markets/selections the event carries. The total Postgres RTTs
+    are ~5 per event (existing-selection lookup + 4 INSERTs) instead of
+    one per selection.
     """
-    quotes = list(books)
-    if not quotes:
-        return
+    specs = list(market_specs)
+    if not specs:
+        return 0
 
     now = datetime.now(tz=timezone.utc)
-
-    # 1. Make sure every referenced bookmaker exists. ``ON CONFLICT DO
-    #    NOTHING`` lets us blast through known + unknown books in one
-    #    statement without a pre-flight SELECT. ``id.title()`` is the
-    #    same fallback name we used in the old per-quote path.
-    bookmaker_rows = [
-        {"id": q.bookmaker_id, "name": q.bookmaker_id.title(), "active": True}
-        for q in quotes
-        if q.bookmaker_id  # skip malformed payloads
+    all_selection_specs: list[tuple[MarketSpec, SelectionSpec]] = [
+        (m, s) for m in specs for s in m.selections
     ]
-    if bookmaker_rows:
+    if not all_selection_specs:
+        return 0
+
+    # 1. Prefetch existing selection prices so we can skip OddsQuote inserts
+    #    when the price hasn't moved. One SELECT replaces N per-selection
+    #    "last OddsQuote" lookups.
+    selection_ids = [s.selection_id for _, s in all_selection_specs]
+    prior_prices: dict[str, Decimal | None] = dict(
+        (
+            await session.execute(
+                select(Selection.id, Selection.decimal_odds).where(
+                    Selection.id.in_(selection_ids)
+                )
+            )
+        ).all()
+    )
+
+    # 2. Bulk upsert markets
+    await _bulk_upsert_markets(session, event, specs, now)
+
+    # 3. Bulk upsert selections
+    await _bulk_upsert_selections(session, all_selection_specs)
+
+    # 4. Bulk insert OddsQuote rows ONLY for selections whose price changed
+    quote_rows: list[dict] = []
+    for _, sspec in all_selection_specs:
+        if sspec.decimal_odds is None:
+            continue
+        if prior_prices.get(sspec.selection_id) == sspec.decimal_odds:
+            continue
+        quote_rows.append({
+            "selection_id": sspec.selection_id,
+            "decimal_odds": sspec.decimal_odds,
+            "captured_at": now,
+        })
+    if quote_rows:
         await session.execute(
-            pg_insert(Bookmaker)
-            .values(bookmaker_rows)
-            .on_conflict_do_nothing(index_elements=["id"])
+            pg_insert(OddsQuote)
+            .values(quote_rows)
+            .on_conflict_do_nothing(
+                index_elements=["selection_id", "captured_at"],
+            )
         )
 
-    # 2. Upsert the per-book selection rows. ``EXCLUDED.<col>`` references
-    #    the row that *would have* been inserted, which is how we get
-    #    proper UPDATE semantics (overwrite price + spread + last_updated_at).
-    selection_rows = [
-        {
-            "selection_id": sel.id,
-            "bookmaker_id": q.bookmaker_id,
-            "decimal_odds": q.decimal_odds,
-            "spread": q.spread,
-            "over_under": q.over_under,
-            "available": q.available,
-            "deeplink": q.deeplink or "",
-            "last_updated_at": q.last_updated_at or now,
-        }
-        for q in quotes
-        if q.bookmaker_id
-    ]
-    if not selection_rows:
+    # 5. Bulk upsert bookmakers + bookmaker_selections (per-book quotes)
+    await _bulk_upsert_book_quotes(session, all_selection_specs, now)
+
+    return len(all_selection_specs)
+
+
+# ---- bulk upsert helpers ----------------------------------------------------
+
+
+async def _bulk_upsert_markets(
+    session: AsyncSession,
+    event: Event,
+    specs: Iterable[MarketSpec],
+    now: datetime,
+) -> None:
+    rows = []
+    for spec in specs:
+        rows.append({
+            "id": spec.market_id,
+            "event_id": event.id,
+            "sport_id": event.sport_id,
+            "category": spec.category,
+            "type": spec.market_type[:64],
+            "scope": spec.scope,
+            "line": spec.line,
+            "side": spec.side,
+            "provider": "sportsgameodds",
+            "provider_market_id": (spec.provider_market_id or "")[:128],
+            "provider_choice_group": "",
+            "subject_team_id": _resolve_subject_team_id(event, spec.side),
+            "is_live": spec.is_live,
+            "suspended": spec.suspended,
+            "last_updated": spec.last_updated_at,
+        })
+    if not rows:
         return
-    stmt = pg_insert(BookmakerSelection).values(selection_rows)
+    stmt = pg_insert(Market).values(rows)
     stmt = stmt.on_conflict_do_update(
-        index_elements=["selection_id", "bookmaker_id"],
+        index_elements=["id"],
         set_={
-            "decimal_odds": stmt.excluded.decimal_odds,
-            "spread": stmt.excluded.spread,
-            "over_under": stmt.excluded.over_under,
-            "available": stmt.excluded.available,
-            "deeplink": stmt.excluded.deeplink,
-            "last_updated_at": stmt.excluded.last_updated_at,
+            "event_id": stmt.excluded.event_id,
+            "sport_id": stmt.excluded.sport_id,
+            "category": stmt.excluded.category,
+            "type": stmt.excluded.type,
+            "scope": stmt.excluded.scope,
+            "line": stmt.excluded.line,
+            "side": stmt.excluded.side,
+            "provider": stmt.excluded.provider,
+            "provider_market_id": stmt.excluded.provider_market_id,
+            "provider_choice_group": stmt.excluded.provider_choice_group,
+            "subject_team_id": stmt.excluded.subject_team_id,
+            "is_live": stmt.excluded.is_live,
+            "suspended": stmt.excluded.suspended,
+            "last_updated": stmt.excluded.last_updated,
         },
     )
     await session.execute(stmt)
+
+
+async def _bulk_upsert_selections(
+    session: AsyncSession,
+    pairs: list[tuple[MarketSpec, SelectionSpec]],
+) -> None:
+    rows = []
+    for _, sspec in pairs:
+        rows.append({
+            "id": sspec.selection_id,
+            "market_id": sspec.market_id,
+            "type": sspec.selection_type,
+            "label": sspec.label[:128],
+            "decimal_odds": sspec.decimal_odds,
+            "opening_decimal_odds": sspec.opening_decimal_odds,
+            "movement": _movement(sspec.opening_decimal_odds, sspec.decimal_odds),
+            "suspended": sspec.suspended,
+        })
+    if not rows:
+        return
+    stmt = pg_insert(Selection).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["id"],
+        set_={
+            "market_id": stmt.excluded.market_id,
+            "type": stmt.excluded.type,
+            "label": stmt.excluded.label,
+            "decimal_odds": stmt.excluded.decimal_odds,
+            "opening_decimal_odds": stmt.excluded.opening_decimal_odds,
+            "movement": stmt.excluded.movement,
+            "suspended": stmt.excluded.suspended,
+        },
+    )
+    await session.execute(stmt)
+
+
+async def _bulk_upsert_book_quotes(
+    session: AsyncSession,
+    pairs: list[tuple[MarketSpec, SelectionSpec]],
+    now: datetime,
+) -> None:
+    """Flatten per-bookmaker quotes from every selection into two bulk
+    statements: one for the Bookmaker rows (ON CONFLICT DO NOTHING) and
+    one for the BookmakerSelection rows (ON CONFLICT DO UPDATE).
+    """
+    book_rows: dict[str, dict] = {}
+    selection_book_rows: list[dict] = []
+    for _, sspec in pairs:
+        for q in sspec.by_bookmaker:
+            if not q.bookmaker_id:
+                continue
+            book_rows.setdefault(q.bookmaker_id, {
+                "id": q.bookmaker_id,
+                "name": q.bookmaker_id.title(),
+                "active": True,
+            })
+            selection_book_rows.append({
+                "selection_id": sspec.selection_id,
+                "bookmaker_id": q.bookmaker_id,
+                "decimal_odds": q.decimal_odds,
+                "spread": q.spread,
+                "over_under": q.over_under,
+                "available": q.available,
+                "deeplink": q.deeplink or "",
+                "last_updated_at": q.last_updated_at or now,
+            })
+
+    if book_rows:
+        await session.execute(
+            pg_insert(Bookmaker)
+            .values(list(book_rows.values()))
+            .on_conflict_do_nothing(index_elements=["id"])
+        )
+    if selection_book_rows:
+        stmt = pg_insert(BookmakerSelection).values(selection_book_rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["selection_id", "bookmaker_id"],
+            set_={
+                "decimal_odds": stmt.excluded.decimal_odds,
+                "spread": stmt.excluded.spread,
+                "over_under": stmt.excluded.over_under,
+                "available": stmt.excluded.available,
+                "deeplink": stmt.excluded.deeplink,
+                "last_updated_at": stmt.excluded.last_updated_at,
+            },
+        )
+        await session.execute(stmt)

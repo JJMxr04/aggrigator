@@ -142,6 +142,7 @@ async def upsert_event_from_spec(
     home: Team | None,
     away: Team | None,
     skip_if_new_terminal: bool = False,
+    skip_if_unknown_event: bool = False,
 ) -> UpsertedEvent | None:
     """Get-or-update an Event, returning the row and the *previous* state for
     transition decisions (mirrors MDProject's ``_should_settle`` / `_should_reopen``
@@ -155,11 +156,24 @@ async def upsert_event_from_spec(
     storage + entity quota on games we never knew were happening. Manual
     backfill paths (``/v1/admin/crons/ingest-event``) leave it off so an
     operator can explicitly request a finished game.
+
+    When ``skip_if_unknown_event=True``, ANY event we haven't already
+    inserted is skipped — used by the intra-day refresh-only walk so new
+    events only appear via the once-a-day discovery cron. Independent of
+    ``skip_if_new_terminal``: the discovery walk uses one, the refresh
+    walk uses the other.
     """
     league = await session.get(League, spec.league_id) if spec.league_id else None
     sport_id = (league.sport_id if league else None) or spec.sport_id
 
     existing = await session.get(Event, spec.event_id)
+    if existing is None and skip_if_unknown_event:
+        logger.debug(
+            "skipping unknown event %s — refresh-only walk, "
+            "new events arrive on the daily discovery cron",
+            spec.event_id,
+        )
+        return None
     if existing is None and skip_if_new_terminal:
         if (spec.status_type or "").lower() in TERMINAL_STATUSES:
             logger.debug(

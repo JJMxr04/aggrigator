@@ -46,14 +46,21 @@ def _build_client() -> SgoClient:
     )
 
 
-async def run_ingest_due_leagues() -> dict[str, Any]:
+async def run_ingest_due_leagues(
+    *, discover_new_events: bool = True,
+) -> dict[str, Any]:
     """Walk every active League once with the full pipeline (events +
     markets + selections + bookmaker quotes + lifecycle + webhooks).
 
-    This is the auto-scheduled cron and also what ``full_refresh`` calls
-    after seeding. The lifecycle-only / odds-only split variants were
-    removed when the cron registry was trimmed — the combined walk is
-    always the cost-efficient default on both providers.
+    Auto-scheduled twice with different intent:
+
+    - **Discovery walk** (``discover_new_events=True``, daily): inserts
+      newly surfaced events plus refreshes existing ones. Same call shape
+      ``full_refresh`` invokes after seeding.
+    - **Refresh walk** (``discover_new_events=False``, intra-day): only
+      touches events already in DB. New events deferred to the daily
+      discovery cron — keeps the hourly cycle's per-event write cost
+      bounded by the existing event count.
     """
     settings = get_settings()
     is_oddsapi = (
@@ -98,10 +105,15 @@ async def run_ingest_due_leagues() -> dict[str, Any]:
             "reason": reason,
             "pace_reason": qs.pace_reason,
         }
-    await set_progress("walking active leagues")
+    mode = "discovery" if discover_new_events else "refresh-only"
+    await set_progress(f"walking active leagues ({mode})")
     async with session_scope() as session:
-        reports = await ingest_due_leagues(session, client)
+        reports = await ingest_due_leagues(
+            session, client,
+            discover_new_events=discover_new_events,
+        )
     summary: dict[str, Any] = {
+        "mode": mode,
         "leagues_walked": len(reports),
         "events_processed": sum(r.events_processed for r in reports),
         "events_failed": sum(r.events_failed for r in reports),
@@ -128,13 +140,33 @@ async def run_ingest_due_leagues() -> dict[str, Any]:
 # ---- ARQ entry point -------------------------------------------------------
 
 
+async def run_refresh_existing_events() -> dict[str, Any]:
+    """Convenience wrapper for the registry/UI runner contract — same
+    pipeline as ``run_ingest_due_leagues`` with new-event discovery off."""
+    return await run_ingest_due_leagues(discover_new_events=False)
+
+
 async def ingest_due_leagues_task(ctx: dict) -> dict:
-    """ARQ-callable wrapper. Wrapped by ``cron_run_recorder`` so every
-    scheduled run lands in the ``cron_run`` table."""
+    """ARQ-callable wrapper for the daily DISCOVERY walk. Wrapped by
+    ``cron_run_recorder`` so every scheduled run lands in the
+    ``cron_run`` table."""
     from aggrigator.ops.recorder import cron_run_recorder
 
     @cron_run_recorder("ingest_due_leagues")
     async def _runner(ctx_):
-        return await run_ingest_due_leagues()
+        return await run_ingest_due_leagues(discover_new_events=True)
+
+    return await _runner(ctx)
+
+
+async def refresh_existing_events_task(ctx: dict) -> dict:
+    """ARQ-callable wrapper for the intra-day REFRESH-only walk. Same
+    pipeline as the discovery walk but skips events not already in DB —
+    new events get picked up on the next daily discovery cron."""
+    from aggrigator.ops.recorder import cron_run_recorder
+
+    @cron_run_recorder("refresh_existing_events")
+    async def _runner(ctx_):
+        return await run_ingest_due_leagues(discover_new_events=False)
 
     return await _runner(ctx)

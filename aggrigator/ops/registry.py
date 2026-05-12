@@ -15,47 +15,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from aggrigator.config import get_settings
 from aggrigator.workers.tasks.full_refresh import run_full_refresh
-from aggrigator.workers.tasks.ingest import run_ingest_due_leagues
+from aggrigator.workers.tasks.ingest import (
+    run_ingest_due_leagues,
+    run_refresh_existing_events,
+)
 from aggrigator.workers.tasks.seed import run_seed_leagues, run_seed_sports
 from aggrigator.workers.tasks.settle import run_settle_pending
 from aggrigator.workers.tasks.vacuum import run_vacuum_old_events
 from aggrigator.workers.tasks.watchdog import run_lifecycle_watchdog
 from aggrigator.workers.tasks.webhook_deliver import run_deliver_due
-
-
-def _format_ingest_schedule() -> str:
-    """Format the actual ``ingest_due_leagues`` cadence based on env vars.
-
-    Read at module-load time. Reflects whatever ``AGG_INGEST_CRON_MINUTES``
-    and ``AGG_INGEST_CRON_HOURS`` resolve to on this deployment, so /ops/crons
-    shows the real schedule rather than a stale default.
-    """
-    s = get_settings()
-    minutes = sorted(s.ingest_cron_minute_set)
-    hours = s.ingest_cron_hour_set  # None = every hour
-
-    if hours is None:
-        if minutes == [0]:
-            return "hourly @ :00 UTC (env-tunable)"
-        if len(minutes) == 1:
-            return f"hourly @ :{minutes[0]:02d} UTC (env-tunable)"
-        mins = ", ".join(f":{m:02d}" for m in minutes)
-        return f"every hour @ {mins} UTC (env-tunable)"
-
-    hours_sorted = sorted(hours)
-    if len(hours_sorted) == 1 and len(minutes) == 1:
-        return (
-            f"daily @ {hours_sorted[0]:02d}:{minutes[0]:02d} UTC (env-tunable)"
-        )
-    if len(minutes) == 1:
-        times = ", ".join(f"{h:02d}:{minutes[0]:02d}" for h in hours_sorted)
-        return f"@ {times} UTC (env-tunable)"
-    times = ", ".join(
-        f"{h:02d}:{m:02d}" for h in hours_sorted for m in minutes
-    )
-    return f"@ {times} UTC (env-tunable)"
 
 
 @dataclass
@@ -86,10 +55,10 @@ REGISTRY: list[CronSpec] = [
         name="seed_sports",
         description=(
             "Upsert the sport list (basketball, football, baseball, …) from "
-            "the active provider. Sports change essentially never — runs "
-            "weekly, most refreshes are no-ops."
+            "the active provider. Runs daily so newly-added sports land "
+            "in time for the next discovery walk; most ticks are no-ops."
         ),
-        schedule_human="weekly Mon @ 01:30 UTC",
+        schedule_human="daily @ 01:30 UTC",
         runner=run_seed_sports,
         max_runtime_seconds=120,
     ),
@@ -112,17 +81,29 @@ REGISTRY: list[CronSpec] = [
     CronSpec(
         name="ingest_due_leagues",
         description=(
-            "The combined walk: events + markets + per-bookmaker quotes + "
+            "DISCOVERY walk: events + markets + per-bookmaker quotes + "
             "lifecycle + webhooks for every active league whose parent "
-            "sport is also active (League.active AND Sport.active). One "
-            "upstream call per league plus batched /odds/multi (oddsapi) "
-            "or embedded odds (SGO). Provider-aware quota check runs "
-            "first and skips the cycle if the threshold is tripped. "
-            "Cadence tunable via AGG_INGEST_CRON_MINUTES / "
-            "AGG_INGEST_CRON_HOURS."
+            "sport is also active (League.active AND Sport.active). "
+            "Inserts new events the provider has surfaced AND refreshes "
+            "everything already in DB. Runs once daily — intra-day "
+            "refreshes are handled by ``refresh_existing_events`` which "
+            "skips new-event inserts."
         ),
-        schedule_human=_format_ingest_schedule(),
+        schedule_human="daily @ 02:30 UTC",
         runner=run_ingest_due_leagues,
+        max_runtime_seconds=1800,
+    ),
+    CronSpec(
+        name="refresh_existing_events",
+        description=(
+            "REFRESH walk for events ALREADY in DB: odds + scores + "
+            "lifecycle. Skips events not yet in DB — those arrive on the "
+            "daily ``ingest_due_leagues`` discovery cron. Cheaper "
+            "per-event than discovery (no Team/Event insert paths). Runs "
+            "hourly @ :00 except hour 2, which collides with discovery."
+        ),
+        schedule_human="hourly @ :00 UTC (skips 02:00)",
+        runner=run_refresh_existing_events,
         max_runtime_seconds=1800,
     ),
     CronSpec(

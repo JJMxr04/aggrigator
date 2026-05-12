@@ -269,10 +269,15 @@ def _void_event_payload(
 
 # ---- odds translation ------------------------------------------------------
 
-# Bookmaker name normalization. odds-api.io ships display names ("Bet365");
+# Bookmaker name normalization. odds-api.io ships display names ("DraftKings");
 # our internal bookmaker_id convention is lowercase. Mirrors what
-# write_markets / Bookmaker.id expect.
+# write_markets / Bookmaker.id expect. Keep aligned with
+# odds_api_http.ODDSAPI_BOOKMAKERS — names not in the map fall through to
+# str.lower() which is good enough for the catalogued books we send.
 _BOOKMAKER_DISPLAY_TO_ID: dict[str, str] = {
+    "DraftKings": "draftkings",
+    "FanDuel": "fanduel",
+    # Legacy entries retained so historical fixtures still translate.
     "Bet365": "bet365",
     "Pinnacle": "pinnacle",
 }
@@ -334,6 +339,16 @@ def _translate_odds(
                 )
             # else: silently drop (player props, BTTS, period markets, ...)
 
+    if not odds_by_id and bookmakers:
+        # Loud signal for the next time the bookmaker name catalog drifts:
+        # we got bookmakers in the response but produced zero translated
+        # rows. Either the books returned an unexpected shape or the
+        # market-name filter dropped everything.
+        logger.warning(
+            "odds-api translate: bookmakers=%s returned 0 translatable "
+            "odd rows — check market shapes in odds_api_translate._translate_odds",
+            list(bookmakers.keys()),
+        )
     return odds_by_id
 
 

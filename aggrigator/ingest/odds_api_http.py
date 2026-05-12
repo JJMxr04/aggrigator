@@ -52,13 +52,15 @@ logger = logging.getLogger(__name__)
 # a tier upgrade can't silently expand request volume / DB writes / pricing
 # surface. To add a third bookmaker: update this constant + run fixtures.
 # This is product, not infra — see best-practices.md §4.1 for the full
-# rationale.
-ODDSAPI_BOOKMAKERS: tuple[str, ...] = ("bet365", "pinnacle")
-# The /odds query param expects display-cased names (e.g. "Bet365"); our
+# rationale. The two slots are matched to the books selected on the
+# odds-api.io account: changing this constant without changing the account
+# selection produces HTTP 400 on /odds/multi.
+ODDSAPI_BOOKMAKERS: tuple[str, ...] = ("draftkings", "fanduel")
+# The /odds query param expects display-cased names (e.g. "DraftKings"); our
 # internal IDs are lowercase. Map at the API boundary.
 _BOOKMAKER_ID_TO_DISPLAY: dict[str, str] = {
-    "bet365": "Bet365",
-    "pinnacle": "Pinnacle",
+    "draftkings": "DraftKings",
+    "fanduel": "FanDuel",
 }
 
 
@@ -98,7 +100,23 @@ class OddsApiHttpClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self.client = httpx.Client(base_url=self.base_url, timeout=timeout)
+        # Connection pool tuning — every cycle issues 1 /events + several
+        # /odds/multi calls per league back-to-back to the same host. Without
+        # keepalive each call pays ~50-100ms of TLS handshake. With it, only
+        # the first call does. ``max_connections`` caps total open sockets
+        # if league concurrency is ever turned on.
+        # HTTP/2 would be ideal but requires the ``h2`` package which isn't
+        # in requirements; add ``http2=True`` here + ``httpx[http2]`` in
+        # requirements to multiplex further.
+        self.client = httpx.Client(
+            base_url=self.base_url,
+            timeout=timeout,
+            limits=httpx.Limits(
+                max_keepalive_connections=10,
+                max_connections=20,
+            ),
+            transport=httpx.HTTPTransport(retries=2),
+        )
         self.max_retries = max(0, max_retries)
         self.bookmakers = bookmakers
         # Header state, refreshed on every response.

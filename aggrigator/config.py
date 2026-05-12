@@ -146,35 +146,10 @@ class Settings(BaseSettings):
     docs_enabled: bool = Field(default=False, alias="AGG_DOCS_ENABLED")
 
     # --- free-tier tuning ---
-    # Comma-separated minute values for the auto-scheduled
-    # ``ingest_due_leagues`` cron (the combined walk: events + markets
-    # + per-bookmaker quotes + lifecycle + webhooks in ONE /events call
-    # per league). Default "0" = hourly. Each tick fetches every event
-    # in the configured window for every active league — and SGO bills
-    # 1 entity per event. So a tighter cadence multiplies entity burn:
-    # "0,30" doubles request volume, "0,15,30,45" quadruples. Tune for
-    # your tier.
+    # Cron times are hardcoded in workers/settings.py — see the schedule
+    # block there. To change cadence, edit that file and redeploy (cadence
+    # is product policy, not infra knob).
     #
-    # SGO free tier (~2,500 entities/month) rough sizing — the dominant
-    # cost on SGO. Use a sparse schedule (AGG_INGEST_CRON_HOURS=0,8,16):
-    #   3 leagues × ~10 events × every 8 hours ≈ 2,700 entities/month.
-    # oddsapi free tier (100 req/hr) — hourly is fine; cycle costs ~6-9 req.
-    ingest_cron_minutes: str = Field(
-        default="0", alias="AGG_INGEST_CRON_MINUTES",
-    )
-    # Hour filter for the auto cron. Empty (default) = every hour. Set
-    # to e.g. "0,6,12,18" to run only every 6 hours.
-    ingest_cron_hours: str = Field(
-        default="", alias="AGG_INGEST_CRON_HOURS",
-    )
-    # Optional weekday filter for full_refresh. Currently UNUSED —
-    # full_refresh is manual-only on the auto schedule (it would
-    # duplicate seed_* + the hourly ingest cron). Kept on the model
-    # so existing deployments with the env var set don't error out;
-    # remove from your env once you've redeployed.
-    full_refresh_weekday: str = Field(
-        default="", alias="AGG_FULL_REFRESH_WEEKDAY",
-    )
     # Skip ingest crons (ingest_due_leagues + full_refresh) if SGO's monthly
     # /account/usage reports we're past this percent of any per-month cap
     # (requests OR entities). Set to 100 to disable the check. The check is
@@ -224,8 +199,9 @@ class Settings(BaseSettings):
     # below trim the SGO response server-side, which saves bandwidth
     # and DB write cost — but does NOT reduce per-month entity quota.
     # For real quota savings see ``ingest_window_days_*`` (smaller
-    # window = fewer events returned) or ``ingest_cron_minutes`` (less
-    # frequent walks = fewer event-fetches per cycle).
+    # window = fewer events returned) or the hardcoded cron cadence in
+    # workers/settings.py (less frequent walks = fewer event-fetches
+    # per cycle).
     #
     # ``include_alt_lines``: SGO returns every alt spread/total by
     # default (e.g. for an MLB total of 8.5, also 7.5/8/9/9.5/...).
@@ -326,60 +302,6 @@ class Settings(BaseSettings):
     @property
     def sgo_fixture_path(self) -> Path | None:
         return Path(self.sgo_fixture_dir) if self.sgo_fixture_dir else None
-
-    @property
-    def ingest_cron_minute_set(self) -> set[int]:
-        """Parsed AGG_INGEST_CRON_MINUTES → set[int] for arq.cron(minute=...).
-
-        Falls back to the hourly default ({0}) on a malformed value rather
-        than crashing the worker on boot.
-        """
-        try:
-            return {
-                int(p.strip())
-                for p in self.ingest_cron_minutes.split(",")
-                if p.strip()
-            } or {0}
-        except ValueError:
-            return {0}
-
-    @property
-    def ingest_cron_hour_set(self) -> set[int] | None:
-        """Parsed AGG_INGEST_CRON_HOURS → set[int] or None (= every hour).
-
-        ``None`` is meaningful: arq treats an unset hour as "every hour", so
-        we return None to omit the kwarg entirely when the env var is empty.
-        """
-        if not self.ingest_cron_hours.strip():
-            return None
-        try:
-            parsed = {
-                int(p.strip())
-                for p in self.ingest_cron_hours.split(",")
-                if p.strip()
-            }
-        except ValueError:
-            return None
-        return parsed or None
-
-    @property
-    def full_refresh_weekday_set(self) -> set[int] | None:
-        """Parsed AGG_FULL_REFRESH_WEEKDAY → set[int] or None (= every day).
-
-        ``None`` is meaningful here: arq's cron treats an unset weekday as
-        "every day", so we return None to omit the kwarg entirely.
-        """
-        if not self.full_refresh_weekday.strip():
-            return None
-        try:
-            parsed = {
-                int(p.strip())
-                for p in self.full_refresh_weekday.split(",")
-                if p.strip()
-            }
-        except ValueError:
-            return None
-        return parsed or None
 
 
 @lru_cache(maxsize=1)
