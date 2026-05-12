@@ -352,15 +352,30 @@ def _translate_odds(
     return odds_by_id
 
 
+def _parse_hdp(value: Any) -> Decimal | None:
+    """Parse an odds-api ``hdp`` field. Returns ``None`` when missing or
+    unparseable so callers can SKIP the row instead of defaulting to ``0``
+    and emitting a bogus pick'em / Totals-0 market.
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError):
+        return None
+
+
 def _pick_main_line_handicap(entries: list[dict]) -> dict | None:
     """Asian Handicap row with the smallest |hdp| — the "pick" / closest-to-pk
-    line. odds-api.io returns the alt-line ladder; we want one row.
+    line. odds-api.io returns the alt-line ladder; we want one row. Rows
+    with missing hdp sort to the end so we never accidentally pick a
+    no-line row as the "main" line.
     """
-    def _abs_hdp(row: dict) -> float:
-        try:
-            return abs(float(row.get("hdp", 0) or 0))
-        except (TypeError, ValueError):
-            return float("inf")
+    def _abs_hdp(row: dict) -> Decimal:
+        h = _parse_hdp(row.get("hdp"))
+        if h is None:
+            return Decimal("Infinity")
+        return abs(h)
     return min(entries, key=_abs_hdp, default=None)
 
 
@@ -378,22 +393,21 @@ _CANONICAL_TOTAL: dict[str, Decimal] = {
 
 def _pick_main_line_totals(entries: list[dict], sport_id: str) -> dict | None:
     """Totals row closest to the sport's canonical total line, or median if
-    no canonical is configured."""
+    no canonical is configured. Rows with missing hdp are dropped before
+    the pick — otherwise they'd sort as line=0 and bias the median or
+    win the "closest to canonical" race for low-scoring sports.
+    """
+    valid = [r for r in entries if _parse_hdp(r.get("hdp")) is not None]
+    if not valid:
+        return None
+
     canonical = _CANONICAL_TOTAL.get(sport_id)
     if canonical is None:
         # Fallback: pick the median of the ladder.
-        try:
-            sorted_rows = sorted(entries, key=lambda r: float(r.get("hdp", 0) or 0))
-        except (TypeError, ValueError):
-            return entries[0] if entries else None
-        return sorted_rows[len(sorted_rows) // 2] if sorted_rows else None
+        sorted_rows = sorted(valid, key=lambda r: _parse_hdp(r.get("hdp")))
+        return sorted_rows[len(sorted_rows) // 2]
 
-    def _dist(row: dict) -> Decimal:
-        try:
-            return abs(Decimal(str(row.get("hdp", 0) or 0)) - canonical)
-        except (InvalidOperation, TypeError):
-            return Decimal("999999")
-    return min(entries, key=_dist, default=None)
+    return min(valid, key=lambda r: abs(_parse_hdp(r.get("hdp")) - canonical))
 
 
 def _accumulate_ml(
@@ -436,10 +450,12 @@ def _accumulate_handicap(
     deeplink: str,
     updated_at: str,
 ) -> None:
-    """Asian Handicap: home gets ``hdp``, away gets ``-hdp``."""
-    try:
-        hdp = Decimal(str(row.get("hdp", 0) or 0))
-    except (InvalidOperation, TypeError):
+    """Asian Handicap: home gets ``hdp``, away gets ``-hdp``. Skip the
+    whole row when ``hdp`` is missing — a spread market without a line
+    is nonsense data; better to drop than to insert ``line=0``.
+    """
+    hdp = _parse_hdp(row.get("hdp"))
+    if hdp is None:
         return
 
     home_price = row.get("home")
@@ -470,9 +486,10 @@ def _accumulate_totals(
     deeplink: str,
     updated_at: str,
 ) -> None:
-    try:
-        line = Decimal(str(row.get("hdp", 0) or 0))
-    except (InvalidOperation, TypeError):
+    """Totals: ``hdp`` is the over/under line. Skip the whole row when
+    missing — a Totals market with line=0 is meaningless."""
+    line = _parse_hdp(row.get("hdp"))
+    if line is None:
         return
 
     for side_label, side_id in (("over", "over"), ("under", "under")):

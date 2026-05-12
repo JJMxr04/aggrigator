@@ -289,6 +289,71 @@ def test_unknown_league_slug_drops_event() -> None:
 # ---- slug maps are self-consistent ------------------------------------------
 
 
+def test_missing_hdp_skips_handicap_and_totals_rows() -> None:
+    """Provider best-practices.md: missing market data should be handled
+    gracefully. Previously we defaulted ``hdp`` to ``0``, which produced
+    a pick'em SP market and a "Totals 0" market — bogus rows in the DB.
+    Now those rows are dropped and the ML market still goes through."""
+    ev = _mlb_event_pending(event_id=999)
+    odds = {
+        "id": 999,
+        "urls": {"Bet365": ""},
+        "bookmakers": {
+            "Bet365": [
+                # ML survives — has no hdp dependency.
+                {"name": "ML", "updatedAt": "2026-05-12T17:00:00Z",
+                 "odds": [{"home": "1.85", "away": "2.10"}]},
+                # AH row missing hdp — must be skipped entirely.
+                {"name": "Asian Handicap", "updatedAt": "2026-05-12T17:00:00Z",
+                 "odds": [{"home": "1.90", "away": "1.90"}]},
+                # Totals row missing hdp — must be skipped entirely.
+                {"name": "Totals", "updatedAt": "2026-05-12T17:00:00Z",
+                 "odds": [{"over": "1.90", "under": "1.90"}]},
+            ],
+        },
+    }
+    payload = to_sgo_event_payload(ev, odds)
+    assert payload is not None
+    odd_ids = list((payload.get("odds") or {}).keys())
+    # ML translated (home + away)
+    assert "runs-home-game-ml-home" in odd_ids
+    assert "runs-away-game-ml-away" in odd_ids
+    # No spread / totals rows because hdp was missing
+    assert not any("sp" in oid for oid in odd_ids), \
+        f"spread odd_ids leaked through despite missing hdp: {odd_ids}"
+    assert not any("ou" in oid for oid in odd_ids), \
+        f"totals odd_ids leaked through despite missing hdp: {odd_ids}"
+
+
+def test_pick_main_line_ignores_rows_missing_hdp() -> None:
+    """Alt-line ladders sometimes carry a tail row without ``hdp``; the
+    pick-main-line helpers must ignore those rows rather than ranking
+    them as ``line=0`` (which would beat the actual main line for low-
+    canonical sports like soccer 2.5)."""
+    from aggrigator.ingest.odds_api_translate import (
+        _pick_main_line_handicap,
+        _pick_main_line_totals,
+    )
+    # Mix valid hdp rows with a malformed one. The valid main is hdp=-0.5.
+    handicap_entries = [
+        {"hdp": -2.5, "home": "2.5", "away": "1.6"},
+        {"hdp": -0.5, "home": "1.9", "away": "1.9"},  # main (smallest |hdp|)
+        {"hdp": None, "home": "1.0", "away": "1.0"},  # malformed
+    ]
+    picked = _pick_main_line_handicap(handicap_entries)
+    assert picked is not None and picked["hdp"] == -0.5
+
+    # SOCCER canonical = 2.5; pick must NOT pick the None row (which
+    # used to default to 0, beating 2.5's distance of 0 vs canonical 2.5).
+    totals_entries = [
+        {"hdp": 2.5, "over": "1.85", "under": "2.00"},  # main
+        {"hdp": 3.5, "over": "2.30", "under": "1.65"},
+        {"hdp": None, "over": "1.0", "under": "1.0"},
+    ]
+    picked = _pick_main_line_totals(totals_entries, "SOCCER")
+    assert picked is not None and picked["hdp"] == 2.5
+
+
 def test_slug_maps_are_bijective() -> None:
     """Defensive: SGO→odds-api maps and odds-api→SGO maps should agree on
     every entry. Catches typos when extending the dicts."""

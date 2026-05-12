@@ -307,24 +307,24 @@ async def ingest_league(
         starts_before=starts_before_iso,
         limit=50,
     ):
-        # First payload arriving means SGO returned the first page —
-        # signal "fetch done, processing begins" so operators can
-        # distinguish a slow upstream from a slow ingest.
+        # First payload arriving means the provider returned its first
+        # page — signal "fetch done, processing begins" so operators can
+        # distinguish a slow upstream from a slow ingest. Fires at most
+        # once per league.
         if not first_event_seen:
             first_event_seen = True
             await set_progress(
-                f"{league.id}: SGO returned first batch — starting ingest"
+                f"{league.id}: provider returned first batch — starting ingest"
             )
-        # Per-event check too — leagues with many events can take long
-        # enough that operators want sub-league responsiveness on Stop.
-        await raise_if_cancelled()
         event_idx += 1
         event_id = payload.get("eventID") or "?"
         if event_id and event_id != "?":
             seen_event_ids.add(event_id)
-        await set_progress(
-            f"{league.id} event {event_idx} ({event_id}): writing odds"
-        )
+        # Per-event set_progress used to fire here (2 calls × 4 Redis
+        # cmds = 8 cmds/event). On a 200-event walk that's the dominant
+        # source of Redis command burn — see plan/redis-budget.md. The
+        # league-boundary summary at the bottom is enough for human
+        # operators; per-event detail lives in the worker logs.
         try:
             # SAVEPOINT per event — a single bad payload rolls back its
             # own writes without poisoning the prior events in this
@@ -337,28 +337,18 @@ async def ingest_league(
                     discover_new_events=discover_new_events,
                 )
         except Exception:  # noqa: BLE001
+            # savepoint already rolled back by the context manager.
+            # No Redis write — the count is rolled up into the league
+            # summary at the bottom, and the full exception lands in
+            # the worker log for debugging.
             logger.exception("ingest failed for event=%s", payload.get("eventID"))
-            # savepoint already rolled back by the context manager
             report.events_failed += 1
-            await set_progress(
-                f"{league.id} event {event_idx} ({event_id}): FAILED — see logs"
-            )
             continue
         if result is not None:
             report.events_processed += 1
             report.transitions.append(result.transition)
             if result.deliveries_enqueued > 0:
                 deliveries_enqueued_this_walk += result.deliveries_enqueued
-            await set_progress(
-                f"{league.id} event {event_idx} ({event_id}): written "
-                f"(selections={result.selections_written} "
-                f"graded={result.selections_graded} "
-                f"transition={result.transition.name})"
-            )
-        else:
-            await set_progress(
-                f"{league.id} event {event_idx} ({event_id}): skipped"
-            )
     # Single commit for the whole league walk — drops per-event commit
     # cost (~5-10ms each) and lets Postgres batch WAL flushes.
     await session.commit()
@@ -399,9 +389,14 @@ async def ingest_league(
         "ingest_league %s: %d events processed, %d failed",
         league.id, report.events_processed, report.events_failed,
     )
+    # League-level summary — one Redis write per league instead of
+    # per-event. Roll up the transition counts so operators can spot
+    # interesting state changes (settlements, voids) without per-event
+    # detail.
+    n_transitions = sum(1 for t in report.transitions if t != Transition.NONE)
     await set_progress(
         f"{league.id}: finished — {report.events_processed} processed, "
-        f"{report.events_failed} failed"
+        f"{report.events_failed} failed, {n_transitions} transitions"
     )
     return report
 
