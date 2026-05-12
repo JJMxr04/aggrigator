@@ -73,10 +73,14 @@ async def run_full_refresh() -> dict:
 
 
 async def full_refresh_task(ctx: dict) -> dict:
-    """ARQ-callable wrapper. Records each scheduled run in ``cron_run``."""
+    """ARQ-callable wrapper. Records each scheduled run in ``cron_run``.
+    Marked ``retryable=True`` because the bulk of its time is spent in
+    the same orchestrator walk as ``ingest_due_leagues`` — same transient
+    failure modes, same per-league commit boundaries, same retry calculus.
+    """
     from aggrigator.ops.recorder import cron_run_recorder
 
-    @cron_run_recorder("full_refresh")
+    @cron_run_recorder("full_refresh", retryable=True)
     async def _runner(ctx_):
         return await run_full_refresh()
 

@@ -148,11 +148,13 @@ async def run_refresh_existing_events() -> dict[str, Any]:
 
 async def ingest_due_leagues_task(ctx: dict) -> dict:
     """ARQ-callable wrapper for the daily DISCOVERY walk. Wrapped by
-    ``cron_run_recorder`` so every scheduled run lands in the
-    ``cron_run`` table."""
+    ``cron_run_recorder(retryable=True)`` so transient failures (timeout,
+    rate-limit hit just before bucket reset, Redis blip) get one auto
+    retry deferred 5 min — the orchestrator's per-league commits make
+    the retry naturally pick up where the original left off."""
     from aggrigator.ops.recorder import cron_run_recorder
 
-    @cron_run_recorder("ingest_due_leagues")
+    @cron_run_recorder("ingest_due_leagues", retryable=True)
     async def _runner(ctx_):
         return await run_ingest_due_leagues(discover_new_events=True)
 
@@ -162,10 +164,11 @@ async def ingest_due_leagues_task(ctx: dict) -> dict:
 async def refresh_existing_events_task(ctx: dict) -> dict:
     """ARQ-callable wrapper for the intra-day REFRESH-only walk. Same
     pipeline as the discovery walk but skips events not already in DB —
-    new events get picked up on the next daily discovery cron."""
+    new events get picked up on the next daily discovery cron. Same
+    retry classification as the discovery walk (see above)."""
     from aggrigator.ops.recorder import cron_run_recorder
 
-    @cron_run_recorder("refresh_existing_events")
+    @cron_run_recorder("refresh_existing_events", retryable=True)
     async def _runner(ctx_):
         return await run_ingest_due_leagues(discover_new_events=False)
 

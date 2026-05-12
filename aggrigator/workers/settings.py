@@ -83,6 +83,22 @@ def _build_cron_jobs() -> list:
                         themselves. A scheduled run would write no-op
                         cron_run rows.
     """
+    # Retry budget for the network-bound ingest tasks: arq's default
+    # max_tries=1 means a single transient failure (Redis blip, upstream
+    # timeout, post-fast-fail rate-limit hit just before bucket reset)
+    # leaves a stale cron_run row until the next scheduled tick. With
+    # max_tries=2 + the recorder's Retry(defer=300) classifier, one auto
+    # retry fires 5 min after a transient failure. Per-league commits
+    # mean the retry naturally picks up where the original left off
+    # (already-finished leagues UPSERT cheaply; new ones run fresh).
+    #
+    # job_timeout=900 (15 min) replaces arq's 300s default. A normal
+    # walk runs in 5–10s; the headroom absorbs slow upstream responses
+    # and the worst-case rate-limit retry budget without the worker
+    # cancelling the task mid-league (which is what dropped the row at
+    # cron_run id=138 on 2026-05-12).
+    INGEST_RETRY_KW = {"timeout": 900, "max_tries": 2}
+
     return [
         cron(
             seed_sports_task,
@@ -99,6 +115,7 @@ def _build_cron_jobs() -> list:
             hour={2}, minute={30},
             run_at_startup=False,
             name="ingest_due_leagues",
+            **INGEST_RETRY_KW,
         ),
         cron(
             refresh_existing_events_task,
@@ -109,6 +126,7 @@ def _build_cron_jobs() -> list:
             minute={0},
             run_at_startup=False,
             name="refresh_existing_events",
+            **INGEST_RETRY_KW,
         ),
         cron(
             lifecycle_watchdog_task,

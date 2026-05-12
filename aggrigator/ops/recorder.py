@@ -15,6 +15,7 @@ Two entry points:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import traceback
 import uuid
@@ -22,9 +23,11 @@ from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Awaitable, Callable
 
+import redis.exceptions as _redis_exc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aggrigator.db import session_scope
+from aggrigator.ingest.odds_api_errors import RateLimitExceededError
 from aggrigator.models import CronRun, CronRunSource, CronRunStatus
 from aggrigator.ops.progress import (
     CronCancelled,
@@ -38,6 +41,25 @@ from aggrigator.ops.registry import CronSpec, by_name
 logger = logging.getLogger(__name__)
 
 ERROR_TRUNCATE_CHARS = 4000
+
+# Errors a retry might actually fix. Anything outside this set
+# (ValidationError, InvalidApiKeyError, programming bugs, etc.) is
+# terminal — retrying just burns API quota and worker slots.
+#
+# - asyncio.TimeoutError: arq's job_timeout fired or upstream stalled.
+# - RateLimitExceededError: per-hour bucket exhausted; defers past reset.
+# - redis.RedisError + ConnectionError: transient infra hiccup; the
+#   recorder + progress writer both touch Redis on the hot path.
+RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    asyncio.TimeoutError,
+    RateLimitExceededError,
+    _redis_exc.RedisError,
+    _redis_exc.ConnectionError,
+)
+# Default deferral for an auto-retry. Five minutes is long enough for a
+# Redis blip to clear and short enough that the next scheduled tick
+# doesn't beat us to it on hourly crons.
+DEFAULT_RETRY_DEFER_SECONDS = 300
 
 
 async def open_run(
@@ -156,12 +178,29 @@ async def run_with_recording(
     return row, summary, error
 
 
-def cron_run_recorder(spec_name: str) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
+def cron_run_recorder(
+    spec_name: str,
+    *,
+    retryable: bool = False,
+    retry_defer_seconds: int = DEFAULT_RETRY_DEFER_SECONDS,
+) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """Decorator for ARQ task bodies — wraps them with cron_run recording.
+
+    When ``retryable=True``, transient failures (see ``RETRYABLE_EXCEPTIONS``)
+    are converted into ``arq.worker.Retry(defer=retry_defer_seconds)`` IF the
+    cron's ``max_tries`` budget allows another attempt. The cron_run row is
+    still written by ``run_with_recording`` so the failure is visible in
+    /ops/crons; arq enqueues a fresh job for the retry. Per-league commits
+    in the orchestrator mean the retry naturally picks up where the
+    original left off (already-finished leagues are cheap UPSERTs).
+
+    Terminal failures (ValidationError, InvalidApiKeyError, bugs) and
+    arq.CronJobs without a retry budget propagate unchanged — re-raised so
+    arq marks the job failed.
 
     Usage::
 
-        @cron_run_recorder("ingest_due_leagues")
+        @cron_run_recorder("ingest_due_leagues", retryable=True)
         async def ingest_due_leagues_task(ctx):
             ...
     """
@@ -172,12 +211,40 @@ def cron_run_recorder(spec_name: str) -> Callable[[Callable[..., Awaitable[Any]]
     def _decorate(fn: Callable[..., Awaitable[Any]]):
         @wraps(fn)
         async def _wrapped(ctx: dict, *args, **kwargs):
-            arq_job_id = (ctx or {}).get("job_id") or str(uuid.uuid4())
-            _, summary, _ = await run_with_recording(
-                spec,
-                trigger_source=CronRunSource.SCHEDULED,
-                arq_job_id=arq_job_id,
-            )
+            ctx = ctx or {}
+            arq_job_id = ctx.get("job_id") or str(uuid.uuid4())
+            try:
+                _, summary, _ = await run_with_recording(
+                    spec,
+                    trigger_source=CronRunSource.SCHEDULED,
+                    arq_job_id=arq_job_id,
+                )
+            except RETRYABLE_EXCEPTIONS as exc:
+                if not retryable:
+                    raise
+                # ctx["job_try"] is 1-indexed; ctx["max_tries"] is the
+                # budget arq passed in (set per-cron in workers/settings.py).
+                # If neither is present we're outside an arq context (test
+                # harness, manual call) so just re-raise.
+                job_try = ctx.get("job_try")
+                max_tries = ctx.get("max_tries")
+                if job_try is None or max_tries is None:
+                    raise
+                if job_try >= max_tries:
+                    logger.warning(
+                        "cron %s: transient failure on final try %d/%d — "
+                        "giving up, will wait for next scheduled tick (%s)",
+                        spec_name, job_try, max_tries, type(exc).__name__,
+                    )
+                    raise
+                from arq.worker import Retry  # local import — keeps cold-start light
+                logger.warning(
+                    "cron %s: transient failure on try %d/%d — deferring "
+                    "%ds for retry (%s: %s)",
+                    spec_name, job_try, max_tries, retry_defer_seconds,
+                    type(exc).__name__, exc,
+                )
+                raise Retry(defer=retry_defer_seconds)
             return summary
 
         return _wrapped
