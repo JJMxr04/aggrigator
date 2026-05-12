@@ -473,6 +473,39 @@ class OddsApiHttpClient:
 
             if resp.status_code == 429:
                 self.rate_limit_hits += 1
+                # Prefer Retry-After (seconds), fall back to x-ratelimit-reset
+                # (ISO timestamp) so we get an accurate wait even when the
+                # server omits Retry-After.
+                wait_required = self._parse_retry_after(
+                    resp.headers.get("Retry-After")
+                )
+                wait_source = "Retry-After header"
+                if wait_required is None:
+                    wait_required = self._seconds_until_reset(
+                        resp.headers.get("x-ratelimit-reset")
+                    )
+                    wait_source = "x-ratelimit-reset header"
+                if wait_required is None:
+                    wait_required = backoff
+                    wait_source = "exponential backoff"
+
+                # Fail fast when the server-mandated wait exceeds our retry
+                # budget. Retrying inside this window only burns more
+                # requests against an already-exhausted bucket and produces
+                # the misleading "after N retries" traceback. The next
+                # cron tick will read fresh headers and try again.
+                if wait_required > _MAX_RETRY_WAIT:
+                    logger.warning(
+                        "oddsapi 429 on %s — bucket reset in %.0fs "
+                        "(> %.0fs retry cap), failing fast (%s)",
+                        path, wait_required, _MAX_RETRY_WAIT, wait_source,
+                    )
+                    raise RateLimitExceededError(
+                        f"oddsapi 429 on {path}: rate limit exhausted, "
+                        f"resets in {wait_required:.0f}s "
+                        f"(reset_at={self.last_ratelimit_reset})"
+                    )
+
                 if attempt >= self.max_retries:
                     logger.warning(
                         "oddsapi 429 on %s after %d retries — giving up",
@@ -481,17 +514,13 @@ class OddsApiHttpClient:
                     raise RateLimitExceededError(
                         f"oddsapi 429 on {path} after {attempt} retries"
                     )
-                wait = self._parse_retry_after(resp.headers.get("Retry-After"))
-                from_header = wait is not None
-                if wait is None:
-                    wait = backoff
-                wait = min(wait, _MAX_RETRY_WAIT)
+
                 logger.warning(
                     "oddsapi 429 on %s — waiting %.1fs before retry %d/%d (%s)",
-                    path, wait, attempt + 1, self.max_retries,
-                    "Retry-After header" if from_header else "exponential backoff",
+                    path, wait_required, attempt + 1, self.max_retries,
+                    wait_source,
                 )
-                time.sleep(wait)
+                time.sleep(wait_required)
                 backoff = min(backoff * 2, _MAX_RETRY_WAIT)
                 continue
 
@@ -576,3 +605,24 @@ class OddsApiHttpClient:
             return max(0.0, float(value))
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _seconds_until_reset(value: str | None) -> float | None:
+        """Parse ``x-ratelimit-reset`` (ISO-8601 UTC like
+        ``2026-05-12T02:22:31Z``) into seconds-from-now. Returns ``None``
+        when the header is absent or unparseable so the caller can fall
+        back to exponential backoff."""
+        if not value:
+            return None
+        from datetime import datetime, timezone
+        # Strip a trailing ``Z`` since fromisoformat() didn't accept it
+        # before Python 3.11; harmless on 3.11+.
+        s = str(value).strip().rstrip("Z")
+        try:
+            reset_at = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+        if reset_at.tzinfo is None:
+            reset_at = reset_at.replace(tzinfo=timezone.utc)
+        delta = (reset_at - datetime.now(tz=timezone.utc)).total_seconds()
+        return max(0.0, delta)
