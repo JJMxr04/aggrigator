@@ -1,6 +1,6 @@
 """Unit tests for ``odds_api_translate``.
 
-Synthetic JSON in odds-api.io's documented shape → SGO-shape payload →
+Synthetic JSON in odds-api.io's documented shape → internal-shape payload →
 ``event_spec_from_payload`` reparse → assertions on the resulting
 ``EventSpec``. Confirms the round trip: every existing downstream code
 path (normalize, upsert, settlement, webhooks) sees identical structure
@@ -19,9 +19,9 @@ import pytest
 from aggrigator.ingest.normalize import event_spec_from_payload
 from aggrigator.ingest.odds_api_errors import SchemaError
 from aggrigator.ingest.odds_api_translate import (
-    SGO_TO_ODDSAPI_LEAGUE,
-    SGO_TO_ODDSAPI_SPORT,
-    to_sgo_event_payload,
+    INTERNAL_TO_ODDSAPI_LEAGUE,
+    INTERNAL_TO_ODDSAPI_SPORT,
+    to_internal_event_payload,
 )
 
 
@@ -117,15 +117,15 @@ def _mlb_odds_payload(
 def test_live_event_dropped() -> None:
     ev = _mlb_event_pending()
     ev["status"] = "live"
-    assert to_sgo_event_payload(ev) is None
+    assert to_internal_event_payload(ev) is None
 
 
-# ---- settled → SGO payload ---------------------------------------------------
+# ---- settled → internal payload ---------------------------------------------------
 
 
 def test_settled_event_translated_with_scores() -> None:
     ev = _mlb_event_settled(home_score=5, away_score=3)
-    payload = to_sgo_event_payload(ev)
+    payload = to_internal_event_payload(ev)
     assert payload is not None
     assert payload["type"] == "match"
     assert payload["eventID"] == "100"
@@ -153,7 +153,7 @@ def test_settled_with_null_scores_becomes_cancelled() -> None:
     """cancelled-suspended.md §4.1 — settled+null-scores = abandoned."""
     ev = _mlb_event_settled()
     ev["scores"] = {"home": None, "away": None}
-    payload = to_sgo_event_payload(ev)
+    payload = to_internal_event_payload(ev)
     assert payload is not None
     assert payload["status"]["cancelled"] is True
     assert payload["status"]["finalized"] is False
@@ -164,13 +164,13 @@ def test_settled_with_null_scores_becomes_cancelled() -> None:
     assert spec.feed_locked is True
 
 
-# ---- pending → SGO payload with odds ----------------------------------------
+# ---- pending → internal payload with odds ----------------------------------------
 
 
 def test_pending_event_with_odds_translates_main_lines() -> None:
     ev = _mlb_event_pending()
     odds = _mlb_odds_payload()
-    payload = to_sgo_event_payload(ev, odds)
+    payload = to_internal_event_payload(ev, odds)
     assert payload is not None
     assert payload["status"]["finalized"] is False
     assert payload["status"]["cancelled"] is False
@@ -192,7 +192,7 @@ def test_pending_event_with_odds_translates_main_lines() -> None:
 def test_pending_event_picks_main_totals_line_closest_to_canonical() -> None:
     ev = _mlb_event_pending()
     odds = _mlb_odds_payload()
-    payload = to_sgo_event_payload(ev, odds)
+    payload = to_internal_event_payload(ev, odds)
     assert payload is not None
     # MLB canonical = 8.5, so over/under entries should reflect that line.
     over_row = payload["odds"]["runs-all-game-ou-over"]
@@ -202,14 +202,14 @@ def test_pending_event_picks_main_totals_line_closest_to_canonical() -> None:
 def test_pending_event_empty_bookmakers_becomes_event_only() -> None:
     """cancelled-suspended.md §4.2 — pending+no books = WebSocket no_markets."""
     ev = _mlb_event_pending()
-    payload = to_sgo_event_payload(ev, {"bookmakers": {}})
+    payload = to_internal_event_payload(ev, {"bookmakers": {}})
     assert payload is not None
     assert payload["odds"] == {}  # no quotes preserved
 
 
 def test_no_odds_dict_argument_yields_event_only() -> None:
     ev = _mlb_event_pending()
-    payload = to_sgo_event_payload(ev, None)
+    payload = to_internal_event_payload(ev, None)
     assert payload is not None
     assert payload["odds"] == {}
 
@@ -242,7 +242,7 @@ def test_soccer_ml_three_way_emits_draw_selection() -> None:
             ],
         },
     }
-    payload = to_sgo_event_payload(ev, odds)
+    payload = to_internal_event_payload(ev, odds)
     assert payload is not None
     odd_keys = set(payload["odds"].keys())
     # Soccer = goals stat, ml3way bet type
@@ -257,7 +257,7 @@ def test_soccer_ml_three_way_emits_draw_selection() -> None:
 def test_pending_event_per_bookmaker_quotes_normalized_to_lowercase() -> None:
     ev = _mlb_event_pending()
     odds = _mlb_odds_payload()
-    payload = to_sgo_event_payload(ev, odds)
+    payload = to_internal_event_payload(ev, odds)
     assert payload is not None
     ml_home = payload["odds"]["runs-home-game-ml-home"]
     # Bet365 display name normalized to "bet365" internal ID.
@@ -271,19 +271,19 @@ def test_pending_event_per_bookmaker_quotes_normalized_to_lowercase() -> None:
 def test_missing_required_field_raises_schema_error() -> None:
     ev = {"id": 1, "status": "pending"}  # missing home/away/date
     with pytest.raises(SchemaError):
-        to_sgo_event_payload(ev)
+        to_internal_event_payload(ev)
 
 
 def test_unknown_sport_slug_drops_event() -> None:
     ev = _mlb_event_pending()
     ev["sport"] = {"name": "Cricket", "slug": "cricket"}
-    assert to_sgo_event_payload(ev) is None
+    assert to_internal_event_payload(ev) is None
 
 
 def test_unknown_league_slug_drops_event() -> None:
     ev = _mlb_event_pending()
     ev["league"] = {"name": "??", "slug": "usa-fakelg"}
-    assert to_sgo_event_payload(ev) is None
+    assert to_internal_event_payload(ev) is None
 
 
 # ---- slug maps are self-consistent ------------------------------------------
@@ -312,7 +312,7 @@ def test_missing_hdp_skips_handicap_and_totals_rows() -> None:
             ],
         },
     }
-    payload = to_sgo_event_payload(ev, odds)
+    payload = to_internal_event_payload(ev, odds)
     assert payload is not None
     odd_ids = list((payload.get("odds") or {}).keys())
     # ML translated (home + away)
@@ -355,13 +355,13 @@ def test_pick_main_line_ignores_rows_missing_hdp() -> None:
 
 
 def test_slug_maps_are_bijective() -> None:
-    """Defensive: SGO→odds-api maps and odds-api→SGO maps should agree on
+    """Defensive: internal→odds-api maps and odds-api→internal maps should agree on
     every entry. Catches typos when extending the dicts."""
     from aggrigator.ingest.odds_api_translate import (
-        ODDSAPI_TO_SGO_LEAGUE,
-        ODDSAPI_TO_SGO_SPORT,
+        ODDSAPI_TO_INTERNAL_LEAGUE,
+        ODDSAPI_TO_INTERNAL_SPORT,
     )
-    for sgo, slug in SGO_TO_ODDSAPI_SPORT.items():
-        assert ODDSAPI_TO_SGO_SPORT[slug] == sgo
-    for sgo, slug in SGO_TO_ODDSAPI_LEAGUE.items():
-        assert ODDSAPI_TO_SGO_LEAGUE[slug] == sgo
+    for internal_id, slug in INTERNAL_TO_ODDSAPI_SPORT.items():
+        assert ODDSAPI_TO_INTERNAL_SPORT[slug] == internal_id
+    for internal_id, slug in INTERNAL_TO_ODDSAPI_LEAGUE.items():
+        assert ODDSAPI_TO_INTERNAL_LEAGUE[slug] == internal_id

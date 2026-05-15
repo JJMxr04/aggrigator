@@ -17,21 +17,13 @@ from aggrigator.models.audit import AuditLog
 logger = logging.getLogger(__name__)
 
 
-# Canonical event names — keep in sync with plan §8.
+# Canonical event names.
 class Event:
     AUTH_LOGIN_OK = "auth.login.ok"
     AUTH_LOGIN_FAIL = "auth.login.fail"
     AUTH_REFRESH_OK = "auth.refresh.ok"
     AUTH_REFRESH_FAIL = "auth.refresh.fail"
     AUTH_LOGOUT = "auth.logout"
-    AUTH_REGISTER = "auth.register"
-    KEY_CREATE = "key.create"
-    KEY_ROTATE = "key.rotate"
-    KEY_REVOKE = "key.revoke"
-    KEY_USE = "key.use"
-    WEBHOOK_ENDPOINT_CREATE = "webhook.endpoint.create"
-    WEBHOOK_ENDPOINT_ROTATE = "webhook.endpoint.rotate"
-    WEBHOOK_ENDPOINT_DELETE = "webhook.endpoint.delete"
     WEBHOOK_DELIVERY_SUCCESS = "webhook.delivery.success"
     WEBHOOK_DELIVERY_FAIL = "webhook.delivery.fail"
     ADMIN_LOGIN = "admin.login"
@@ -43,7 +35,6 @@ async def write(
     *,
     event_name: str,
     actor_user_id: uuid.UUID | None = None,
-    actor_api_key_id: uuid.UUID | None = None,
     ip: str | None = None,
     target_type: str | None = None,
     target_id: str | None = None,
@@ -52,7 +43,6 @@ async def write(
     try:
         session.add(AuditLog(
             actor_user_id=actor_user_id,
-            actor_api_key_id=actor_api_key_id,
             ip=ip,
             event_name=event_name,
             target_type=target_type,

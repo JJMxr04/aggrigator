@@ -1,6 +1,6 @@
-"""Async upserts for Sport / League / Team / Event from SGO specs.
+"""Async upserts for Sport / League / Team / Event from the provider specs.
 
-Mirrors the model-manager methods in MDProject (``Sport.objects.upsert_from_sgo``,
+Mirrors the model-manager methods in MDProject (``Sport.objects.upsert_from_spec``,
 ``Team.objects.upsert_from_spec``, ``Event.objects.upsert_from_spec``) but in
 async SQLAlchemy 2.0. Each helper takes a session and a spec/payload, performs
 get-or-create-or-update, returns the row.
@@ -26,10 +26,10 @@ from aggrigator.models import Event, League, Sport, Team
 logger = logging.getLogger(__name__)
 
 
-# ---- sport / league (from /sports + /leagues SGO endpoints) ---------------
+# ---- sport / league (from /sports + /leagues provider endpoints) ---------------
 
 
-async def upsert_sport_from_sgo(session: AsyncSession, payload: dict) -> Sport | None:
+async def upsert_sport_from_spec(session: AsyncSession, payload: dict) -> Sport | None:
     sport_id = payload.get("sportID")
     if not sport_id:
         return None
@@ -52,7 +52,7 @@ async def upsert_sport_from_sgo(session: AsyncSession, payload: dict) -> Sport |
     return row
 
 
-async def upsert_league_from_sgo(session: AsyncSession, payload: dict) -> League | None:
+async def upsert_league_from_spec(session: AsyncSession, payload: dict) -> League | None:
     league_id = payload.get("leagueID")
     sport_id = payload.get("sportID")
     if not league_id or not sport_id:
@@ -149,7 +149,7 @@ async def upsert_event_from_spec(
     snapshot pattern).
 
     When ``skip_if_new_terminal=True`` and the event isn't in our DB yet,
-    SGO payloads in a terminal status (``finished`` / ``postponed`` /
+    Provider payloads in a terminal status (``finished`` / ``postponed`` /
     ``canceled``) are skipped — no row inserted, no markets written, no
     settlement attempted. Returns ``None`` to signal the skip. Cron
     callers (``ingest_due_leagues``) opt into this so we don't burn
@@ -178,7 +178,7 @@ async def upsert_event_from_spec(
         if (spec.status_type or "").lower() in TERMINAL_STATUSES:
             logger.debug(
                 "skipping new terminal event %s (status=%s) — "
-                "not in DB and SGO reports it as already over",
+                "not in DB and the provider reports it as already over",
                 spec.event_id, spec.status_type,
             )
             return None

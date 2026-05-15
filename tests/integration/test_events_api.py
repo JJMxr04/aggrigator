@@ -1,4 +1,4 @@
-"""Tests for /v1/events, /v1/events/{id}, /v1/events/{id}/markets."""
+"""Tests for /v1/events, /v1/events/{id}, /v1/events/{id}/markets — public."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from decimal import Decimal
 import pytest
 
 from tests.integration.factories import (
-    login_and_get_token,
     make_event,
     make_league,
     make_market,
@@ -31,15 +30,14 @@ async def _seed_basic_event(session, **event_kwargs):
     return sport, league, home, away, event
 
 
-async def test_list_events_requires_auth(client) -> None:
+async def test_list_events_is_public(client) -> None:
     r = await client.get("/v1/events")
-    assert r.status_code == 401
+    assert r.status_code == 200
 
 
 async def test_list_events_returns_seeded_in_default_window(client, session) -> None:
     _, _, _, _, event = await _seed_basic_event(session)
-    token = await login_and_get_token(client)
-    r = await client.get("/v1/events", headers={"Authorization": f"Bearer {token}"})
+    r = await client.get("/v1/events")
     assert r.status_code == 200
     body = r.json()
     assert body["total"] == 1
@@ -52,8 +50,7 @@ async def test_list_events_default_window_excludes_far_future(client, session) -
         session,
         start_time=datetime.now(tz=timezone.utc) + timedelta(days=10),
     )
-    token = await login_and_get_token(client)
-    r = await client.get("/v1/events", headers={"Authorization": f"Bearer {token}"})
+    r = await client.get("/v1/events")
     assert r.json()["total"] == 0
 
 
@@ -69,16 +66,11 @@ async def test_list_events_filter_by_sport_and_league(client, session) -> None:
     await make_event(session, league=nfl, home_team=nfl_h, away_team=nfl_a)
     await make_event(session, league=nba, home_team=nba_h, away_team=nba_a)
 
-    token = await login_and_get_token(client)
-    r = await client.get(
-        "/v1/events?sport=FOOTBALL", headers={"Authorization": f"Bearer {token}"}
-    )
+    r = await client.get("/v1/events?sport=FOOTBALL")
     assert r.json()["total"] == 1
     assert r.json()["items"][0]["sport_id"] == "FOOTBALL"
 
-    r = await client.get(
-        "/v1/events?league=NBA", headers={"Authorization": f"Bearer {token}"}
-    )
+    r = await client.get("/v1/events?league=NBA")
     assert r.json()["total"] == 1
     assert r.json()["items"][0]["league_id"] == "NBA"
 
@@ -98,10 +90,7 @@ async def test_list_events_filter_live(client, session) -> None:
         id="evt-pre", status_type="notstarted",
     )
 
-    token = await login_and_get_token(client)
-    r = await client.get(
-        "/v1/events?live=true", headers={"Authorization": f"Bearer {token}"}
-    )
+    r = await client.get("/v1/events?live=true")
     ids = [it["id"] for it in r.json()["items"]]
     assert ids == ["evt-live"]
 
@@ -120,11 +109,7 @@ async def test_list_events_pagination(client, session) -> None:
             id=f"evt-{i}",
             start_time=datetime.now(tz=timezone.utc) + timedelta(hours=i + 1),
         )
-    token = await login_and_get_token(client)
-    r = await client.get(
-        "/v1/events?page_size=2&page=2",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    r = await client.get("/v1/events?page_size=2&page=2")
     body = r.json()
     assert body["total"] == 5
     assert body["pages"] == 3
@@ -138,10 +123,7 @@ async def test_list_events_include_markets(client, session) -> None:
     await make_selection(session, market=market, type="HOME", decimal_odds=Decimal("1.50"))
     await make_selection(session, market=market, type="AWAY", decimal_odds=Decimal("2.50"))
 
-    token = await login_and_get_token(client)
-    r = await client.get(
-        "/v1/events?include=markets", headers={"Authorization": f"Bearer {token}"}
-    )
+    r = await client.get("/v1/events?include=markets")
     body = r.json()
     item = body["items"][0]
     assert len(item["markets"]) == 1
@@ -149,10 +131,7 @@ async def test_list_events_include_markets(client, session) -> None:
 
 
 async def test_get_event_404(client) -> None:
-    token = await login_and_get_token(client)
-    r = await client.get(
-        "/v1/events/does-not-exist", headers={"Authorization": f"Bearer {token}"}
-    )
+    r = await client.get("/v1/events/does-not-exist")
     assert r.status_code == 404
 
 
@@ -161,11 +140,7 @@ async def test_get_event_with_markets(client, session) -> None:
     market = await make_market(session, event=event, type="NFL_POINTS_ML")
     await make_selection(session, market=market, type="HOME", decimal_odds=Decimal("1.50"))
 
-    token = await login_and_get_token(client)
-    r = await client.get(
-        f"/v1/events/{event.id}?include=markets",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    r = await client.get(f"/v1/events/{event.id}?include=markets")
     assert r.status_code == 200
     body = r.json()
     assert body["id"] == event.id
@@ -186,11 +161,7 @@ async def test_get_event_markets_filters(client, session) -> None:
     await make_selection(session, market=ml, type="HOME", decimal_odds=Decimal("1.5"))
     await make_selection(session, market=total, type="OVER", decimal_odds=Decimal("1.91"))
 
-    token = await login_and_get_token(client)
-    r = await client.get(
-        f"/v1/events/{event.id}/markets?category=TOTAL",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    r = await client.get(f"/v1/events/{event.id}/markets?category=TOTAL")
     body = r.json()
     assert len(body["markets"]) == 1
     assert body["markets"][0]["category"] == "TOTAL"
@@ -198,9 +169,7 @@ async def test_get_event_markets_filters(client, session) -> None:
 
 async def test_get_event_markets_min_decimal_validation(client, session) -> None:
     _, _, _, _, event = await _seed_basic_event(session)
-    token = await login_and_get_token(client)
     r = await client.get(
-        f"/v1/events/{event.id}/markets?min_decimal=not-a-number",
-        headers={"Authorization": f"Bearer {token}"},
+        f"/v1/events/{event.id}/markets?min_decimal=not-a-number"
     )
     assert r.status_code == 400

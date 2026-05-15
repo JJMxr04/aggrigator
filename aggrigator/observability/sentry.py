@@ -1,7 +1,7 @@
 """Sentry init.
 
-Auto-redacts ``Authorization``, ``X-Api-Key``, ``X-Aggrigator-Signature``
-header values from event payloads (plan §8).
+Auto-redacts ``Authorization``, ``X-Aggrigator-Signature``, and ``Cookie``
+header values from event payloads.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def init_sentry(settings) -> None:
 
 
 _REDACTED_HEADERS = {
-    "authorization", "x-api-key", "x-aggrigator-signature", "cookie",
+    "authorization", "x-aggrigator-signature", "cookie",
 }
 
 

@@ -17,7 +17,7 @@ import sys
 from sqlalchemy import select
 
 from aggrigator.db import session_scope
-from aggrigator.models.auth import User, UserRole, UserTier
+from aggrigator.models.auth import User, UserRole
 from aggrigator.security.passwords import hash_password
 
 # Operator-set passwords (CLI second arg) must clear this floor. The
@@ -36,7 +36,6 @@ async def main(email: str, password: str | None) -> None:
                 email=email,
                 password_hash=hash_password(pw),
                 role=UserRole.ADMIN,
-                tier=UserTier.SERVICE,  # MDProject-equivalent first-party tier
                 is_active=True,
             )
             session.add(user)

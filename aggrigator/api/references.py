@@ -2,18 +2,16 @@
 
 These are the dropdowns / filter-lookup calls the upload portal uses to
 populate event-pick UI before any specific event is chosen. Cheap queries on
-small tables; auth required so we can rate-limit by key.
+small tables. Public — no auth on the aggrigator's data plane.
 """
 
 from __future__ import annotations
 
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 from sqlalchemy import select
 
-from aggrigator.deps import SessionDep, require_user
-from aggrigator.models import Bookmaker, League, Market, Sport, User
+from aggrigator.deps import SessionDep
+from aggrigator.models import Bookmaker, League, Market, Sport
 from aggrigator.schemas.bookmaker import BookmakerOut
 from aggrigator.schemas.league import LeagueOut
 from aggrigator.schemas.sport import SportOut
@@ -24,7 +22,6 @@ router = APIRouter(prefix="/v1", tags=["reference"])
 @router.get("/sports", response_model=list[SportOut])
 async def list_sports(
     session: SessionDep,
-    _user: Annotated[User, Depends(require_user)],
     active: bool | None = Query(default=None),
 ) -> list[Sport]:
     stmt = select(Sport).order_by(Sport.name)
@@ -36,7 +33,6 @@ async def list_sports(
 @router.get("/leagues", response_model=list[LeagueOut])
 async def list_leagues(
     session: SessionDep,
-    _user: Annotated[User, Depends(require_user)],
     sport_id: str | None = Query(default=None),
     active: bool | None = Query(default=None),
 ) -> list[League]:
@@ -51,7 +47,6 @@ async def list_leagues(
 @router.get("/bookmakers", response_model=list[BookmakerOut])
 async def list_bookmakers(
     session: SessionDep,
-    _user: Annotated[User, Depends(require_user)],
     active: bool | None = Query(default=None),
 ) -> list[Bookmaker]:
     stmt = select(Bookmaker).order_by(Bookmaker.name)
@@ -63,7 +58,6 @@ async def list_bookmakers(
 @router.get("/market-types", response_model=list[str])
 async def list_market_types(
     session: SessionDep,
-    _user: Annotated[User, Depends(require_user)],
     sport_id: str | None = Query(default=None),
 ) -> list[str]:
     """Distinct values of ``Market.type`` currently in the DB.

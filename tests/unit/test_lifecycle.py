@@ -160,7 +160,7 @@ def test_compute_stale_missing_start_time_is_fresh() -> None:
 
 
 def test_compute_stale_unknown_status_is_fresh() -> None:
-    """Unknown SGO status — better to miss-flag than wrongly act."""
+    """Unknown provider status — better to miss-flag than wrongly act."""
     start = _NOW - timedelta(days=2)
     assert compute_stale(
         status_type="weather_delay", start_time=start, grace_hours=12, now=_NOW,

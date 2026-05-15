@@ -1,7 +1,7 @@
 """JWT issuance and verification.
 
 HS256 with ``iss=aggrigator`` and ``aud=portal``. Access tokens carry
-``{sub: user_id, role, tier, type: "access"}``; refresh tokens carry
+``{sub: user_id, role, type: "access"}``; refresh tokens carry
 ``{sub: user_id, type: "refresh", jti: <uuid>}``. ``jti`` lets the server
 revoke a specific refresh token by hashing it into ``auth_refresh_token``.
 """
@@ -28,7 +28,6 @@ class InvalidToken(Exception):
 class AccessClaims:
     sub: str          # user_id (string UUID)
     role: str
-    tier: str
     iat: datetime
     exp: datetime
 
@@ -45,7 +44,6 @@ def issue_access_token(
     *,
     user_id: uuid.UUID | str,
     role: str,
-    tier: str,
     secret: str,
     ttl_seconds: int,
     now: datetime | None = None,
@@ -57,7 +55,6 @@ def issue_access_token(
         "aud": AUDIENCE,
         "sub": str(user_id),
         "role": role,
-        "tier": tier,
         "type": "access",
         "iat": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
@@ -110,7 +107,6 @@ def verify_access_token(token: str, secret: str) -> AccessClaims:
         return AccessClaims(
             sub=payload["sub"],
             role=payload.get("role", "user"),
-            tier=payload.get("tier", "free"),
             iat=datetime.fromtimestamp(payload["iat"], tz=timezone.utc),
             exp=datetime.fromtimestamp(payload["exp"], tz=timezone.utc),
         )

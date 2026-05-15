@@ -1,6 +1,6 @@
 """Lifecycle watchdog — find and (optionally) recover stale events.
 
-Background: the rest of the aggregator faithfully mirrors SGO. If SGO
+Background: the rest of the aggregator mirrors the upstream. If the provider
 keeps an event marked ``notstarted`` long after its scheduled start
 (postponed game upstream never re-statused, feed dropped it, etc.), the
 local row sits forever in ``notstarted`` and any PENDING selections never
@@ -20,7 +20,7 @@ This module fixes that. Two functions:
   PENDING selections (reusing :func:`void_remaining_pending`), and fires
   ``event.voided`` via the standard enqueue path.
 
-Recovery: if SGO eventually returns the event with real scores, the next
+Recovery: if the provider eventually returns the event with real scores, the next
 lifecycle pass sees ``canceled → finished``, fires FINALIZED, and
 PROVIDER grading overrides the COMPUTED-source VOID rows (per
 ``SOURCE_PRIORITY`` in ``settlement_computed.py``). So an over-eager

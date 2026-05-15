@@ -152,7 +152,7 @@ async def _bulk_upsert_markets(
             "scope": spec.scope,
             "line": spec.line,
             "side": spec.side,
-            "provider": "sportsgameodds",
+            "provider": "oddsapi",
             "provider_market_id": (spec.provider_market_id or "")[:128],
             "provider_choice_group": "",
             "subject_team_id": _resolve_subject_team_id(event, spec.side),

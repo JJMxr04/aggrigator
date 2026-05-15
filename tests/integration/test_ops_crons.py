@@ -9,7 +9,7 @@ Covers:
 - Admin auth is required on every JSON route
 
 Each test inserts a stub runner via the registry so we don't depend on the
-real cron tasks running against the SGO simulator.
+real cron tasks running against the local odds simulator.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from aggrigator.models import CronRun, User, UserRole, UserTier
+from aggrigator.models import CronRun, User, UserRole
 from aggrigator.ops.registry import CronSpec
 from aggrigator.security.passwords import hash_password
 from tests.integration.factories import login_and_get_token
@@ -40,7 +40,6 @@ async def _make_admin(session, *, email: str = "admin@example.com") -> User:
         email=email,
         password_hash=hash_password("hunter2hunter2"),
         role=UserRole.ADMIN,
-        tier=UserTier.SERVICE,
     )
     session.add(user)
     await session.commit()
@@ -48,16 +47,8 @@ async def _make_admin(session, *, email: str = "admin@example.com") -> User:
 
 
 async def _admin_token(client: AsyncClient, session) -> str:
-    """Register a regular user, then promote to admin via direct DB write,
-    then login. Cheaper than running ``/admin`` flow."""
-    await client.post(
-        "/v1/auth/register",
-        json={"email": "ops-admin@example.com", "password": "hunter2hunter2"},
-    )
-    user = await session.scalar(select(User).where(User.email == "ops-admin@example.com"))
-    user.role = UserRole.ADMIN
-    user.tier = UserTier.SERVICE
-    await session.commit()
+    """Seed an admin user directly, then log in to mint the JWT."""
+    await _make_admin(session, email="ops-admin@example.com")
     r = await client.post(
         "/v1/auth/login",
         json={"email": "ops-admin@example.com", "password": "hunter2hunter2"},
@@ -121,7 +112,7 @@ async def test_list_crons_requires_admin(client) -> None:
 
 
 async def test_list_crons_rejects_non_admin(client, session) -> None:
-    token = await login_and_get_token(client)  # plain user
+    token = await login_and_get_token(client, session)  # plain user
     r = await client.get(
         "/v1/admin/crons", headers={"Authorization": f"Bearer {token}"}
     )
@@ -162,7 +153,7 @@ async def test_trigger_writes_cron_run_row(
     client, session, stub_redis, monkeypatch,
 ) -> None:
     """Patch the cron's runner to a stub so the test doesn't depend on real
-    SGO calls. Confirm the row lands with status=success and the summary."""
+    provider calls. Confirm the row lands with status=success and the summary."""
     token = await _admin_token(client, session)
 
     captured = {"called": 0}

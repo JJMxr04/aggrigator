@@ -1,7 +1,7 @@
 """Unit tests for ingest.normalize — runs against captured fixtures.
 
 These tests don't depend on MDProject. They check that our normalizer produces
-sane output on real SGO payloads.
+sane output on real provider payloads.
 """
 
 from __future__ import annotations

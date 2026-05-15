@@ -1,7 +1,7 @@
-"""SportsGameOdds payload normalization — verbatim port of MDProject's
-``core/event/odds/sgo_normalize.py``.
+"""Provider payload normalization — verbatim port of MDProject's
 
-Pure functions: SGO event payload -> ``EventSpec`` / ``MarketSpec`` /
+
+Pure functions: provider event payload -> ``EventSpec`` / ``MarketSpec`` /
 ``SelectionSpec`` / ``BookmakerQuoteSpec``. No DB, no Django, no I/O.
 
 The parity test (``tests/parity/test_normalize_parity.py``) imports BOTH this
@@ -125,7 +125,7 @@ class EventSpec:
 
 
 def event_spec_from_payload(payload: dict) -> EventSpec | None:
-    """Convert one SGO event payload into an ``EventSpec``.
+    """Convert one provider event payload into an ``EventSpec``.
 
     Returns ``None`` for non-match event types since they have no teams.
     """
@@ -485,7 +485,7 @@ def build_market_id(
     line: Decimal | None = None, side: str = "",
     stat_id: str = "", stat_entity_id: str = "",
 ) -> str:
-    """Deterministic ``Market.id`` for an SGO-sourced market.
+    """Deterministic ``Market.id`` for an provider-sourced market.
 
     Includes ``statID`` and ``statEntityID`` whenever the group key uses them
     (per plan §7.7 #3) so distinct ``eo``/``yn`` groups don't collide on the
@@ -515,7 +515,7 @@ def _line_slug(line: Decimal) -> str:
 
 
 def event_specs_from_response(response: dict | Iterable[dict]) -> list[EventSpec]:
-    """Convert an SGO ``GET /events`` response (or its ``data`` list, or a
+    """Convert an provider ``GET /events`` response (or its ``data`` list, or a
     single event payload) into a list of EventSpec — non-match events filtered.
     """
     if isinstance(response, dict):

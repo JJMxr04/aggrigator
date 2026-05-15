@@ -1,13 +1,13 @@
 """Sport / League seeders.
 
-Two independent crons since sports change essentially never (the SGO
+Two independent crons since sports change essentially never (the upstream
 ``/sports`` list is football, basketball, baseball, hockey, …) and leagues
 shift more often (new minor leagues, season transitions). Independent
-schedules → independent visibility in /ops/crons and tighter SGO quota
+schedules → independent visibility in /ops/crons and tighter provider quota
 budgets:
 
-- ``seed_sports``  — weekly Mondays @ 01:30 UTC (1 SGO call/week)
-- ``seed_leagues`` — daily         @ 02:00 UTC (1 SGO call/day)
+- ``seed_sports``  — weekly Mondays @ 01:30 UTC (1 provider call/week)
+- ``seed_leagues`` — daily         @ 02:00 UTC (1 provider call/day)
 
 ``run_seed_sports_and_leagues`` is preserved as a composite helper —
 ``full_refresh`` calls it so the daily one-click refresh remains
@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 async def run_seed_sports() -> dict:
-    """Upsert every Sport row from SGO. One SGO call (``/sports``)."""
-    logger.info("seed_sports: starting (1 SGO call expected) — fetching /sports")
+    """Upsert every Sport row from the provider. One provider call (``/sports``)."""
+    logger.info("seed_sports: starting (1 provider call expected) — fetching /sports")
     client = _build_client()
     async with session_scope() as session:
         sports = await seed_sports(session, client)
@@ -37,14 +37,14 @@ async def run_seed_sports() -> dict:
 
 
 async def run_seed_leagues() -> dict:
-    """Upsert every League row from SGO. One SGO call (``/leagues``).
+    """Upsert every League row from the provider. One provider call (``/leagues``).
 
     Assumes ``seed_sports`` has already run — leagues reference sports
     via FK. On a cold DB the FK is ``ondelete=SET NULL`` so missing sports
     won't error, but the linkage will be incomplete until the next
     seed_sports run.
     """
-    logger.info("seed_leagues: starting (1 SGO call expected) — fetching /leagues")
+    logger.info("seed_leagues: starting (1 provider call expected) — fetching /leagues")
     client = _build_client()
     async with session_scope() as session:
         leagues = await seed_leagues(session, client)
@@ -57,7 +57,7 @@ async def run_seed_sports_and_leagues() -> dict:
     """Both halves in one call — used by ``full_refresh`` as a defensive
     pre-step so the daily refresh is self-sufficient even if the standalone
     seed crons haven't fired yet."""
-    logger.info("seed_sports_and_leagues: starting (2 SGO calls expected)")
+    logger.info("seed_sports_and_leagues: starting (2 provider calls expected)")
     client = _build_client()
     async with session_scope() as session:
         result = await seed_all(session, client)

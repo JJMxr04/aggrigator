@@ -4,7 +4,7 @@ Run with::
 
     arq aggrigator.workers.settings.WorkerSettings
 
-Auto-scheduled crons are sized for SGO's per-month entity cap (1 entity
+Auto-scheduled crons are sized for the provider per-month entity cap (legacy) (1 entity
 per event returned). The combined ``ingest_due_leagues`` runs hourly by
 default — half the entity burn of the old lifecycle + odds split, which
 billed every event twice per cycle. Tune cadence via

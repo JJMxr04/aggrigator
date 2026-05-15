@@ -18,7 +18,7 @@ from typing import NamedTuple
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aggrigator.config import get_settings
-from aggrigator.ingest.client import SgoClient
+from aggrigator.ingest.client import OddsClient
 from aggrigator.ingest.ingester import write_markets
 from aggrigator.ingest.lifecycle import EventState, Transition, decide_transition
 from aggrigator.ingest.normalize import EventSpec, event_spec_from_payload
@@ -42,7 +42,7 @@ class IngestResult(NamedTuple):
     event: Event
     transition: Transition
     selections_written: int
-    selections_graded: int       # PROVIDER (per-odd ``score`` from SGO)
+    selections_graded: int       # PROVIDER (per-odd ``score`` from the provider)
     selections_computed: int     # COMPUTED fallback (event-score logic)
     selections_voided: int       # PENDING → VOID at finalize (definitive only)
     deliveries_enqueued: int
@@ -67,7 +67,7 @@ async def ingest_event(
     skip_if_new_terminal: bool = False,
     discover_new_events: bool = True,
 ) -> IngestResult | None:
-    """Normalize one event payload (SGO-shape), upsert the row, write its
+    """Normalize one event payload (internal-shape), upsert the row, write its
     markets, PROVIDER-grade if finalized, return the lifecycle transition.
 
     The caller is responsible for committing the session — this function only
@@ -83,7 +83,7 @@ async def ingest_event(
     markets + selections + odds quotes + bookmaker quotes + grading +
     webhook enqueue. (The historical ``phase="lifecycle"`` / ``"odds"``
     split was removed when the registry was trimmed — the combined walk
-    was always the cost-efficient default; splitting was an SGO-era
+    was always the cost-efficient default; splitting was an legacy
     optimization that didn't carry over to per-hour request budgets.)
     """
     spec = event_spec_from_payload(payload)
@@ -114,7 +114,7 @@ async def ingest_event(
     await session.flush()
 
     # Cheap exit for finalized-stable events: if our DB already has this
-    # event in a finished state with the same scores AND SGO is reporting
+    # event in a finished state with the same scores AND the provider is reporting
     # the same finished state, the markets / selections / bookmaker quotes
     # below cannot have changed. Skip the (very expensive) write_markets
     # walk — the row's last_provider_refresh_at was already touched by
@@ -149,7 +149,7 @@ async def ingest_event(
     selections_computed = 0
     selections_voided = 0
     if event.is_finalized:
-        # 1) PROVIDER first — per-odd ``score`` field from SGO. Covers
+        # 1) PROVIDER first — per-odd ``score`` field from the provider. Covers
         #    MONEYLINE / SPREAD / TOTAL / PROPS_TEAM / yn+eo PROPS_GAME.
         selections_graded = await grade_event(session, event, spec.markets)
         # 2) COMPUTED fallback for whatever PROVIDER skipped (soccer BTTS /
@@ -163,7 +163,7 @@ async def ingest_event(
         selections_computed = await settle_event(session, event)
         # 3) Lock-in pass: anything still PENDING on a finished event is
         #    something we lack data to resolve (e.g. quarter-by-quarter
-        #    moneylines without per-period scores on the free SGO tier).
+        #    moneylines without per-period scores on the free provider tier).
         #    Mark VOID so the webhook payload is definitive — no PENDING
         #    selections sneak out attached to an ``event.finalized`` event.
         await session.flush()
@@ -197,7 +197,7 @@ async def ingest_event(
 async def ingest_league(
     session: AsyncSession,
     league: League,
-    client: SgoClient,
+    client: OddsClient,
     *,
     discover_new_events: bool = True,
 ) -> LeagueReport:
@@ -208,7 +208,7 @@ async def ingest_league(
     1. **Time window** (``AGG_INGEST_WINDOW_DAYS_BEHIND`` /
        ``..._AHEAD``): the upstream is asked for events in
        ``[now - behind, now + ahead]`` only. Smaller window = fewer
-       events returned = fewer per-event writes (and on SGO, fewer
+       events returned = fewer per-event writes (and on the provider, fewer
        billed entities).
     2. **``skip_if_new_terminal=True``**: anything inside that window
        the provider reports as already terminal but our DB has never
@@ -217,7 +217,7 @@ async def ingest_league(
        settlement).
 
     The ``include_alt_lines`` / ``odd_ids`` / ``bookmaker_id`` knobs
-    below trim the SGO response shape; oddsapi adapter ignores them.
+    below trim the upstream response shape; odds-api adapter ignores them.
     """
     settings = get_settings()
     now = datetime.now(tz=timezone.utc)
@@ -291,11 +291,11 @@ async def ingest_league(
         # include_alt_lines: alt spreads/totals balloon the markets +
         # selections we'd persist (5–10× the row count) and we don't
         # render or grade them. Default off saves DB rows, NOT quota
-        # (SGO still counts the event once regardless).
+        # (the provider still counts the event once regardless).
         include_alt_lines=settings.ingest_include_alt_lines,
         # odd_ids / bookmaker_id: response-shape filters. Cut DB write
         # time + storage when set — but they DO NOT reduce per-month
-        # entity quota (SGO bills 1 per event). For real quota savings
+        # entity quota (the upstream API used to bill 1 per event). For real quota savings
         # use a smaller window or less frequent cadence.
         odd_ids=odd_ids,
         bookmaker_id=bookmaker_id,
@@ -344,12 +344,9 @@ async def ingest_league(
     # to one anyway; saving the calls saves Redis roundtrips.
     if deliveries_enqueued_this_walk > 0:
         await notify_webhook_worker()
-    # Disappearance reconcile pass — only meaningful on odds-api.io where
-    # cancellations manifest as absence (no status flag). Cheap no-op for
-    # SGO since SGO emits ``status.cancelled`` directly and the rows
-    # already track lifecycle through normalize.py. We run it for both
-    # providers because (a) it's idempotent and (b) it produces useful
-    # telemetry on missing events regardless of provider.
+    # Disappearance reconcile pass — odds-api.io expresses cancellations
+    # as absence (no status flag), so we sweep events that vanished from
+    # the upstream walk and route them through the same VOID path.
     try:
         missing = await reconcile_disappeared(
             session,
@@ -382,7 +379,7 @@ async def ingest_league(
 
 async def ingest_due_leagues(
     session: AsyncSession,
-    client: SgoClient,
+    client: OddsClient,
     *,
     discover_new_events: bool = True,
 ) -> list[LeagueReport]:

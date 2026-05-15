@@ -1,6 +1,6 @@
 """Integration tests for ingest.watchdog — stale-event detection + auto-void.
 
-Verifies the end-to-end recovery path for events SGO never finalized:
+Verifies the end-to-end recovery path for events the provider never finalized:
 1. Stale events are surfaced (no DB writes when auto-void disabled).
 2. With auto-void on, events past the threshold are flipped to canceled,
    PENDING selections become VOID, and event.voided webhook deliveries
@@ -13,13 +13,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from aggrigator.config import get_settings
 from aggrigator.ingest.watchdog import run_watchdog
-from aggrigator.models import Event, Selection, WebhookDelivery, WebhookEndpoint
-from aggrigator.security.passwords import hash_password
-from aggrigator.security.webhook_signing import (
-    encrypt_secret,
-    fernet_key_from_passphrase,
-)
+from aggrigator.models import Event, Selection, WebhookDelivery
 from tests.integration.factories import (
     make_event,
     make_league,
@@ -30,6 +26,19 @@ from tests.integration.factories import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _set_webhook_target():
+    """Configure the dispatcher so the auto-void path enqueues a delivery."""
+    s = get_settings()
+    original_url = s.webhook_target_url
+    original_secret = s.webhook_secret
+    s.webhook_target_url = "https://example.test/voided-hook"
+    s.webhook_secret = "watchdog-test-secret"
+    yield
+    s.webhook_target_url = original_url
+    s.webhook_secret = original_secret
 
 
 async def _seed_stale_event(session, *, hours_past_start: int, status: str = "notstarted"):
@@ -84,26 +93,6 @@ async def test_watchdog_skips_recent_events(session) -> None:
 async def test_watchdog_auto_voids_past_threshold(session) -> None:
     """auto_void_hours triggers status flip + selection void + webhook enqueue."""
     event = await _seed_stale_event(session, hours_past_start=72)
-
-    # Plant an enabled webhook endpoint subscribed to event.voided so we
-    # can confirm a delivery row was inserted.
-    user = __import__("aggrigator.models", fromlist=["User"]).User(
-        email="watchdog@example.com",
-        password_hash=hash_password("xx12345678"),
-    )
-    session.add(user)
-    await session.flush()
-
-    key = fernet_key_from_passphrase("watchdog-test")
-    endpoint = WebhookEndpoint(
-        user_id=user.id,
-        url="https://example.test/voided-hook",
-        secret_ciphertext=encrypt_secret("s", key=key),
-        events=["event.voided"],
-        enabled=True,
-    )
-    session.add(endpoint)
-    await session.commit()
 
     report = await run_watchdog(
         session, stale_grace_hours=12, auto_void_hours=48,

@@ -1,16 +1,13 @@
-"""End-to-end ingest: FixtureSgoClient -> orchestrator -> DB rows."""
+"""End-to-end ingest: FixtureOddsClient -> orchestrator -> DB rows."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
-from aggrigator.ingest.client import SgoClient
+from aggrigator.ingest.client import OddsClient
 from aggrigator.ingest.lifecycle import Transition
 from aggrigator.ingest.orchestrator import ingest_event, ingest_league
-from aggrigator.ingest.sgo_simulator import FixtureSgoClient
 from aggrigator.models import (
     Bookmaker,
     BookmakerSelection,
@@ -24,17 +21,12 @@ from tests.integration.factories import make_league, make_sport
 pytestmark = pytest.mark.asyncio
 
 
-@pytest.fixture
-def sgo_client(sgo_fixture_dir: Path) -> SgoClient:
-    return FixtureSgoClient(sgo_fixture_dir)
-
-
 async def _seed_league(session, sport_id: str, league_id: str):
     sport = await make_sport(session, id=sport_id, name=sport_id.title())
     return await make_league(session, sport=sport, id=league_id, name=league_id, active=True)
 
 
-def _first_match_event(client: SgoClient, league_id: str) -> dict:
+def _first_match_event(client: OddsClient, league_id: str) -> dict:
     """The first event in a league fixture isn't always ``type="match"``
     (Pro Bowl skills events ship as ``type="prop"`` and the normalizer drops
     them). Walk until we find a match-type event so the tests run against
@@ -45,10 +37,10 @@ def _first_match_event(client: SgoClient, league_id: str) -> dict:
     raise RuntimeError(f"no match-type event in {league_id} fixture")
 
 
-async def test_ingest_one_nfl_event(session, sgo_client: SgoClient) -> None:
+async def test_ingest_one_nfl_event(session, fixture_odds_client: OddsClient) -> None:
     await _seed_league(session, "FOOTBALL", "NFL")
 
-    payload = _first_match_event(sgo_client, "NFL")
+    payload = _first_match_event(fixture_odds_client, "NFL")
     result = await ingest_event(session, payload)
     assert result is not None
     await session.commit()
@@ -70,10 +62,10 @@ async def test_ingest_one_nfl_event(session, sgo_client: SgoClient) -> None:
 
 
 async def test_ingest_skips_event_when_league_not_seeded(
-    session, sgo_client: SgoClient,
+    session, fixture_odds_client: OddsClient,
 ) -> None:
     """Without a League row the ingester refuses to corrupt with a half-event."""
-    payload = _first_match_event(sgo_client, "NFL")
+    payload = _first_match_event(fixture_odds_client, "NFL")
     result = await ingest_event(session, payload)
     assert result is None
     await session.commit()
@@ -84,10 +76,10 @@ async def test_ingest_skips_event_when_league_not_seeded(
     assert count is None
 
 
-async def test_re_ingest_is_idempotent(session, sgo_client: SgoClient) -> None:
+async def test_re_ingest_is_idempotent(session, fixture_odds_client: OddsClient) -> None:
     """Same payload twice -> no duplicate rows."""
     await _seed_league(session, "FOOTBALL", "NFL")
-    payload = _first_match_event(sgo_client, "NFL")
+    payload = _first_match_event(fixture_odds_client, "NFL")
 
     await ingest_event(session, payload)
     await session.commit()
@@ -118,10 +110,10 @@ async def test_re_ingest_is_idempotent(session, sgo_client: SgoClient) -> None:
 
 
 async def test_first_ingest_returns_lifecycle_transition(
-    session, sgo_client: SgoClient,
+    session, fixture_odds_client: OddsClient,
 ) -> None:
     await _seed_league(session, "FOOTBALL", "NFL")
-    payload = _first_match_event(sgo_client, "NFL")
+    payload = _first_match_event(fixture_odds_client, "NFL")
     result = await ingest_event(session, payload)
     await session.commit()
     assert result is not None
@@ -134,10 +126,10 @@ async def test_first_ingest_returns_lifecycle_transition(
 
 
 async def test_re_ingest_unchanged_returns_none_transition(
-    session, sgo_client: SgoClient,
+    session, fixture_odds_client: OddsClient,
 ) -> None:
     await _seed_league(session, "FOOTBALL", "NFL")
-    payload = _first_match_event(sgo_client, "NFL")
+    payload = _first_match_event(fixture_odds_client, "NFL")
     await ingest_event(session, payload)
     await session.commit()
     result = await ingest_event(session, payload)
@@ -146,9 +138,9 @@ async def test_re_ingest_unchanged_returns_none_transition(
     assert result.transition == Transition.NONE
 
 
-async def test_ingest_league_walks_corpus(session, sgo_client: SgoClient) -> None:
+async def test_ingest_league_walks_corpus(session, fixture_odds_client: OddsClient) -> None:
     league = await _seed_league(session, "FOOTBALL", "NFL")
-    report = await ingest_league(session, league, sgo_client)
+    report = await ingest_league(session, league, fixture_odds_client)
     await session.commit()
 
     assert report.events_processed > 0, "fixture corpus should have NFL events"
@@ -160,13 +152,13 @@ async def test_ingest_league_walks_corpus(session, sgo_client: SgoClient) -> Non
 
 
 async def test_finalized_event_records_quotes(
-    session, sgo_client: SgoClient,
+    session, fixture_odds_client: OddsClient,
 ) -> None:
     """If the fixture has any finalized event, ingesting it must populate
     Selection.decimal_odds (denormalized) and at least one OddsQuote row."""
     await _seed_league(session, "FOOTBALL", "NFL")
     finalized = None
-    for ev in sgo_client.get_events(league_id="NFL"):
+    for ev in fixture_odds_client.get_events(league_id="NFL"):
         if (ev.get("status") or {}).get("finalized"):
             finalized = ev
             break
@@ -184,11 +176,11 @@ async def test_finalized_event_records_quotes(
 
 
 async def test_bookmakers_seed_on_demand(
-    session, sgo_client: SgoClient,
+    session, fixture_odds_client: OddsClient,
 ) -> None:
     """Per-book quotes auto-create the Bookmaker row if missing."""
     await _seed_league(session, "FOOTBALL", "NFL")
-    payload = _first_match_event(sgo_client, "NFL")
+    payload = _first_match_event(fixture_odds_client, "NFL")
     await ingest_event(session, payload)
     await session.commit()
 

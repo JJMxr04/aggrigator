@@ -18,15 +18,15 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aggrigator.ingest.client import SgoClient
-from aggrigator.ingest.upserts import upsert_league_from_sgo, upsert_sport_from_sgo
+from aggrigator.ingest.client import OddsClient
+from aggrigator.ingest.upserts import upsert_league_from_spec, upsert_sport_from_spec
 from aggrigator.models import Sport
 
 logger = logging.getLogger(__name__)
 
 
 async def seed_sports(
-    session: AsyncSession, client: SgoClient, *, _payloads: list[dict] | None = None,
+    session: AsyncSession, client: OddsClient, *, _payloads: list[dict] | None = None,
 ) -> int:
     """Upsert every Sport the upstream provider knows about. Returns count.
 
@@ -40,7 +40,7 @@ async def seed_sports(
     payloads = _payloads if _payloads is not None else list(client.get_sports())
     count = 0
     for payload in payloads:
-        if await upsert_sport_from_sgo(session, payload) is not None:
+        if await upsert_sport_from_spec(session, payload) is not None:
             count += 1
     await session.flush()
     logger.info("seeded %d sports", count)
@@ -48,11 +48,11 @@ async def seed_sports(
 
 
 async def seed_leagues(
-    session: AsyncSession, client: SgoClient, *, _payloads: list[dict] | None = None,
+    session: AsyncSession, client: OddsClient, *, _payloads: list[dict] | None = None,
 ) -> int:
     """Upsert leagues whose parent Sport is active in our DB. Idempotent.
 
-    Fetches the full league list from the provider (one call on both SGO
+    Fetches the full league list from the provider (one call on the
     and oddsapi-via-adapter), then filters client-side to only the
     sports an operator has explicitly enabled. League payloads whose
     sport is unknown / inactive are skipped silently — re-run seed
@@ -82,7 +82,7 @@ async def seed_leagues(
         if sport_id not in active_sport_ids:
             skipped += 1
             continue
-        if await upsert_league_from_sgo(session, payload) is not None:
+        if await upsert_league_from_spec(session, payload) is not None:
             count += 1
     await session.flush()
     logger.info(
@@ -93,7 +93,7 @@ async def seed_leagues(
     return count
 
 
-async def seed_all(session: AsyncSession, client: SgoClient) -> dict:
+async def seed_all(session: AsyncSession, client: OddsClient) -> dict:
     """Pre-fetch sports + leagues once and feed them into the upsert helpers
     so we never round-trip the same provider endpoint twice in one seed run.
 

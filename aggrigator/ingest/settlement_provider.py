@@ -1,6 +1,6 @@
-"""PROVIDER-source settlement — graded from SGO's per-odd ``score`` field.
+"""PROVIDER-source settlement — graded from the provider's per-odd ``score`` field.
 
-Async port of MDProject's ``core/event/odds/sgo_settlement.py``. Runs after
+Runs after
 ``write_markets`` on a finalized event. Authoritative against COMPUTED, but
 never overrides MANUAL.
 

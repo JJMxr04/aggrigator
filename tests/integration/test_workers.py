@@ -8,24 +8,17 @@ trusted to call them on its cron.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 import pytest
 from sqlalchemy import select
 
-from aggrigator.ingest.lifecycle import Transition
-from aggrigator.ingest.orchestrator import ingest_event
-from aggrigator.ingest.sgo_simulator import FixtureSgoClient
-from aggrigator.models import Sport, WebhookDelivery, WebhookEndpoint
-from aggrigator.security.webhook_signing import (
-    encrypt_secret,
-    fernet_key_from_passphrase,
-)
+from aggrigator.config import get_settings
+from aggrigator.models import Sport, WebhookDelivery
+from tests.fixtures.oddsapi_client import FixtureOddsClient
 from aggrigator.workers.tasks.webhook_deliver import run_deliver_due
 from tests.integration.factories import (
-    login_and_get_token,
     make_event,
     make_league,
     make_market,
@@ -37,15 +30,31 @@ from tests.integration.factories import (
 pytestmark = pytest.mark.asyncio
 
 
+TEST_SECRET = "worker-test-secret"
+TEST_URL = "https://example.test/hook"
+
+
+@pytest.fixture(autouse=True)
+def _set_webhook_target():
+    s = get_settings()
+    original_url = s.webhook_target_url
+    original_secret = s.webhook_secret
+    s.webhook_target_url = TEST_URL
+    s.webhook_secret = TEST_SECRET
+    yield
+    s.webhook_target_url = original_url
+    s.webhook_secret = original_secret
+
+
 # ---- seeder ---------------------------------------------------------------
 
 
 async def test_seed_sports_and_leagues_against_fixture(
-    session, sgo_fixture_dir: Path,
+    session, oddsapi_fixture_dir: Path,
 ) -> None:
     from aggrigator.ingest.seed import seed_all
 
-    client = FixtureSgoClient(sgo_fixture_dir)
+    client = FixtureOddsClient(oddsapi_fixture_dir)
     summary = await seed_all(session, client)
     await session.commit()
 
@@ -79,51 +88,7 @@ async def _seed_event_with_market(session, *, status_type: str = "finished"):
     return event
 
 
-async def test_run_deliver_due_drains_pending(client, session, monkeypatch) -> None:
-    """Plant a delivery row, point it at a mock-handler URL, run the worker."""
-    # Use a deterministic key so the worker can decrypt what we encrypt here.
-    key = fernet_key_from_passphrase("worker-test")
-    monkeypatch.setattr(
-        "aggrigator.workers.tasks.webhook_deliver.get_settings",
-        lambda: type("S", (), {"secret_encryption_key": key})(),
-    )
-
-    event = await _seed_event_with_market(session)
-
-    endpoint = WebhookEndpoint(
-        user_id=__import__("uuid").uuid4(),
-        url="https://example.test/hook",
-        secret_ciphertext=encrypt_secret("worker-secret", key=key),
-        events=["event.finalized"],
-        enabled=True,
-    )
-    # WebhookEndpoint.user_id has FK to auth_user; route around it for this
-    # test by inserting a User first.
-    from aggrigator.models import User
-    from aggrigator.security.passwords import hash_password
-    user = User(email="hook@example.com", password_hash=hash_password("xx12345678"))
-    session.add(user)
-    await session.flush()
-    endpoint.user_id = user.id
-    session.add(endpoint)
-    await session.flush()
-
-    delivery = WebhookDelivery(
-        endpoint_id=endpoint.id,
-        event_id=event.id,
-        event_name="event.finalized",
-        idempotency_key=f"{event.id}:abcd",
-        payload={"schema_version": 1, "event": {"event_id": event.id}},
-    )
-    session.add(delivery)
-    await session.commit()
-
-    # Patch the AsyncClient inside the worker so we don't need the network.
-    async def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200)
-
-    transport = httpx.MockTransport(handler)
-
+def _patch_httpx(monkeypatch, transport: httpx.MockTransport) -> None:
     class _PatchedClient(httpx.AsyncClient):
         def __init__(self, *a, **kw):
             kw["transport"] = transport
@@ -134,86 +99,60 @@ async def test_run_deliver_due_drains_pending(client, session, monkeypatch) -> N
         _PatchedClient,
     )
 
+
+async def test_run_deliver_due_drains_pending(session, monkeypatch) -> None:
+    """Plant a delivery row, point it at a mock-handler URL, run the worker."""
+    event = await _seed_event_with_market(session)
+
+    delivery = WebhookDelivery(
+        event_id=event.id,
+        event_name="event.finalized",
+        idempotency_key=f"{event.id}:abcd",
+        payload={"schema_version": 1, "event": {"event_id": event.id}},
+    )
+    session.add(delivery)
+    await session.commit()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    _patch_httpx(monkeypatch, httpx.MockTransport(handler))
+
     summary = await run_deliver_due()
     assert summary["sent"] == 1
 
-    # Re-fetch to confirm delivered_at was set.
     refreshed = await session.get(WebhookDelivery, delivery.id)
     assert refreshed is not None
     await session.refresh(refreshed)
     assert refreshed.delivered_at is not None
 
 
-async def test_run_deliver_due_skips_disabled_endpoint(
-    client, session, monkeypatch,
-) -> None:
-    key = fernet_key_from_passphrase("worker-test")
-    monkeypatch.setattr(
-        "aggrigator.workers.tasks.webhook_deliver.get_settings",
-        lambda: type("S", (), {"secret_encryption_key": key})(),
-    )
-
+async def test_run_deliver_due_skips_when_target_unset(session, monkeypatch) -> None:
+    """No-op when the operator hasn't configured AGG_WEBHOOK_TARGET_URL."""
+    s = get_settings()
+    monkeypatch.setattr(s, "webhook_target_url", "")
     event = await _seed_event_with_market(session)
-
-    from aggrigator.models import User
-    from aggrigator.security.passwords import hash_password
-    user = User(email="disabled@example.com", password_hash=hash_password("xx12345678"))
-    session.add(user)
-    await session.flush()
-    endpoint = WebhookEndpoint(
-        user_id=user.id,
-        url="https://example.test/hook",
-        secret_ciphertext=encrypt_secret("s", key=key),
-        events=["event.finalized"],
-        enabled=False,  # disabled
-    )
-    session.add(endpoint)
-    await session.flush()
     delivery = WebhookDelivery(
-        endpoint_id=endpoint.id, event_id=event.id,
+        event_id=event.id,
         event_name="event.finalized",
-        idempotency_key=f"{event.id}:disabled-test",
+        idempotency_key=f"{event.id}:unset",
         payload={"schema_version": 1, "event": {"event_id": event.id}},
     )
     session.add(delivery)
     await session.commit()
 
     summary = await run_deliver_due()
-    # Disabled endpoint counts as a permanent fail rather than a real send.
-    assert summary == {"sent": 0, "retried": 0, "failed": 1}
-
+    assert summary == {"sent": 0, "retried": 0, "failed": 0}
     refreshed = await session.get(WebhookDelivery, delivery.id)
     await session.refresh(refreshed)
     assert refreshed.delivered_at is None
-    assert refreshed.last_error is not None
-    assert "endpoint deleted or disabled" in refreshed.last_error
 
 
-async def test_run_deliver_due_retries_on_5xx(client, session, monkeypatch) -> None:
-    key = fernet_key_from_passphrase("worker-test")
-    monkeypatch.setattr(
-        "aggrigator.workers.tasks.webhook_deliver.get_settings",
-        lambda: type("S", (), {"secret_encryption_key": key})(),
-    )
-
+async def test_run_deliver_due_retries_on_5xx(session, monkeypatch) -> None:
     event = await _seed_event_with_market(session)
 
-    from aggrigator.models import User
-    from aggrigator.security.passwords import hash_password
-    user = User(email="retry@example.com", password_hash=hash_password("xx12345678"))
-    session.add(user)
-    await session.flush()
-    endpoint = WebhookEndpoint(
-        user_id=user.id,
-        url="https://example.test/hook",
-        secret_ciphertext=encrypt_secret("s", key=key),
-        events=["event.finalized"],
-        enabled=True,
-    )
-    session.add(endpoint)
-    await session.flush()
     delivery = WebhookDelivery(
-        endpoint_id=endpoint.id, event_id=event.id,
+        event_id=event.id,
         event_name="event.finalized",
         idempotency_key=f"{event.id}:retry-test",
         payload={"schema_version": 1, "event": {"event_id": event.id}},
@@ -224,17 +163,7 @@ async def test_run_deliver_due_retries_on_5xx(client, session, monkeypatch) -> N
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503)
 
-    transport = httpx.MockTransport(handler)
-
-    class _PatchedClient(httpx.AsyncClient):
-        def __init__(self, *a, **kw):
-            kw["transport"] = transport
-            super().__init__(*a, **kw)
-
-    monkeypatch.setattr(
-        "aggrigator.workers.tasks.webhook_deliver.httpx.AsyncClient",
-        _PatchedClient,
-    )
+    _patch_httpx(monkeypatch, httpx.MockTransport(handler))
 
     summary = await run_deliver_due()
     assert summary == {"sent": 0, "retried": 1, "failed": 0}

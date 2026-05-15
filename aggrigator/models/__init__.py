@@ -4,12 +4,9 @@ aggregator-only auth/webhook tables (Phase 1+).
 
 from aggrigator.models.audit import AuditLog
 from aggrigator.models.auth import (
-    ApiKey,
-    ClientApp,
     RefreshToken,
     User,
     UserRole,
-    UserTier,
 )
 from aggrigator.models.base import Base, TimestampMixin
 from aggrigator.models.bookmaker import Bookmaker, BookmakerSelection
@@ -26,15 +23,13 @@ from aggrigator.models.selection import (
 )
 from aggrigator.models.sport import Sport
 from aggrigator.models.team import Team
-from aggrigator.models.webhook import WebhookDelivery, WebhookEndpoint
+from aggrigator.models.webhook import WebhookDelivery
 
 __all__ = [
-    "ApiKey",
     "AuditLog",
     "Base",
     "Bookmaker",
     "BookmakerSelection",
-    "ClientApp",
     "CronRun",
     "CronRunSource",
     "CronRunStatus",
@@ -54,7 +49,5 @@ __all__ = [
     "TimestampMixin",
     "User",
     "UserRole",
-    "UserTier",
     "WebhookDelivery",
-    "WebhookEndpoint",
 ]

@@ -1,7 +1,7 @@
 """Event reads — list, detail, markets-for-event.
 
 Same query contract as MDProject ``core/event/views/api/events.py`` and
-``markets.py`` (plan §3.4). The aggregator does **not** trigger inline SGO
+``markets.py`` (plan §3.4). The aggregator does **not** trigger inline provider
 calls on read (unlike MDProject's ``get_event_odds``); a future on-demand
 refresh job is enqueued instead — wired in Phase 3.
 """
@@ -17,9 +17,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from aggrigator.config import get_settings
-from aggrigator.deps import SessionDep, require_user
+from aggrigator.deps import SessionDep
 from aggrigator.ingest.lifecycle import compute_stale
-from aggrigator.models import BookmakerSelection, Event, Market, Selection, User
+from aggrigator.models import BookmakerSelection, Event, Market, Selection
 from aggrigator.schemas.event import (
     EventDetailOut,
     EventOut,
@@ -50,10 +50,9 @@ def _bod(d: Date) -> datetime:
 @router.get("", response_model=Page[EventWithMarketsOut])
 async def list_events(
     session: SessionDep,
-    _user: Annotated[User, Depends(require_user)],
     page_params: Annotated[PageParams, Depends()],
-    sport: str | None = Query(default=None, description="SGO sportID, e.g. FOOTBALL"),
-    league: str | None = Query(default=None, description="SGO leagueID, e.g. NFL"),
+    sport: str | None = Query(default=None, description="sportID, e.g. FOOTBALL"),
+    league: str | None = Query(default=None, description="leagueID, e.g. NFL"),
     live: bool | None = Query(default=None),
     date: Date | None = Query(default=None, description="YYYY-MM-DD"),
     include: Literal["markets"] | None = Query(default=None),
@@ -116,7 +115,6 @@ async def list_events(
 @router.get("/{event_id}", response_model=EventDetailOut)
 async def get_event(
     session: SessionDep,
-    _user: Annotated[User, Depends(require_user)],
     event_id: str,
     include: Literal["markets"] | None = Query(default=None),
 ) -> EventDetailOut:
@@ -156,7 +154,6 @@ async def get_event(
 @router.get("/{event_id}/markets")
 async def get_event_markets(
     session: SessionDep,
-    _user: Annotated[User, Depends(require_user)],
     event_id: str,
     category: str | None = Query(default=None, description="comma-separated"),
     scope: str | None = Query(default=None, description="comma-separated"),

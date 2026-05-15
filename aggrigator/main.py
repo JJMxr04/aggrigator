@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from redis.asyncio import Redis
-from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -17,12 +16,10 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from aggrigator import __version__
 from aggrigator.admin.views import mount_admin
-from aggrigator.api import api_keys as api_keys_router
 from aggrigator.api import auth as auth_router
 from aggrigator.api import events as events_router
 from aggrigator.api import references as references_router
 from aggrigator.api import selections as selections_router
-from aggrigator.api import webhook_endpoints as webhook_endpoints_router
 from aggrigator.config import get_settings
 from aggrigator.db import engine
 from aggrigator.observability.logging import configure_logging
@@ -30,11 +27,6 @@ from aggrigator.observability.prometheus import register_metrics
 from aggrigator.observability.sentry import init_sentry
 from aggrigator.ops import api as ops_api_router
 from aggrigator.ops import routes as ops_routes_router
-from aggrigator.security.rate_limit import (
-    limiter,
-    rate_limit_handler,
-    resolve_first_party_promotion,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +35,6 @@ logger = logging.getLogger(__name__)
 # way to catch "operator forgot to set the env var" before it bites in
 # production. Kept in sync with aggrigator/config.py defaults.
 _DEFAULT_JWT_SECRET = "dev-only-change-me"
-_DEFAULT_FERNET_KEY = "dXuPg8VG-pEz3w6mF1gAo0FVXa5Y9xqNxGgfZ7jEz0o="
 _DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 
 
@@ -124,11 +115,16 @@ def _enforce_prod_secrets(settings) -> None:
             "AGG_JWT_SECRET is the dev default. Generate: "
             "openssl rand -hex 32"
         )
-    if settings.secret_encryption_key == _DEFAULT_FERNET_KEY:
+    if not settings.webhook_secret:
         failures.append(
-            "AGG_SECRET_ENCRYPTION_KEY is the dev default. Generate: "
-            'python -c "from cryptography.fernet import Fernet; '
-            'print(Fernet.generate_key().decode())"'
+            "AGG_WEBHOOK_SECRET is unset. Set the same value as MDProject's "
+            "AGGRIGATOR_WEBHOOK_SECRET so HMAC verification matches."
+        )
+    if not settings.webhook_target_url:
+        failures.append(
+            "AGG_WEBHOOK_TARGET_URL is unset. Point this at MDProject's "
+            "inbound webhook endpoint, e.g. "
+            "https://mdproject.example.com/sportgameodds/webhook."
         )
     if not failures:
         return
@@ -144,8 +140,9 @@ def _warn_on_misconfig(settings) -> None:
     """One-shot log audit at startup: surface the most expensive-if-missed
     misconfigs (default secrets in prod, missing host allowlist, etc.).
 
-    Note: AGG_JWT_SECRET / AGG_SECRET_ENCRYPTION_KEY are NOT checked here
-    because they're already fatal in prod — see ``_enforce_prod_secrets``.
+    Note: AGG_JWT_SECRET / AGG_WEBHOOK_SECRET / AGG_WEBHOOK_TARGET_URL are
+    NOT checked here because they're already fatal in prod — see
+    ``_enforce_prod_secrets``.
     """
     # URL-shape checks fire in any env (dev too) — a malformed URL is a
     # bug regardless of where you're running.
@@ -174,10 +171,10 @@ def _warn_on_misconfig(settings) -> None:
             "spoofing is not blocked. Set to your Railway domain + any "
             "custom domains."
         )
-    if settings.sgo_api_key in ("", "aggrigator-dev"):
+    if not settings.odds_api_key:
         logger.warning(
-            "[startup] SPORTSGAMEODDS_API_KEY is the dev placeholder in prod — "
-            "every SGO call will fail. Set the real key from your SGO account."
+            "[startup] ODDSAPI_API_KEY is unset in prod — every odds-api "
+            "call will fail. Set the real key from your odds-api.io account."
         )
     if settings.test_mode:
         logger.warning(
@@ -251,9 +248,6 @@ def create_app() -> FastAPI:
         **docs_kwargs,
     )
 
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
-
     # Host-header allowlist (DNS-rebinding / Host-header injection defense).
     # Skipped when the env var is unset so dev / first-time deploys aren't
     # broken — operators opt in via AGG_ALLOWED_HOSTS in RAILWAY.md.
@@ -268,7 +262,7 @@ def create_app() -> FastAPI:
         allow_origins=settings.cors_origin_list,
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Authorization", "X-Api-Key", "X-Client-App", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type"],
     )
     # Session signing key. Prefer the dedicated AGG_SESSION_SECRET; fall
     # back to jwt_secret with a WARNING so existing prod deploys don't
@@ -290,8 +284,6 @@ def create_app() -> FastAPI:
         same_site="lax",
         https_only=is_prod,
     )
-    app.add_middleware(BaseHTTPMiddleware, dispatch=resolve_first_party_promotion)
-
     # Security headers stamped on every response. We're an internal API +
     # admin surface — never indexable, never embeddable, never leaking the
     # referrer to any third party.
@@ -328,11 +320,9 @@ def create_app() -> FastAPI:
     app.add_middleware(BaseHTTPMiddleware, dispatch=_security_headers_dispatch)
 
     app.include_router(auth_router.router)
-    app.include_router(api_keys_router.router)
     app.include_router(references_router.router)
     app.include_router(events_router.router)
     app.include_router(selections_router.router)
-    app.include_router(webhook_endpoints_router.router)
     # Part 2.1 ops module — replaces v0 api/admin_crons.py + api/ops_console.py.
     app.include_router(ops_api_router.router)
     app.include_router(ops_routes_router.router)

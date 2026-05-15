@@ -1,14 +1,14 @@
 """Sync httpx adapter against ``api.odds-api.io/v3``.
 
-Implements the ``SgoClient`` Protocol so the existing orchestrator,
-normalizer, and webhook layers see SGO-shape payloads — the translation
+Implements the ``OddsClient`` Protocol so the existing orchestrator,
+normalizer, and webhook layers see internal-shape payloads — the translation
 happens here. See ``odds_api_translate.py`` for the payload mapping rules.
 
 Design notes (full rationale in aggrigator-plan/odds-api/odds-api.md):
 
 - **Sync, not async**: the orchestrator runs HTTP sequentially inside an
   ARQ task; mixing httpx.Client with our existing async DB layer matches
-  what ``sgo_http.SgoHttpClient`` already does.
+  what sync httpx pattern.
 - **Hardcoded bookmaker list** (best-practices.md §4.1): even on paid
   tiers we stay at 2 books — pinning prevents accidental tier-upgrade cost
   bloat and keeps the product surface stable.
@@ -38,10 +38,10 @@ from aggrigator.ingest.odds_api_errors import (
     ValidationError,
 )
 from aggrigator.ingest.odds_api_translate import (
-    SGO_TO_ODDSAPI_LEAGUE,
-    SGO_TO_ODDSAPI_SPORT,
-    ODDSAPI_TO_SGO_SPORT,
-    to_sgo_event_payload,
+    INTERNAL_TO_ODDSAPI_LEAGUE,
+    INTERNAL_TO_ODDSAPI_SPORT,
+    ODDSAPI_TO_INTERNAL_SPORT,
+    to_internal_event_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ def redact_api_key(url_or_msg: str) -> str:
 
 
 class OddsApiHttpClient:
-    """Implements ``SgoClient`` via translation against odds-api.io v3.
+    """Implements ``OddsClient`` via translation against odds-api.io v3.
 
     Header state (``last_ratelimit_*``) is captured from every response so
     ``odds_api_quota.quota_status`` can read it without a separate
@@ -132,10 +132,10 @@ class OddsApiHttpClient:
     def close(self) -> None:
         self.client.close()
 
-    # ---- SgoClient surface ---------------------------------------------
+    # ---- OddsClient surface ---------------------------------------------
 
     def get_account_usage(self) -> dict:
-        """Synthesize SGO-shape usage from our last captured rate-limit
+        """Synthesize internal-shape usage from our last captured rate-limit
         headers. odds-api.io has no /account/usage endpoint — the live
         headers are the source of truth.
 
@@ -173,18 +173,18 @@ class OddsApiHttpClient:
 
     def get_sports(self) -> list[dict]:
         """Pass through odds-api.io /sports as a list of dicts. Mapped to
-        SGO sport_id where we have a slug mapping; unknown slugs surface as
+        sport_id where we have a slug mapping; unknown slugs surface as
         the raw slug uppercased."""
         body = self._send("/sports", {})
         sports = body if isinstance(body, list) else []
         out: list[dict] = []
         for s in sports:
             slug = s.get("slug") or ""
-            sgo_id = ODDSAPI_TO_SGO_SPORT.get(slug) or slug.upper().replace("-", "_")
+            internal_id = ODDSAPI_TO_INTERNAL_SPORT.get(slug) or slug.upper().replace("-", "_")
             out.append({
-                "sportID": sgo_id,
-                "name": s.get("name") or sgo_id.title(),
-                "shortName": s.get("name") or sgo_id.title(),
+                "sportID": internal_id,
+                "name": s.get("name") or internal_id.title(),
+                "shortName": s.get("name") or internal_id.title(),
             })
         return out
 
@@ -192,17 +192,17 @@ class OddsApiHttpClient:
         """Walk one sport's leagues OR every active sport's leagues.
 
         Only emits leagues that have an entry in
-        ``ODDSAPI_TO_SGO_LEAGUE``. Unmapped leagues are logged + dropped
-        because the orchestrator walks events keyed on SGO league IDs —
+        ``ODDSAPI_TO_INTERNAL_LEAGUE``. Unmapped leagues are logged + dropped
+        because the orchestrator walks events keyed on internal league IDs —
         emitting a synthetic ID we don't know how to map back is just
         future-broken data. To add a league: edit
-        ``odds_api_translate.SGO_TO_ODDSAPI_LEAGUE``.
+        ``odds_api_translate.INTERNAL_TO_ODDSAPI_LEAGUE``.
         """
-        from aggrigator.ingest.odds_api_translate import ODDSAPI_TO_SGO_LEAGUE
+        from aggrigator.ingest.odds_api_translate import ODDSAPI_TO_INTERNAL_LEAGUE
 
         sport_slugs: list[str]
         if sport_id:
-            slug = SGO_TO_ODDSAPI_SPORT.get(sport_id)
+            slug = INTERNAL_TO_ODDSAPI_SPORT.get(sport_id)
             if slug is None:
                 logger.warning(
                     "oddsapi get_leagues: no slug mapping for sport_id %s — "
@@ -211,21 +211,21 @@ class OddsApiHttpClient:
                 return []
             sport_slugs = [slug]
         else:
-            sport_slugs = list(SGO_TO_ODDSAPI_SPORT.values())
+            sport_slugs = list(INTERNAL_TO_ODDSAPI_SPORT.values())
 
         out: list[dict] = []
         dropped: list[str] = []
         for slug in sport_slugs:
             body = self._send("/leagues", {"sport": slug})
             leagues = body if isinstance(body, list) else []
-            sgo_sport_id = ODDSAPI_TO_SGO_SPORT.get(slug)
-            if sgo_sport_id is None:
+            internal_sport_id = ODDSAPI_TO_INTERNAL_SPORT.get(slug)
+            if internal_sport_id is None:
                 dropped.append(f"<sport {slug}>")
                 continue
             for ln in leagues:
                 lslug = ln.get("slug") or ""
-                sgo_league_id = ODDSAPI_TO_SGO_LEAGUE.get(lslug)
-                if sgo_league_id is None:
+                internal_league_id = ODDSAPI_TO_INTERNAL_LEAGUE.get(lslug)
+                if internal_league_id is None:
                     dropped.append(lslug)
                     continue
                 # Defensive truncation matching column widths
@@ -233,15 +233,15 @@ class OddsApiHttpClient:
                 # entries are well under, but a typo shouldn't cause a
                 # 500 mid-seed.
                 out.append({
-                    "leagueID": sgo_league_id[:48],
-                    "sportID": sgo_sport_id[:32],
-                    "name": ln.get("name") or sgo_league_id,
-                    "shortName": (ln.get("name") or sgo_league_id)[:48],
+                    "leagueID": internal_league_id[:48],
+                    "sportID": internal_sport_id[:32],
+                    "name": ln.get("name") or internal_league_id,
+                    "shortName": (ln.get("name") or internal_league_id)[:48],
                 })
         if dropped:
             logger.info(
                 "oddsapi get_leagues: dropped %d unmapped league slug(s) — "
-                "extend SGO_TO_ODDSAPI_LEAGUE in odds_api_translate.py to "
+                "extend INTERNAL_TO_ODDSAPI_LEAGUE in odds_api_translate.py to "
                 "include them. First 20: %s",
                 len(dropped), dropped[:20],
             )
@@ -277,13 +277,13 @@ class OddsApiHttpClient:
         limit: int = 50,
         max_pages: int | None = None,
     ) -> Iterator[dict]:
-        """Yield SGO-shape payloads for one league's events in window.
+        """Yield internal-shape payloads for one league's events in window.
 
         - ``league_id`` is required (we always walk by league, like the
-          existing orchestrator does for SGO).
+          existing orchestrator does).
         - ``event_id`` short-circuits to a single ``/events/{id}`` lookup.
         - ``odd_ids`` / ``include_*`` / ``bookmaker_id`` / ``limit`` are
-          ignored (the SgoClient surface needs them; odds-api.io doesn't).
+          ignored (the OddsClient surface needs them; odds-api.io doesn't).
         - Live events are dropped at the adapter boundary
           (odds-api.md §4.4 scope rule).
         - Settled events yield WITHOUT an /odds call — scores are carried
@@ -299,13 +299,13 @@ class OddsApiHttpClient:
             return
 
         sport_id = self._league_to_sport(league_id)
-        sport_slug = SGO_TO_ODDSAPI_SPORT.get(sport_id) if sport_id else None
-        from aggrigator.ingest.odds_api_translate import SGO_TO_ODDSAPI_LEAGUE
-        league_slug = SGO_TO_ODDSAPI_LEAGUE.get(league_id)
+        sport_slug = INTERNAL_TO_ODDSAPI_SPORT.get(sport_id) if sport_id else None
+        from aggrigator.ingest.odds_api_translate import INTERNAL_TO_ODDSAPI_LEAGUE
+        league_slug = INTERNAL_TO_ODDSAPI_LEAGUE.get(league_id)
         if sport_slug is None or league_slug is None:
             logger.warning(
                 "oddsapi get_events: no slug mapping for league %s "
-                "(sport_id=%s) — skipping. Update SGO_TO_ODDSAPI_LEAGUE "
+                "(sport_id=%s) — skipping. Update INTERNAL_TO_ODDSAPI_LEAGUE "
                 "in odds_api_translate.py.", league_id, sport_id,
             )
             return
@@ -345,10 +345,10 @@ class OddsApiHttpClient:
     # ---- internals -----------------------------------------------------
 
     def _league_to_sport(self, league_id: str) -> str | None:
-        """Reverse lookup: SGO league_id → SGO sport_id. Conservative —
+        """Reverse lookup: league_id → sport_id. Conservative —
         only handles the leagues we map in odds_api_translate.py."""
-        # Lazy: walk SGO_TO_ODDSAPI_SPORT to find the right sport. Since the
-        # SGO sport_id is encoded in normalize's parse and Event.sport_id is
+        # Lazy: walk INTERNAL_TO_ODDSAPI_SPORT to find the right sport. Since the
+        # sport_id is encoded in normalize's parse and Event.sport_id is
         # written from translator output, we can use a tiny per-league map.
         # Defaults match the slug map in odds_api_translate.py.
         per_league = {
@@ -432,7 +432,7 @@ class OddsApiHttpClient:
         malformed event doesn't kill the cycle."""
         from aggrigator.ingest.odds_api_errors import SchemaError
         try:
-            return to_sgo_event_payload(event_dict, odds_dict)
+            return to_internal_event_payload(event_dict, odds_dict)
         except SchemaError as exc:
             logger.warning(
                 "oddsapi translate: skipping event %s — %s",

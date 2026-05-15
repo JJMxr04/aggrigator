@@ -1,5 +1,5 @@
-"""SportsGameOdds oddID taxonomy — verbatim port of MDProject's
-``core/event/odds/sgo_taxonomy.py``.
+"""oddID taxonomy — verbatim port of MDProject's
+
 
 oddID format: ``"{statID}-{statEntityID}-{periodID}-{betTypeID}-{sideID}"``.
 """

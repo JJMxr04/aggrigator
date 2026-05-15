@@ -8,11 +8,9 @@ from starlette.responses import RedirectResponse
 
 from aggrigator.db import engine
 from aggrigator.models import (
-    ApiKey,
     AuditLog,
     Bookmaker,
     BookmakerSelection,
-    ClientApp,
     CronRun,
     Event,
     League,
@@ -24,7 +22,6 @@ from aggrigator.models import (
     Team,
     User,
     WebhookDelivery,
-    WebhookEndpoint,
 )
 
 
@@ -32,21 +29,11 @@ from aggrigator.models import (
 
 
 class UserView(ModelView, model=User):
-    column_list = ["id", "email", "role", "tier", "is_active", "created"]
+    column_list = ["id", "email", "role", "is_active", "created"]
     column_searchable_list = ["email"]
     column_sortable_list = ["created", "email"]
     form_excluded_columns = ["password_hash"]
     icon = "fa-solid fa-user"
-
-
-class ApiKeyView(ModelView, model=ApiKey):
-    column_list = [
-        "id", "user_id", "name", "prefix", "last_four",
-        "last_used_at", "revoked_at", "created_at",
-    ]
-    column_searchable_list = ["prefix", "name"]
-    can_create = False
-    can_edit = False  # rotation/revocation goes through the API
 
 
 class RefreshTokenView(ModelView, model=RefreshToken):
@@ -55,18 +42,9 @@ class RefreshTokenView(ModelView, model=RefreshToken):
     can_edit = False
 
 
-class ClientAppView(ModelView, model=ClientApp):
-    column_list = ["id", "slug", "name", "tier", "trusted", "revoked_at", "created"]
-    column_searchable_list = ["slug", "name"]
-
-
-class WebhookEndpointView(ModelView, model=WebhookEndpoint):
-    column_list = ["id", "user_id", "url", "enabled", "scope", "events", "created"]
-
-
 class WebhookDeliveryView(ModelView, model=WebhookDelivery):
     column_list = [
-        "id", "endpoint_id", "event_id", "event_name",
+        "id", "event_id", "event_name",
         "attempts", "last_status", "delivered_at", "next_retry_at", "created_at",
     ]
     column_searchable_list = ["event_id", "event_name"]
@@ -216,8 +194,8 @@ def mount_admin(app, *, base_url: str = "/admin") -> Admin:
     admin.add_base_view(CronsConsoleLink)
     admin.add_base_view(DataResetLink)
     for view in [
-        UserView, ApiKeyView, RefreshTokenView, ClientAppView,
-        WebhookEndpointView, WebhookDeliveryView, AuditLogView,
+        UserView, RefreshTokenView,
+        WebhookDeliveryView, AuditLogView,
         CronRunView,
         SportView, LeagueView, TeamView, EventView,
         BookmakerView, BookmakerSelectionView,

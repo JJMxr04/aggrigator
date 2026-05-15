@@ -2,6 +2,7 @@
 
 Movement returns the OddsQuote time-series for a selection. Slips is a
 stateless parlay combiner — combine N selection prices into one decimal.
+Public — no auth on the aggrigator's data plane.
 """
 
 from __future__ import annotations
@@ -9,13 +10,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 
-from aggrigator.deps import SessionDep, require_user
-from aggrigator.models import OddsQuote, Selection, User
+from aggrigator.deps import SessionDep
+from aggrigator.models import OddsQuote, Selection
 from aggrigator.schemas.selection import QuoteOut, SelectionMovementOut
 from aggrigator.schemas.slip import SlipLegOut, SlipsIn, SlipsOut
 
@@ -25,7 +25,6 @@ router = APIRouter(prefix="/v1", tags=["selections"])
 @router.get("/selections/{selection_id}/movement", response_model=SelectionMovementOut)
 async def selection_movement(
     session: SessionDep,
-    _user: Annotated[User, Depends(require_user)],
     selection_id: str,
     since: datetime | None = Query(default=None),
 ) -> SelectionMovementOut:
@@ -49,7 +48,6 @@ async def selection_movement(
 async def combine_slip(
     payload: SlipsIn,
     session: SessionDep,
-    _user: Annotated[User, Depends(require_user)],
 ) -> SlipsOut:
     ids = [leg.selection_id for leg in payload.legs]
     rows = list(await session.scalars(

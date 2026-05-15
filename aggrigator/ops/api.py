@@ -144,7 +144,7 @@ class IngestEventIn(BaseModel):
     league_id: str | None = None
 
 
-@router.post("/ingest-event", summary="Ingest one specific event by SGO eventID")
+@router.post("/ingest-event", summary="Ingest one specific event by the provider eventID")
 async def trigger_ingest_event(
     payload: IngestEventIn,
     session: SessionDep,

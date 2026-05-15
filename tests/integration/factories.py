@@ -24,7 +24,10 @@ from aggrigator.models import (
     Selection,
     Sport,
     Team,
+    User,
+    UserRole,
 )
+from aggrigator.security.passwords import hash_password
 
 
 async def make_sport(
@@ -155,7 +158,7 @@ async def make_market(
         scope=scope,
         line=line,
         side=side,
-        provider="sportsgameodds",
+        provider="oddsapi",
         provider_market_id="",
         provider_choice_group="",
         is_live=is_live,
@@ -232,12 +235,46 @@ async def make_book_quote(
 # ---- API client conveniences ----------------------------------------------
 
 
-async def login_and_get_token(client, email: str = "user@example.com") -> str:
-    """Quick helper for tests that need an authenticated client."""
-    await client.post(
-        "/v1/auth/register", json={"email": email, "password": "hunter2hunter2"}
+async def make_user(
+    session: AsyncSession,
+    *,
+    email: str = "user@example.com",
+    password: str = "hunter2hunter2",
+    role: str = UserRole.USER,
+    is_active: bool = True,
+) -> User:
+    """Seed a User row directly. The aggrigator no longer exposes self-service
+    registration — admin users are seeded out-of-band, and tests use this
+    helper instead of hitting a register endpoint."""
+    user = User(
+        email=email,
+        password_hash=hash_password(password),
+        role=role,
+        is_active=is_active,
     )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def login_and_get_token(
+    client,
+    session: AsyncSession | None = None,
+    *,
+    email: str = "user@example.com",
+    password: str = "hunter2hunter2",
+    role: str = UserRole.USER,
+) -> str:
+    """Seed a user (if ``session`` is provided) then log in via the API.
+
+    Most data endpoints are public now and don't need a token — keep this
+    helper for the auth-protected admin/crons surface and the /v1/auth/me
+    round-trip tests.
+    """
+    if session is not None:
+        await make_user(session, email=email, password=password, role=role)
     r = await client.post(
-        "/v1/auth/login", json={"email": email, "password": "hunter2hunter2"}
+        "/v1/auth/login", json={"email": email, "password": password}
     )
     return r.json()["access_token"]

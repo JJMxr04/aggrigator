@@ -71,7 +71,7 @@ REGISTRY: list[CronSpec] = [
             "``active=True``; ingest then requires active league AND "
             "active sport). Runs daily so newly-added leagues land in "
             "time for the next ingest tick. On odds-api.io, only leagues "
-            "with a mapping in SGO_TO_ODDSAPI_LEAGUE are persisted — "
+            "with a mapping in INTERNAL_TO_ODDSAPI_LEAGUE are persisted — "
             "unmapped slugs are logged and skipped."
         ),
         schedule_human="daily @ 02:00 UTC",

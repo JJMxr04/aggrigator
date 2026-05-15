@@ -1,4 +1,4 @@
-"""Lifecycle watchdog cron — finds stuck events SGO never finalized.
+"""Lifecycle watchdog cron — finds stuck events the upstream never finalized.
 
 Hourly cron that scans for events past ``AGG_LIFECYCLE_STALE_GRACE_HOURS``
 still in ``notstarted`` / ``inprogress`` (informational, no DB writes).
@@ -22,14 +22,7 @@ logger = logging.getLogger(__name__)
 
 async def run_lifecycle_watchdog() -> dict[str, Any]:
     settings = get_settings()
-    # Enable the disappearance branch only when on odds-api.io — SGO emits
-    # explicit ``status.cancelled`` so its events never go missing without a
-    # status flag. Leaving disappearance void_hours at 0 on SGO is a no-op.
-    disappeared_void_hours = (
-        settings.lifecycle_disappeared_void_hours
-        if settings.odds_provider == "oddsapi"
-        else 0
-    )
+    disappeared_void_hours = settings.lifecycle_disappeared_void_hours
     logger.info(
         "watchdog: scanning (stale>%dh, auto_void>%dh%s%s)",
         settings.lifecycle_stale_grace_hours,

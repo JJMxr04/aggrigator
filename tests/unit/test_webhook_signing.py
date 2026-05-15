@@ -1,4 +1,4 @@
-"""Unit tests for security.webhook_signing — sign, verify, encrypt, decrypt."""
+"""Unit tests for security.webhook_signing — sign, verify, parse_header."""
 
 from __future__ import annotations
 
@@ -9,10 +9,6 @@ import pytest
 from aggrigator.security.webhook_signing import (
     DEFAULT_MAX_SKEW_SECONDS,
     InvalidSignature,
-    decrypt_secret,
-    encrypt_secret,
-    fernet_key_from_passphrase,
-    generate_secret,
     parse_header,
     sign,
     verify,
@@ -20,7 +16,6 @@ from aggrigator.security.webhook_signing import (
 
 
 SECRET = "supersecret-webhook-token"
-KEY = fernet_key_from_passphrase("test-passphrase")
 BODY = b'{"hello":"world"}'
 
 
@@ -96,26 +91,3 @@ def test_parse_header_known_shape() -> None:
 def test_parse_header_rejects_malformed(bad: str) -> None:
     with pytest.raises(InvalidSignature):
         parse_header(bad)
-
-
-# ---- secret generation + encryption --------------------------------------
-
-
-def test_generate_secret_is_unique_and_url_safe() -> None:
-    a = generate_secret()
-    b = generate_secret()
-    assert a != b
-    assert all(c.isalnum() or c in "-_" for c in a)
-
-
-def test_encrypt_decrypt_round_trip() -> None:
-    enc = encrypt_secret("hunter2", key=KEY)
-    assert enc != "hunter2"
-    assert decrypt_secret(enc, key=KEY) == "hunter2"
-
-
-def test_decrypt_wrong_key_raises() -> None:
-    enc = encrypt_secret("hunter2", key=KEY)
-    other = fernet_key_from_passphrase("different")
-    with pytest.raises(InvalidSignature):
-        decrypt_secret(enc, key=other)

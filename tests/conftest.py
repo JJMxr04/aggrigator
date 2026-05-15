@@ -1,7 +1,11 @@
 """Shared fixtures.
 
-Phase 0 has no Postgres in the loop — every test runs against captured SGO JSON
-straight off disk. Postgres / Redis / API integration tests land in Phase 1.
+Tests run against captured odds-api.io JSON under ``tests/fixtures/oddsapi/``.
+Populate the directory with::
+
+    ODDSAPI_API_KEY=... python -m aggrigator.scripts.capture_oddsapi_fixtures
+
+Tests that need fixtures will ``pytest.skip`` until the capture runs.
 """
 
 from __future__ import annotations
@@ -24,33 +28,35 @@ if _test_db:
 
 import pytest  # noqa: E402  — must come after env mutation
 
-# The captured SGO payloads from the simulator project. We reuse them — there's
-# no point keeping a second copy.
-# The captured SGO payloads live in the sports-scores-sim project.
-# We keep two candidate paths here so renames in the simulator repo don't
-# silently turn the parity test into a skip.
-_PBL = Path(__file__).resolve().parent.parent.parent
-_FIXTURE_CANDIDATES = [
-    _PBL / "sports-scores-sim" / "json" / "sports_game" / "simulator",
-    _PBL / "sports-scores" / "json" / "sports_game" / "simulator",
-]
-SGO_FIXTURE_DIR = next((p for p in _FIXTURE_CANDIDATES if p.exists()), _FIXTURE_CANDIDATES[0])
+ODDSAPI_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "oddsapi"
 
 
 @pytest.fixture(scope="session")
-def sgo_fixture_dir() -> Path:
-    if not SGO_FIXTURE_DIR.exists():
-        pytest.skip(f"SGO fixtures not found at {SGO_FIXTURE_DIR}")
-    return SGO_FIXTURE_DIR
+def oddsapi_fixture_dir() -> Path:
+    if not ODDSAPI_FIXTURE_DIR.exists() or not any(ODDSAPI_FIXTURE_DIR.iterdir()):
+        pytest.skip(
+            f"odds-api fixtures not found at {ODDSAPI_FIXTURE_DIR} — "
+            "run `python -m aggrigator.scripts.capture_oddsapi_fixtures`"
+        )
+    return ODDSAPI_FIXTURE_DIR
 
 
 @pytest.fixture(scope="session")
-def all_event_payloads(sgo_fixture_dir: Path) -> list[dict]:
-    """Every event payload from every captured league file."""
-    import json
+def fixture_odds_client(oddsapi_fixture_dir: Path):
+    from tests.fixtures.oddsapi_client import FixtureOddsClient
+    return FixtureOddsClient(oddsapi_fixture_dir)
+
+
+@pytest.fixture(scope="session")
+def all_event_payloads(fixture_odds_client) -> list[dict]:
+    """Every internal-shape event payload across every captured league.
+
+    Goes through ``to_internal_event_payload`` inside the fixture client so
+    the translator is exercised end-to-end on each test run.
+    """
+    from aggrigator.ingest.odds_api_translate import INTERNAL_TO_ODDSAPI_LEAGUE
 
     out: list[dict] = []
-    for path in sorted(sgo_fixture_dir.glob("events__league-*.json")):
-        body = json.loads(path.read_text())
-        out.extend(body.get("data", []))
+    for league_id in INTERNAL_TO_ODDSAPI_LEAGUE:
+        out.extend(fixture_odds_client.get_events(league_id=league_id))
     return out

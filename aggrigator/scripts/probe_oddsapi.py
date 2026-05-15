@@ -1,15 +1,15 @@
 """Phase 0 probe — capture odds-api.io payloads + resolve open questions.
 
-Run locally with an active API key BEFORE flipping ``AGG_ODDS_PROVIDER`` in
-production. The probe answers the empirical questions the docs leave open
+Run locally with an active API key. The probe answers the empirical
+questions the docs leave open
 (see aggrigator-plan/odds-api/odds-api.md §8 Phase 0 +
 python-sdk.md §5):
 
 1. Which base URL is live — ``api.odds-api.io`` or ``api2.odds-api.io``?
-2. What sport slugs exist? (Update ``SGO_TO_ODDSAPI_SPORT`` in
+2. What sport slugs exist? (Update ``INTERNAL_TO_ODDSAPI_SPORT`` in
    ``odds_api_translate.py``.)
 3. What league slugs exist per sport? (Update
-   ``SGO_TO_ODDSAPI_LEAGUE``.)
+   ``INTERNAL_TO_ODDSAPI_LEAGUE``.)
 4. What does a real event payload look like? Save as fixture.
 5. What does ``/odds`` return for a pending event? Save as fixture.
 6. Does ``/dropping-odds`` return 403 on free tier? (Sanity check

@@ -16,7 +16,7 @@ class Sport(Base, TimestampMixin):
     short_name: Mapped[str] = mapped_column(String(48), default="", server_default="")
     # Default ``active=False`` — newly-seeded sports are off until the
     # operator explicitly enables them in SQLAdmin. Re-seeding does NOT
-    # reset operator choices (per ``upsert_sport_from_sgo``).
+    # reset operator choices (per ``upsert_sport_from_spec``).
     active: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     leagues = relationship("League", back_populates="sport")

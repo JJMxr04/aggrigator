@@ -1,9 +1,8 @@
-"""Enqueue WebhookDelivery rows for matching subscribed endpoints.
+"""Enqueue WebhookDelivery rows for the (single) MDProject receiver.
 
 Called by the orchestrator after a successful ingest pass when the lifecycle
-predicate returns a non-NONE transition. One row per (endpoint × event-state)
-— deduplicated on ``idempotency_key`` so a re-ingest of unchanged state never
-double-fires.
+predicate returns a non-NONE transition. One row per event-state — deduplicated
+on ``idempotency_key`` so a re-ingest of unchanged state never double-fires.
 """
 
 from __future__ import annotations
@@ -16,8 +15,9 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aggrigator.config import get_settings
 from aggrigator.ingest.lifecycle import Transition
-from aggrigator.models import Event, Selection, WebhookDelivery, WebhookEndpoint
+from aggrigator.models import Event, Selection, WebhookDelivery
 from aggrigator.webhooks.idempotency import (
     idempotency_key as _idempotency_key,
     state_blob_from_event,
@@ -32,19 +32,25 @@ async def enqueue_for_event(
     event: Event,
     transition: Transition,
 ) -> list[WebhookDelivery]:
-    """Insert one ``WebhookDelivery`` row per matching enabled endpoint.
+    """Insert a ``WebhookDelivery`` row for this event-state transition.
 
-    Idempotency is enforced by a unique ``(endpoint_id, idempotency_key)``
-    constraint plus an ``ON CONFLICT DO NOTHING`` insert — re-running this on
-    unchanged event state is a no-op.
+    Idempotency is enforced by a unique ``idempotency_key`` constraint plus an
+    ``ON CONFLICT DO NOTHING`` insert — re-running this on unchanged event
+    state is a no-op.
 
-    Returns the list of *newly inserted* deliveries.
+    Returns the list of *newly inserted* deliveries (zero or one).
     """
     if transition == Transition.NONE:
         return []
 
-    endpoints = await _matching_endpoints(session, transition.value)
-    if not endpoints:
+    if not get_settings().webhook_target_url:
+        # No receiver configured — skip enqueue rather than queue rows that
+        # will never be dispatched. Log once per call so an operator can
+        # diagnose silently-dropped deliveries.
+        logger.warning(
+            "Skipping webhook enqueue for event=%s: AGG_WEBHOOK_TARGET_URL "
+            "is unset.", event.id,
+        )
         return []
 
     selection_states = await _load_selection_states(session, event.id)
@@ -56,56 +62,39 @@ async def enqueue_for_event(
     )
     idempotency_key = _idempotency_key(event.id, blob)
 
-    inserted: list[WebhookDelivery] = []
-    for endpoint in endpoints:
-        delivery_id = uuid.uuid4()
-        payload = await build_payload(
-            session, event,
+    delivery_id = uuid.uuid4()
+    payload = await build_payload(
+        session, event,
+        event_name=transition.value,
+        delivery_id=delivery_id,
+        idempotency_key=idempotency_key,
+    )
+    result = await session.execute(
+        insert(WebhookDelivery)
+        .values(
+            id=delivery_id,
+            event_id=event.id,
             event_name=transition.value,
-            delivery_id=delivery_id,
             idempotency_key=idempotency_key,
+            payload=payload,
         )
-        result = await session.execute(
-            insert(WebhookDelivery)
-            .values(
-                id=delivery_id,
-                endpoint_id=endpoint.id,
-                event_id=event.id,
-                event_name=transition.value,
-                idempotency_key=idempotency_key,
-                payload=payload,
-            )
-            .on_conflict_do_nothing(index_elements=["endpoint_id", "idempotency_key"])
-            .returning(WebhookDelivery.id)
-        )
-        new_id = result.scalar_one_or_none()
-        if new_id is not None:
-            row = await session.get(WebhookDelivery, new_id)
-            if row is not None:
-                inserted.append(row)
-    if inserted:
-        logger.info(
-            "Enqueued %d webhook delivery(ies) for event=%s transition=%s",
-            len(inserted), event.id, transition.value,
-        )
-    return inserted
+        .on_conflict_do_nothing(index_elements=["idempotency_key"])
+        .returning(WebhookDelivery.id)
+    )
+    new_id = result.scalar_one_or_none()
+    if new_id is None:
+        return []
+    row = await session.get(WebhookDelivery, new_id)
+    if row is None:
+        return []
+    logger.info(
+        "Enqueued webhook delivery for event=%s transition=%s",
+        event.id, transition.value,
+    )
+    return [row]
 
 
 # ---- internals -------------------------------------------------------------
-
-
-async def _matching_endpoints(
-    session: AsyncSession, event_name: str
-) -> list[WebhookEndpoint]:
-    """Endpoints that are enabled, not revoked, and whose ``events`` array
-    includes this event_name (Postgres ``ANY``)."""
-    rows = await session.scalars(
-        select(WebhookEndpoint).where(
-            WebhookEndpoint.enabled.is_(True),
-            WebhookEndpoint.events.any(event_name),
-        )
-    )
-    return list(rows)
 
 
 async def _load_selection_states(

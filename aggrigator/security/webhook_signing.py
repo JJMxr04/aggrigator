@@ -1,24 +1,21 @@
 """Webhook signing — Stripe-style HMAC-SHA256.
 
-Header format (per plan §4.2): ``X-Aggrigator-Signature: t=<unix_ts>,v1=<hex>``
-where the HMAC is over ``f"{t}.{raw_body}"`` using the endpoint's signing
-secret. Receivers MUST verify the timestamp is within ``max_skew`` (default 5
-minutes) before trusting the message — that's the replay defense.
+Header format: ``X-Aggrigator-Signature: t=<unix_ts>,v1=<hex>`` where the
+HMAC is over ``f"{t}.{raw_body}"`` using the shared signing secret. Receivers
+MUST verify the timestamp is within ``max_skew`` (default 5 minutes) before
+trusting the message — that's the replay defense.
 
-The signing secret is stored encrypted at rest (Fernet); ``encrypt_secret`` /
-``decrypt_secret`` here are also used by the endpoint-CRUD API.
+Single hardcoded receiver (MDProject) shares one secret with us via env vars
+(``AGG_WEBHOOK_SECRET`` here, ``AGGRIGATOR_WEBHOOK_SECRET`` there). No
+at-rest encryption layer remains.
 """
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
-import secrets as _secrets
 import time
 from dataclasses import dataclass
-
-from cryptography.fernet import Fernet, InvalidToken
 
 HEADER_NAME = "X-Aggrigator-Signature"
 SIGNATURE_VERSION = "v1"
@@ -37,33 +34,6 @@ class SignedHeader:
 
     def __str__(self) -> str:
         return f"t={self.timestamp},{SIGNATURE_VERSION}={self.signature}"
-
-
-def generate_secret(num_bytes: int = 32) -> str:
-    """Mints a fresh URL-safe signing secret. Show to user once."""
-    return _secrets.token_urlsafe(num_bytes)
-
-
-# ---- at-rest encryption ---------------------------------------------------
-
-
-def _fernet(key: str) -> Fernet:
-    """Build a Fernet cipher. ``key`` must be a 44-char base64 string."""
-    return Fernet(key.encode() if isinstance(key, str) else key)
-
-
-def encrypt_secret(plaintext: str, *, key: str) -> str:
-    return _fernet(key).encrypt(plaintext.encode()).decode()
-
-
-def decrypt_secret(ciphertext: str, *, key: str) -> str:
-    try:
-        return _fernet(key).decrypt(ciphertext.encode()).decode()
-    except InvalidToken as exc:
-        raise InvalidSignature("encryption key changed; re-rotate webhook secret") from exc
-
-
-# ---- signing ---------------------------------------------------------------
 
 
 def sign(*, secret: str, body: bytes, timestamp: int | None = None) -> SignedHeader:
@@ -105,7 +75,7 @@ def verify(
     """Raises ``InvalidSignature`` if anything is off; returns ``None`` on OK.
 
     Replay protection is mandatory: ``t`` must be within ``max_skew_seconds``
-    of ``now`` (default 5 minutes per plan §4.2).
+    of ``now`` (default 5 minutes).
     """
     ts, sig = parse_header(header_value)
     current = now or int(time.time())
@@ -120,13 +90,3 @@ def verify(
     ).hexdigest()
     if not hmac.compare_digest(expected, sig):
         raise InvalidSignature("signature mismatch")
-
-
-# ---- helper for tests / smoke checks ---------------------------------------
-
-
-def fernet_key_from_passphrase(passphrase: str) -> str:
-    """Derive a Fernet key from a free-form passphrase. **Tests only** —
-    production should use a real, randomly generated key."""
-    digest = hashlib.sha256(passphrase.encode()).digest()
-    return base64.urlsafe_b64encode(digest).decode()

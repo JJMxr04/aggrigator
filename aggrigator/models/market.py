@@ -76,7 +76,7 @@ class Market(Base, TimestampMixin):
     side: Mapped[str] = mapped_column(String(8), default="", server_default="")
 
     provider: Mapped[str] = mapped_column(
-        String(32), default="sportsgameodds", server_default="sportsgameodds"
+        String(32), default="oddsapi", server_default="oddsapi"
     )
     provider_market_id: Mapped[str] = mapped_column(
         String(128), default="", server_default="", index=True

@@ -76,11 +76,8 @@ async def _wipe(session) -> None:
     tables = [
         "audit_log",
         "webhook_delivery",
-        "webhook_endpoint",
         "auth_refresh_token",
-        "auth_api_key",
         "auth_user",
-        "client_app",
         "core_odds_quote",
         "core_bookmaker_selection",
         "core_selection",

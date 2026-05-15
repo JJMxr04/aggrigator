@@ -1,4 +1,8 @@
-"""``/v1/auth/*`` — register, login, refresh, logout, me."""
+"""``/v1/auth/*`` — login, refresh, logout, me.
+
+Self-service registration is gone (aggrigator is single-tenant). Admin users
+are seeded via alembic / management commands.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
 from aggrigator.deps import SessionDep, SettingsDep, require_user
 from aggrigator.models.auth import RefreshToken, User
@@ -17,7 +20,6 @@ from aggrigator.schemas.auth import (
     AccessOnly,
     LoginIn,
     RefreshIn,
-    RegisterIn,
     TokenPair,
     UserOut,
 )
@@ -33,7 +35,6 @@ from aggrigator.security.passwords import (
     needs_rehash,
     verify_password,
 )
-from aggrigator.security.rate_limit import limiter
 
 
 def _ip(request: Request) -> str | None:
@@ -49,32 +50,7 @@ def _hash_refresh(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-@limiter.limit("5/minute")
-async def register(
-    request: Request, payload: RegisterIn, session: SessionDep,
-) -> User:
-    user = User(
-        email=payload.email,
-        password_hash=hash_password(payload.password),
-    )
-    session.add(user)
-    try:
-        await session.commit()
-    except IntegrityError:
-        await session.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "email already registered")
-    await session.refresh(user)
-    await audit.write(
-        session, event_name=audit.Event.AUTH_REGISTER,
-        actor_user_id=user.id, ip=_ip(request),
-    )
-    await session.commit()
-    return user
-
-
 @router.post("/login", response_model=TokenPair)
-@limiter.limit("5/minute")
 async def login(
     request: Request, payload: LoginIn, session: SessionDep, settings: SettingsDep,
 ) -> TokenPair:
@@ -95,7 +71,7 @@ async def login(
         user.password_hash = hash_password(payload.password)
 
     access = issue_access_token(
-        user_id=user.id, role=user.role, tier=user.tier,
+        user_id=user.id, role=user.role,
         secret=settings.jwt_secret, ttl_seconds=settings.jwt_access_ttl_seconds,
     )
     refresh, jti = issue_refresh_token(
@@ -122,7 +98,6 @@ async def login(
 
 
 @router.post("/refresh", response_model=AccessOnly)
-@limiter.limit("20/minute")
 async def refresh(
     request: Request,
     payload: RefreshIn,
@@ -147,7 +122,7 @@ async def refresh(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid refresh token")
 
     access = issue_access_token(
-        user_id=user.id, role=user.role, tier=user.tier,
+        user_id=user.id, role=user.role,
         secret=settings.jwt_secret, ttl_seconds=settings.jwt_access_ttl_seconds,
     )
     return AccessOnly(

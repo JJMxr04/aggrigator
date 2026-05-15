@@ -1,38 +1,48 @@
 """odds-api.io per-hour quota pacer.
 
-Unlike SGO (per-month entities, ``quota.py``), odds-api.io meters per-hour
-requests. The cap is read live from the ``x-ratelimit-limit`` response
-header — never hardcoded — so the same code paces correctly on the 100/hr
-free tier AND on the 5,000/hr Starter tier.
-
-Returns the same ``QuotaStatus`` shape as ``quota.quota_status`` so the
-orchestrator's quota-check call site dispatches on provider without
-caring about the underlying metric (per-hour vs per-month).
+odds-api.io meters per-hour requests. The cap is read live from the
+``x-ratelimit-limit`` response header — never hardcoded — so the same
+code paces correctly on the 100/hr free tier AND on the 5,000/hr
+Starter tier.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from typing import Any
 
 from aggrigator.ingest.odds_api_errors import OddsApiError
 from aggrigator.ingest.odds_api_http import OddsApiHttpClient
-from aggrigator.ingest.quota import QuotaStatus
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class QuotaStatus:
+    summary_lines: list[str]
+    exhausted: bool
+    pace_ok: bool
+    pace_reason: str
+    raw: dict[str, Any]
+
+    @property
+    def summary(self) -> str:
+        return " · ".join(self.summary_lines)
+
+    @property
+    def should_skip(self) -> bool:
+        return self.exhausted or not self.pace_ok
 
 
 def quota_status(
     client: OddsApiHttpClient,
     *,
     threshold_pct: int = 80,
-    **_ignored,
 ) -> QuotaStatus:
     """Read the last captured rate-limit headers from the client; emit a
     skip verdict when current usage is past ``threshold_pct`` of the
-    live cap. ``**_ignored`` swallows the SGO-specific knobs
-    (``reset_day`` / ``pace_floor_pct``) so the call site doesn't need
-    to branch on provider.
-    """
+    live cap."""
     if threshold_pct >= 100:
         return QuotaStatus(
             summary_lines=["oddsapi quota check disabled (threshold ≥100%)"],

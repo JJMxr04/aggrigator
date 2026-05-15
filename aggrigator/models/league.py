@@ -29,7 +29,7 @@ class League(Base, TimestampMixin):
     # zero leagues until an operator flips a sport on. Once the sport is
     # on, re-seeding pulls in its leagues already enabled. Re-seeding
     # does NOT reset operator-flipped league rows (per
-    # ``upsert_league_from_sgo``).
+    # ``upsert_league_from_spec``).
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     refresh_cadence_minutes: Mapped[int] = mapped_column(
         Integer, default=720, server_default="720"

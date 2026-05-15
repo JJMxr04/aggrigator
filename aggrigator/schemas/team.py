@@ -11,7 +11,7 @@ class TeamOut(BaseModel):
     id: str                      # synthesized "{league_id}:{team_id}"
     public_id: uuid.UUID
     league_id: str
-    team_id: str                 # raw SGO teamID
+    team_id: str                 # raw provider teamID
     sport_id: str | None
     name_long: str
     name_medium: str

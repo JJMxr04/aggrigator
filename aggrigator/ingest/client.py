@@ -1,16 +1,11 @@
-"""SportsGameOdds client interface.
+"""Odds-provider client interface.
 
-The aggregator never imports the concrete client directly — it depends on
-``SGOClient`` (a Protocol). Concrete implementations:
+The aggregator depends on the ``OddsClient`` Protocol rather than the
+concrete HTTP client, so tests can swap in fixtures or stubs without
+touching the orchestrator surface.
 
-- ``FixtureSGOClient``: reads captured JSON from ``sports-scores/json/sports_game/...``.
-  Used in tests and dev. No network. (See ``sgo_simulator.py``.)
-- ``SimulatorSGOClient``: HTTP client pointed at the running simulator at
-  ``http://127.0.0.1:8765/v2``. (Phase 1.)
-- ``SgoHttpClient``: HTTP client against the real ``api.sportsgameodds.com/v2``.
-  (Phase 1.)
-
-Switching between them is config-only — same Protocol surface.
+Concrete implementation: ``OddsApiHttpClient`` (sync httpx against
+``api.odds-api.io/v3``). See ``odds_api_http.py``.
 """
 
 from __future__ import annotations
@@ -18,8 +13,8 @@ from __future__ import annotations
 from typing import Iterator, Protocol
 
 
-class SgoClient(Protocol):
-    """Subset of the SGO surface the aggregator actually uses."""
+class OddsClient(Protocol):
+    """Subset of the odds provider surface the aggregator actually uses."""
 
     def get_account_usage(self) -> dict: ...
 
@@ -43,8 +38,6 @@ class SgoClient(Protocol):
         include_open_close: bool | None = None,
         include_opposing_odds: bool | None = None,
         include_alt_lines: bool | None = None,
-        # Single ID or comma-separated list (SGO accepts both, e.g.
-        # ``"draftkings,fanduel,betmgm"``). None / empty = all bookmakers.
         bookmaker_id: str | None = None,
         limit: int = 50,
         max_pages: int | None = None,
@@ -53,9 +46,9 @@ class SgoClient(Protocol):
     def get_event(self, event_id: str, *, include_open_close: bool = True) -> dict | None: ...
 
 
-class SgoError(Exception):
-    """Any non-recoverable SGO failure."""
+class OddsClientError(Exception):
+    """Any non-recoverable provider failure."""
 
 
-class QuotaExceeded(SgoError):
-    """Monthly entity counter past the soft limit."""
+class QuotaExceeded(OddsClientError):
+    """Per-hour rate-limit budget exhausted."""

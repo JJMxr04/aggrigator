@@ -8,7 +8,6 @@ from decimal import Decimal
 import pytest
 
 from tests.integration.factories import (
-    login_and_get_token,
     make_bookmaker,
     make_event,
     make_league,
@@ -32,8 +31,7 @@ async def _seed_full_chain(session):
 
 async def test_event_list_includes_nested_sport_and_league(client, session) -> None:
     sport, league, *_ = await _seed_full_chain(session)
-    token = await login_and_get_token(client)
-    r = await client.get("/v1/events", headers={"Authorization": f"Bearer {token}"})
+    r = await client.get("/v1/events")
     assert r.status_code == 200
     item = r.json()["items"][0]
     # IDs still present (backwards-compat for ID-based consumers).
@@ -48,8 +46,7 @@ async def test_event_list_includes_nested_sport_and_league(client, session) -> N
 
 async def test_team_includes_name_alias(client, session) -> None:
     await _seed_full_chain(session)
-    token = await login_and_get_token(client)
-    r = await client.get("/v1/events", headers={"Authorization": f"Bearer {token}"})
+    r = await client.get("/v1/events")
     item = r.json()["items"][0]
     # ``name`` is the legacy-template-friendly alias of ``name_long``.
     assert item["home_team"]["name"] == "Dallas Cowboys"
@@ -66,11 +63,7 @@ async def test_selection_includes_odds_envelope(client, session) -> None:
         opening_decimal_odds=Decimal("1.5000"),
     )
 
-    token = await login_and_get_token(client)
-    r = await client.get(
-        f"/v1/events/{event.id}/markets",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    r = await client.get(f"/v1/events/{event.id}/markets")
     selection = r.json()["markets"][0]["selections"][0]
     # Both the raw decimal and the computed envelope are present.
     assert selection["decimal_odds"] == "2.5000"
@@ -88,11 +81,7 @@ async def test_selection_odds_is_null_when_decimal_odds_is_null(client, session)
     # Suspended selection — decimal_odds is None.
     await make_selection(session, market=market, type="HOME", decimal_odds=None)
 
-    token = await login_and_get_token(client)
-    r = await client.get(
-        f"/v1/events/{event.id}/markets",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    r = await client.get(f"/v1/events/{event.id}/markets")
     selection = r.json()["markets"][0]["selections"][0]
     assert selection["decimal_odds"] is None
     assert selection["odds"] is None
@@ -110,11 +99,7 @@ async def test_market_includes_nested_subject_team(client, session) -> None:
     await session.commit()
     await make_selection(session, market=market, type="OVER", decimal_odds=Decimal("1.91"))
 
-    token = await login_and_get_token(client)
-    r = await client.get(
-        f"/v1/events/{event.id}/markets",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    r = await client.get(f"/v1/events/{event.id}/markets")
     market_dto = r.json()["markets"][0]
     # ID + nested object both present.
     assert market_dto["subject_team_id"] == home.id
@@ -127,11 +112,7 @@ async def test_event_detail_with_markets_carries_nested_objects(client, session)
     market = await make_market(session, event=event, type="NFL_POINTS_ML")
     await make_selection(session, market=market, type="HOME", decimal_odds=Decimal("1.5"))
 
-    token = await login_and_get_token(client)
-    r = await client.get(
-        f"/v1/events/{event.id}?include=markets",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    r = await client.get(f"/v1/events/{event.id}?include=markets")
     body = r.json()
     assert body["sport"]["name"] == "Football"
     assert body["league"]["name"] == "NFL"

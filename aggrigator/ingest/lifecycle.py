@@ -30,8 +30,8 @@ class Transition(StrEnum):
 
 
 # Statuses that mean the event is over and won't change again. Used by
-# the ingest cron to skip backfilling events SGO has already finished
-# but our DB has never seen — pointless DB rows + SGO entity burn — and
+# the ingest cron to skip backfilling events the upstream has already finished
+# but our DB has never seen — pointless DB rows + provider entity burn — and
 # by the vacuum cron to identify rows safe to delete after retention.
 TERMINAL_STATUSES: tuple[str, ...] = ("finished", "postponed", "canceled")
 
@@ -72,9 +72,9 @@ def decide_transition(
 
 
 # Statuses that mean "should be over by now if start_time is in the past"
-# — used by the watchdog to flag/auto-void events SGO never finalized.
+# — used by the watchdog to flag/auto-void events the provider never finalized.
 # Excludes the terminal set (those are already settled one way or another)
-# and excludes any future status SGO might invent (we'd rather miss-flag
+# and excludes any future status the provider might invent (we'd rather miss-flag
 # than wrongly void a status we don't know about).
 _NON_TERMINAL_STATUSES: tuple[str, ...] = ("notstarted", "inprogress")
 
@@ -90,7 +90,7 @@ def compute_stale(
 
     True when the event's ``start_time`` is more than ``grace_hours`` in the
     past AND its ``status_type`` is still ``notstarted`` / ``inprogress``.
-    Most often a postponed game SGO never re-statused.
+    Most often a postponed game the provider never re-statused.
 
     Returns False for terminal statuses (already done), missing start_time,
     future events, and any unknown status_type. ``now`` is injectable for

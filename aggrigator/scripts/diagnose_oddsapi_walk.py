@@ -6,8 +6,7 @@ dropped between "discovered upstream" and "written to PSQL."
 
 Usage::
 
-    AGG_ODDS_PROVIDER=oddsapi ODDSAPI_API_KEY=... \\
-      python -m aggrigator.scripts.diagnose_oddsapi_walk --league MLB
+    ODDSAPI_API_KEY=... python -m aggrigator.scripts.diagnose_oddsapi_walk --league MLB
 
 If --league is omitted, picks the first League row whose Sport is also
 active. No DB writes happen — this only reads the live API + runs the
@@ -92,13 +91,6 @@ async def _pick_league(target: str | None) -> str | None:
 async def main_async(league_id_arg: str | None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     settings = get_settings()
-    if settings.odds_provider != "oddsapi":
-        print(
-            f"[diag] AGG_ODDS_PROVIDER={settings.odds_provider!r} — "
-            "this script targets oddsapi. Re-run with the env var set.",
-            file=sys.stderr,
-        )
-        return 2
 
     league_id = await _pick_league(league_id_arg)
     if league_id is None:
@@ -204,7 +196,7 @@ def main() -> int:
     parser.add_argument(
         "--league",
         default=None,
-        help="SGO league_id (e.g. MLB). Defaults to first active league.",
+        help="league_id (e.g. MLB). Defaults to first active league.",
     )
     args = parser.parse_args()
     return asyncio.run(main_async(args.league))

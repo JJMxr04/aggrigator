@@ -27,24 +27,22 @@ USER_ID = uuid.uuid4()
 
 def test_access_round_trip() -> None:
     token = issue_access_token(
-        user_id=USER_ID, role="user", tier="free",
+        user_id=USER_ID, role="user",
         secret=SECRET, ttl_seconds=60,
     )
     claims = verify_access_token(token, SECRET)
     assert isinstance(claims, AccessClaims)
     assert claims.sub == str(USER_ID)
     assert claims.role == "user"
-    assert claims.tier == "free"
 
 
-def test_access_carries_role_and_tier() -> None:
+def test_access_carries_role() -> None:
     token = issue_access_token(
-        user_id=USER_ID, role="admin", tier="service",
+        user_id=USER_ID, role="admin",
         secret=SECRET, ttl_seconds=60,
     )
     claims = verify_access_token(token, SECRET)
     assert claims.role == "admin"
-    assert claims.tier == "service"
 
 
 def test_refresh_round_trip_returns_jti() -> None:
@@ -59,7 +57,7 @@ def test_refresh_round_trip_returns_jti() -> None:
 
 def test_access_token_rejects_wrong_secret() -> None:
     token = issue_access_token(
-        user_id=USER_ID, role="user", tier="free",
+        user_id=USER_ID, role="user",
         secret=SECRET, ttl_seconds=60,
     )
     with pytest.raises(InvalidToken):
@@ -69,7 +67,7 @@ def test_access_token_rejects_wrong_secret() -> None:
 def test_access_token_rejects_expired() -> None:
     past = datetime.now(tz=timezone.utc) - timedelta(hours=1)
     token = issue_access_token(
-        user_id=USER_ID, role="user", tier="free",
+        user_id=USER_ID, role="user",
         secret=SECRET, ttl_seconds=60, now=past,
     )
     with pytest.raises(InvalidToken):
@@ -86,7 +84,7 @@ def test_access_verify_rejects_refresh_token() -> None:
 
 def test_refresh_verify_rejects_access_token() -> None:
     token = issue_access_token(
-        user_id=USER_ID, role="user", tier="free",
+        user_id=USER_ID, role="user",
         secret=SECRET, ttl_seconds=60,
     )
     with pytest.raises(InvalidToken):

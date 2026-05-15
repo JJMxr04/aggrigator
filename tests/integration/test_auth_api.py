@@ -1,20 +1,21 @@
-"""End-to-end auth tests against a real Postgres."""
+"""End-to-end auth tests against a real Postgres.
+
+Self-service registration has been removed — these tests seed users directly
+via the test session and exercise login / refresh / logout / me.
+"""
 
 from __future__ import annotations
 
 import pytest
 
+from tests.integration.factories import make_user
+
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_register_login_me_round_trip(client) -> None:
-    r = await client.post(
-        "/v1/auth/register",
-        json={"email": "alice@example.com", "password": "hunter2hunter2"},
-    )
-    assert r.status_code == 201, r.text
-    assert r.json()["email"] == "alice@example.com"
+async def test_login_me_round_trip(client, session) -> None:
+    await make_user(session, email="alice@example.com")
 
     r = await client.post(
         "/v1/auth/login",
@@ -30,21 +31,11 @@ async def test_register_login_me_round_trip(client) -> None:
     )
     assert r.status_code == 200
     assert r.json()["email"] == "alice@example.com"
-    assert r.json()["tier"] == "free"
 
 
-async def test_register_duplicate_email_409(client) -> None:
-    payload = {"email": "dup@example.com", "password": "hunter2hunter2"}
-    assert (await client.post("/v1/auth/register", json=payload)).status_code == 201
-    r = await client.post("/v1/auth/register", json=payload)
-    assert r.status_code == 409
+async def test_login_wrong_password_401(client, session) -> None:
+    await make_user(session, email="bob@example.com", password="rightpassword")
 
-
-async def test_login_wrong_password_401(client) -> None:
-    await client.post(
-        "/v1/auth/register",
-        json={"email": "bob@example.com", "password": "rightpassword"},
-    )
     r = await client.post(
         "/v1/auth/login",
         json={"email": "bob@example.com", "password": "wrongpassword"},
@@ -52,15 +43,12 @@ async def test_login_wrong_password_401(client) -> None:
     assert r.status_code == 401
 
 
-async def test_login_unknown_email_returns_same_401_shape(client) -> None:
+async def test_login_unknown_email_returns_same_401_shape(client, session) -> None:
     r1 = await client.post(
         "/v1/auth/login",
         json={"email": "missing@example.com", "password": "hunter2hunter2"},
     )
-    await client.post(
-        "/v1/auth/register",
-        json={"email": "exists@example.com", "password": "rightpassword"},
-    )
+    await make_user(session, email="exists@example.com", password="rightpassword")
     r2 = await client.post(
         "/v1/auth/login",
         json={"email": "exists@example.com", "password": "wrongpassword"},
@@ -71,11 +59,8 @@ async def test_login_unknown_email_returns_same_401_shape(client) -> None:
     assert r1.json() == r2.json()
 
 
-async def test_refresh_round_trip(client) -> None:
-    await client.post(
-        "/v1/auth/register",
-        json={"email": "carol@example.com", "password": "hunter2hunter2"},
-    )
+async def test_refresh_round_trip(client, session) -> None:
+    await make_user(session, email="carol@example.com")
     login = await client.post(
         "/v1/auth/login",
         json={"email": "carol@example.com", "password": "hunter2hunter2"},
@@ -91,11 +76,8 @@ async def test_refresh_round_trip(client) -> None:
     assert me.status_code == 200
 
 
-async def test_logout_revokes_refresh_token(client) -> None:
-    await client.post(
-        "/v1/auth/register",
-        json={"email": "dave@example.com", "password": "hunter2hunter2"},
-    )
+async def test_logout_revokes_refresh_token(client, session) -> None:
+    await make_user(session, email="dave@example.com")
     login = await client.post(
         "/v1/auth/login",
         json={"email": "dave@example.com", "password": "hunter2hunter2"},

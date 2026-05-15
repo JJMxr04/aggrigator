@@ -1,9 +1,9 @@
-"""odds-api.io payload → SGO-shape payload translator.
+"""odds-api.io payload → internal-shape payload translator.
 
-The aggregator's ingest pipeline parses SGO-shape JSON via
+The aggregator's ingest pipeline parses internal-shape JSON via
 ``event_spec_from_payload`` in ``normalize.py``. Rather than rebuild the
 pipeline for a second provider, we translate odds-api.io's response shape
-INTO the SGO shape so normalize.py works unchanged.
+INTO the upstream shape so normalize.py works unchanged.
 
 Per the migration plan (aggrigator-plan/odds-api/odds-api.md §Scope):
 
@@ -11,7 +11,7 @@ Per the migration plan (aggrigator-plan/odds-api/odds-api.md §Scope):
   translated. Everything else returned by ``/odds`` is dropped at the
   translator boundary.
 - ``live`` events: dropped (yield no payload at all).
-- ``settled`` events: translated to a SGO-shape event WITHOUT odds (event
+- ``settled`` events: translated to a internal-shape event WITHOUT odds (event
   scores carry settlement; no per-bookmaker price snapshot needed).
 - ``pending`` events: translated WITH odds when ``/odds`` data is provided.
 
@@ -39,12 +39,12 @@ from aggrigator.ingest.odds_api_errors import SchemaError
 logger = logging.getLogger(__name__)
 
 
-# ---- slug maps (odds-api.io ↔ SGO) -----------------------------------------
+# ---- slug maps (odds-api.io ↔ internal) -----------------------------------------
 # Hardcoded defaults — Phase 0 probe (scripts/probe_oddsapi.py) confirms or
 # corrects these. Unknown leagues are logged + skipped, so a missing entry is
 # observable but not crashing. Extend as new leagues come online.
 
-SGO_TO_ODDSAPI_SPORT: dict[str, str] = {
+INTERNAL_TO_ODDSAPI_SPORT: dict[str, str] = {
     "BASEBALL": "baseball",
     "BASKETBALL": "basketball",
     "FOOTBALL": "american-football",
@@ -52,11 +52,11 @@ SGO_TO_ODDSAPI_SPORT: dict[str, str] = {
     "SOCCER": "football",
     "TENNIS": "tennis",
 }
-ODDSAPI_TO_SGO_SPORT: dict[str, str] = {v: k for k, v in SGO_TO_ODDSAPI_SPORT.items()}
+ODDSAPI_TO_INTERNAL_SPORT: dict[str, str] = {v: k for k, v in INTERNAL_TO_ODDSAPI_SPORT.items()}
 
 # League slug map. Conservative seed — verify against /leagues?sport= during
 # Phase 0 and update entries that don't match.
-SGO_TO_ODDSAPI_LEAGUE: dict[str, str] = {
+INTERNAL_TO_ODDSAPI_LEAGUE: dict[str, str] = {
     "MLB": "usa-mlb",
     "MLS": "usa-mls",
     "NBA": "usa-nba",
@@ -65,16 +65,16 @@ SGO_TO_ODDSAPI_LEAGUE: dict[str, str] = {
     "UEFA_CHAMPIONS_LEAGUE": "europe-uefa-champions-league",
     "EPL": "england-premier-league",
 }
-ODDSAPI_TO_SGO_LEAGUE: dict[str, str] = {v: k for k, v in SGO_TO_ODDSAPI_LEAGUE.items()}
+ODDSAPI_TO_INTERNAL_LEAGUE: dict[str, str] = {v: k for k, v in INTERNAL_TO_ODDSAPI_LEAGUE.items()}
 
 
-# ---- statID per sport (what SGO oddIDs encode) -----------------------------
-# SGO oddID format: ``{statID}-{statEntityID}-{periodID}-{betTypeID}-{sideID}``.
+# ---- statID per sport (what the provider oddIDs encode) -----------------------------
+# oddID format: ``{statID}-{statEntityID}-{periodID}-{betTypeID}-{sideID}``.
 # The statID changes by sport. We pick the canonical scoring stat per sport so
 # the synthesized oddIDs hit the right BET_TYPE_TO_CATEGORY entries in
 # taxonomy.py.
 
-_SGO_SPORT_TO_STAT_ID: dict[str, str] = {
+_SPORT_TO_STAT_ID: dict[str, str] = {
     "BASEBALL": "runs",
     "BASKETBALL": "points",
     "FOOTBALL": "points",  # American football
@@ -87,11 +87,11 @@ _SGO_SPORT_TO_STAT_ID: dict[str, str] = {
 # ---- entry points ----------------------------------------------------------
 
 
-def to_sgo_event_payload(
+def to_internal_event_payload(
     event_dict: dict[str, Any],
     odds_dict: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Translate ONE odds-api.io event (+ optional odds payload) to SGO shape.
+    """Translate ONE odds-api.io event (+ optional odds payload) to internal shape.
 
     Returns ``None`` when the event should be dropped (e.g. status=live in
     pre-match-only scope, or unknown sport slug). Raises ``SchemaError`` if
@@ -100,7 +100,7 @@ def to_sgo_event_payload(
     Three branches based on status:
 
     - ``live`` → ``None`` (caller skips).
-    - ``settled`` → event-only SGO payload with finalized=True. If scores are
+    - ``settled`` → event-only internal payload with finalized=True. If scores are
       null, returns a VOID-shape payload (status.cancelled=True) so the
       lifecycle path treats it as cancelled rather than finalized.
     - ``pending`` → event + odds. If ``odds_dict`` is missing or has empty
@@ -118,8 +118,8 @@ def to_sgo_event_payload(
 
     sport_slug = (event_dict.get("sport") or {}).get("slug") or ""
     league_slug = (event_dict.get("league") or {}).get("slug") or ""
-    sport_id = ODDSAPI_TO_SGO_SPORT.get(sport_slug)
-    league_id = ODDSAPI_TO_SGO_LEAGUE.get(league_slug)
+    sport_id = ODDSAPI_TO_INTERNAL_SPORT.get(sport_slug)
+    league_id = ODDSAPI_TO_INTERNAL_LEAGUE.get(league_slug)
     if sport_id is None:
         logger.warning(
             "odds-api translate: unknown sport slug %r — skipping event %s",
@@ -164,7 +164,7 @@ def _base_payload(
     sport_id: str,
     league_id: str,
 ) -> dict[str, Any]:
-    """Common SGO-shape skeleton — teams, IDs, type=match."""
+    """Common internal-shape skeleton — teams, IDs, type=match."""
     return {
         "type": "match",
         "eventID": str(event_dict["id"]),
@@ -290,11 +290,11 @@ def _normalize_book_id(display_name: str) -> str:
 def _translate_odds(
     odds_dict: dict[str, Any], sport_id: str,
 ) -> dict[str, dict[str, Any]]:
-    """Flatten odds-api.io's per-bookmaker market list into SGO's
+    """Flatten odds-api.io's per-bookmaker market list into internal's
     oddID-keyed dict. Only ML / AH-main / Totals-main rows survive — the rest
     are dropped at this boundary.
     """
-    stat_id = _SGO_SPORT_TO_STAT_ID.get(sport_id, "points")
+    stat_id = _SPORT_TO_STAT_ID.get(sport_id, "points")
     bookmakers = odds_dict.get("bookmakers") or {}
     urls = odds_dict.get("urls") or {}
 
@@ -466,7 +466,7 @@ def _accumulate_handicap(
             odds_by_id, odd_id, home_price, book_id, deeplink, updated_at,
             spread=hdp,
         )
-        # SGO's normalize.py reads fairSpread/bookSpread for the canonical
+        # normalize.py reads fairSpread/bookSpread for the canonical
         # line. Set both so normalize can pick either.
         _set_market_line(odds_by_id, odd_id, "fairSpread", hdp)
     if away_price not in (None, ""):
@@ -518,7 +518,7 @@ def _add_book_quote(
     spread: Decimal | None = None,
     over_under: Decimal | None = None,
 ) -> None:
-    """Insert/merge one per-bookmaker quote into the SGO-shape odds dict."""
+    """Insert/merge one per-bookmaker quote into the internal-shape odds dict."""
     decimal_odds = _parse_decimal_odds(decimal_price)
     if decimal_odds is None:
         return
@@ -557,7 +557,7 @@ def _set_market_line(
     value: Decimal,
 ) -> None:
     """Set the canonical line key (``fairSpread`` / ``fairOverUnder``) on
-    the SGO-shape odd dict. Idempotent — only writes if not already set."""
+    the internal-shape odd dict. Idempotent — only writes if not already set."""
     row = odds_by_id.get(odd_id)
     if row is None:
         return
@@ -580,7 +580,7 @@ def _parse_decimal_odds(value: Any) -> Decimal | None:
 
 
 def _format_american(american: int) -> str:
-    """``+150`` / ``-130`` SGO-compatible string format."""
+    """``+150`` / ``-130`` American odds string format."""
     return f"+{american}" if american > 0 else str(american)
 
 

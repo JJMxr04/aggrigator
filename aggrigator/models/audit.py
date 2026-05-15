@@ -28,9 +28,6 @@ class AuditLog(Base):
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )
-    actor_api_key_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
     ip: Mapped[str | None] = mapped_column(INET, nullable=True)
     event_name: Mapped[str] = mapped_column(Text, nullable=False)
     target_type: Mapped[str | None] = mapped_column(Text, nullable=True)
