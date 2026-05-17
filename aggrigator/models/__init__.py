@@ -23,6 +23,12 @@ from aggrigator.models.selection import (
 )
 from aggrigator.models.sport import Sport
 from aggrigator.models.team import Team
+from aggrigator.models.tenant import (
+    TenantApiKey,
+    TenantStatus,
+    TenantTier,
+    TenantUser,
+)
 from aggrigator.models.webhook import WebhookDelivery
 
 __all__ = [
@@ -46,6 +52,10 @@ __all__ = [
     "SettlementStatus",
     "Sport",
     "Team",
+    "TenantApiKey",
+    "TenantStatus",
+    "TenantTier",
+    "TenantUser",
     "TimestampMixin",
     "User",
     "UserRole",

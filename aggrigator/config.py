@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     # Used by aggrigator/security/webhook_signing.sign() at delivery time.
     webhook_secret: str = Field(default="", alias="AGG_WEBHOOK_SECRET")
 
+    # Inbound "Paradise" channel: HMAC secret for /v1/internal/* signed by
+    # MDProject. Same value as MDProject's PARADISE_SECRET. NEVER reuse
+    # webhook_secret — opposite directions, separate trust scopes. Empty
+    # default → /v1/internal/* deps reject every request with 503 until
+    # the operator sets the env var.
+    paradise_secret: str = Field(default="", alias="AGG_PARADISE_SECRET")
+
     # CORS
     cors_origins: str = Field(
         default="http://localhost:3000,http://localhost:8000",
