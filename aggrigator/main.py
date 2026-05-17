@@ -16,6 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from aggrigator import __version__
 from aggrigator.admin.views import mount_admin
+from aggrigator.api import analytics as analytics_router
 from aggrigator.api import auth as auth_router
 from aggrigator.api import events as events_router
 from aggrigator.api import references as references_router
@@ -323,6 +324,7 @@ def create_app() -> FastAPI:
     app.include_router(references_router.router)
     app.include_router(events_router.router)
     app.include_router(selections_router.router)
+    app.include_router(analytics_router.router)
     # Part 2.1 ops module — replaces v0 api/admin_crons.py + api/ops_console.py.
     app.include_router(ops_api_router.router)
     app.include_router(ops_routes_router.router)
