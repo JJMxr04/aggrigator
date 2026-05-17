@@ -50,11 +50,15 @@ _CATEGORY_KEY = {
 
 
 def _team_dto(team) -> dict | None:
+    """Match ``TeamOut`` from ``/v1/events/{id}`` so the Tonight list and
+    Tonight detail render the same team string for the same team."""
     if team is None:
         return None
     return {
         "team_id": team.team_id,
-        "name": team.name_medium or team.name_long or team.name_short,
+        "name": team.name_long,
+        "name_medium": team.name_medium,
+        "name_short": team.name_short,
         "logo_url": team.logo_url,
     }
 
