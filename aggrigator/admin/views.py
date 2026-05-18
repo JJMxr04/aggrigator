@@ -3,10 +3,64 @@ edits. Mounted at /admin in main.py."""
 
 from __future__ import annotations
 
+from markupsafe import Markup
 from sqladmin import Admin, BaseView, ModelView, expose
 from starlette.responses import RedirectResponse
 
 from aggrigator.db import engine
+
+
+# ---- click-to-reveal helpers (mirrors MDProject's UserAdmin) ---------------
+#
+# SQLAdmin escapes column output unless the formatter returns Markup. We
+# wrap each sensitive field in a <details><summary> so the masked value
+# is the default and the operator has to click Show to expose it. The
+# "copy" button writes the full value to clipboard so the operator can
+# paste it elsewhere without re-revealing it on every refresh.
+
+_COPY_JS = (
+    "navigator.clipboard.writeText(this.previousElementSibling.textContent);"
+    "this.textContent='copied';"
+    "setTimeout(()=>this.textContent='copy',1200);"
+)
+
+
+def _reveal(masked: str, full: str) -> Markup:
+    if not full:
+        return Markup('—')
+    return Markup(
+        '<details style="display:inline-block">'
+        f'<summary style="cursor:pointer;list-style:none">'
+        f'<code>{masked}</code> <span style="opacity:.6">▸</span></summary>'
+        '<div style="margin-top:4px">'
+        f'<code>{full}</code> '
+        f'<button type="button" style="font-size:11px;padding:1px 6px" '
+        f'onclick="{_COPY_JS}">copy</button>'
+        '</div></details>'
+    )
+
+
+def _mask_tail(value: str, keep: int = 4) -> str:
+    if not value:
+        return ''
+    if len(value) <= keep:
+        return '•' * len(value)
+    return '•' * (len(value) - keep) + value[-keep:]
+
+
+def _mask_email(value: str) -> str:
+    if not value or '@' not in value:
+        return _mask_tail(value or '')
+    local, _, domain = value.partition('@')
+    head = local[0] if local else ''
+    return f'{head}•••@{domain}'
+
+
+def _mask_uuid(value) -> str:
+    if not value:
+        return ''
+    s = str(value)
+    return f'…{s[-12:]}'
 from aggrigator.models import (
     AuditLog,
     Bookmaker,
@@ -20,6 +74,8 @@ from aggrigator.models import (
     Selection,
     Sport,
     Team,
+    TenantApiKey,
+    TenantUser,
     User,
     WebhookDelivery,
 )
@@ -34,6 +90,62 @@ class UserView(ModelView, model=User):
     column_sortable_list = ["created", "email"]
     form_excluded_columns = ["password_hash"]
     icon = "fa-solid fa-user"
+
+
+class TenantUserView(ModelView, model=TenantUser):
+    # The MDProject-mirrored user. Tier/status are written by signed
+    # /v1/internal/* calls from MDProject — editing here would desync
+    # the two sides, so this view is read-only.
+    name = "Tenant user"
+    name_plural = "Tenant users (MDProject)"
+    icon = "fa-solid fa-users"
+    column_list = [
+        "email", "external_user_id", "tier", "status",
+        "features", "revoked_at", "created",
+    ]
+    column_searchable_list = ["email", "external_user_id"]
+    column_sortable_list = ["created", "email", "tier", "status"]
+    column_default_sort = [("created", True)]
+    column_formatters = {
+        "email": lambda m, a: _reveal(_mask_email(m.email), m.email),
+        "external_user_id": lambda m, a: _reveal(
+            _mask_uuid(m.external_user_id), str(m.external_user_id)
+        ),
+    }
+    # Apply on detail page too — same masking, same reveal.
+    column_formatters_detail = column_formatters
+    can_create = False
+    can_edit = False
+    can_delete = False
+
+
+class TenantApiKeyView(ModelView, model=TenantApiKey):
+    name = "Tenant API key"
+    name_plural = "Tenant API keys"
+    icon = "fa-solid fa-key"
+    column_list = [
+        "tenant_user_id", "prefix", "last_four",
+        "revoked_at", "last_used_at", "created",
+    ]
+    column_searchable_list = ["prefix", "tenant_user_id"]
+    column_sortable_list = ["created", "last_used_at", "revoked_at"]
+    column_default_sort = [("created", True)]
+    column_formatters = {
+        "tenant_user_id": lambda m, a: _reveal(
+            _mask_uuid(m.tenant_user_id), str(m.tenant_user_id)
+        ),
+        # The prefix is the public lookup half of the key, but anyone
+        # holding the prefix + the unhashed tail can authenticate, so we
+        # mask it like the full key.
+        "prefix": lambda m, a: _reveal(_mask_tail(m.prefix), m.prefix),
+        # 4 chars is too short for a useful mask; hide entirely behind
+        # the toggle (no preview).
+        "last_four": lambda m, a: _reveal('••••', m.last_four),
+    }
+    column_formatters_detail = column_formatters
+    can_create = False
+    can_edit = False
+    can_delete = False
 
 
 class RefreshTokenView(ModelView, model=RefreshToken):
@@ -194,6 +306,7 @@ def mount_admin(app, *, base_url: str = "/admin") -> Admin:
     admin.add_base_view(CronsConsoleLink)
     admin.add_base_view(DataResetLink)
     for view in [
+        TenantUserView, TenantApiKeyView,
         UserView, RefreshTokenView,
         WebhookDeliveryView, AuditLogView,
         CronRunView,
