@@ -20,11 +20,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from aggrigator.deps import SessionDep
+from aggrigator.deps import SessionDep, require_pro_user
 from aggrigator.models import (
     BookmakerSelection,
     Event,
@@ -34,7 +34,14 @@ from aggrigator.models import (
     Selection,
 )
 
-router = APIRouter(prefix="/v1/analytics", tags=["analytics"])
+# Every route on this router requires a valid PRO tenant API key. Applying
+# at the router level means a future contributor adding an endpoint can't
+# forget the gate. See subscription-plan/05-access-control.md §2.
+router = APIRouter(
+    prefix="/v1/analytics",
+    tags=["analytics"],
+    dependencies=[Depends(require_pro_user)],
+)
 
 
 _SUMMARY_CATEGORIES = (
