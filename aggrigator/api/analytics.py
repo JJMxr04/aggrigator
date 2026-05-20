@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
+from aggrigator.analytics import soccer_model
 from aggrigator.deps import SessionDep, require_pro_user
 from aggrigator.models import (
     BookmakerSelection,
@@ -179,50 +180,179 @@ async def events_today(
 
 @router.get("/events/{event_id}/probabilities")
 async def event_probabilities(session: SessionDep, event_id: str) -> dict:
-    """Vig-adjusted implied probabilities per market for one event.
+    """Model-derived match probabilities for one event.
 
-    ``raw`` = 1 / decimal_odds. ``normalized`` = raw / sum(raw) within the
-    market — this is the vig-free fair probability. ``vig`` = sum(raw) - 1
-    (the bookmaker's hold expressed as overround above 1.0)."""
-    event = await session.get(Event, event_id)
+    Replaces the previous market-implied shape (per the 2026-05-19
+    redesign — see ``plans/analytics/dashboard_and_data/00-overview.md``).
+    The model is soccer-specific (Elo + bivariate Poisson — see
+    ``aggrigator/analytics/soccer_model.py``); non-soccer events return
+    ``model_version=null`` and null probabilities until their pipelines
+    land.
+
+    For **past events**, returns the *pre-match* estimate computed from
+    Elo ratings as of strictly before kickoff — the question this
+    answers is "what would the model have said at the time," which is
+    the only honest framing for a post-hoc display.
+
+    For **future events**, returns the *current* estimate using the most
+    recent ratings.
+    """
+    event = await session.scalar(
+        select(Event)
+        .where(Event.id == event_id)
+        .options(
+            selectinload(Event.home_team),
+            selectinload(Event.away_team),
+            selectinload(Event.sport),
+            selectinload(Event.league),
+        )
+    )
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
 
-    stmt = (
-        select(Market)
-        .where(Market.event_id == event_id)
-        .options(selectinload(Market.selections))
-        .order_by(Market.category, Market.scope, Market.line)
-    )
-    markets_out: list[dict] = []
-    for m in await session.scalars(stmt):
-        raws = [(s, _implied_prob(s.decimal_odds)) for s in m.selections]
-        priced = [(s, r) for s, r in raws if r is not None]
-        total_raw = sum(r for _, r in priced) if priced else 0.0
-        vig = total_raw - 1.0 if total_raw > 0 else None
-        selections_out: list[dict] = []
-        for sel, raw in raws:
-            normalized = (raw / total_raw) if (raw is not None and total_raw > 0) else None
-            selections_out.append({
-                "type": sel.type,
-                "label": sel.label,
-                "decimal_odds": (
-                    float(sel.decimal_odds) if sel.decimal_odds is not None else None
-                ),
-                "implied_prob": raw,
-                "normalized": normalized,
-            })
-        markets_out.append({
-            "market_id": m.id,
-            "category": m.category,
-            "scope": m.scope,
-            "type": m.type,
-            "line": float(m.line) if m.line is not None else None,
-            "vig": vig,
-            "selections": selections_out,
-        })
+    empty = {
+        "event_id": event_id,
+        "p_home": None,
+        "p_draw": None,
+        "p_away": None,
+        "model_version": None,
+        "computed_at": None,
+        "reason": None,
+    }
 
-    return {"event_id": event_id, "markets": markets_out}
+    sport_id = event.sport_id or (event.sport.id if event.sport else None)
+    if sport_id != "SOCCER":
+        return {**empty, "reason": "no_model_for_sport"}
+
+    if event.league_id is None or event.home_team_id is None or event.away_team_id is None:
+        return {**empty, "reason": "insufficient_event_context"}
+
+    league_events = list(await session.scalars(
+        select(Event)
+        .where(
+            Event.league_id == event.league_id,
+            Event.is_finalized.is_(True),
+        )
+        .order_by(Event.start_time.asc(), Event.id)
+    ))
+
+    if not league_events:
+        # No history → can't compute ratings; the team-strength estimate
+        # would just be the league average. Return null rather than a
+        # misleading point estimate.
+        return {**empty, "reason": "no_settled_events_in_league"}
+
+    state = soccer_model.compute_elo_for_league(league_events)
+    home_elo, away_elo = soccer_model.elo_snapshot_at(
+        state, event.id if event.is_finalized else None,
+        event.home_team_id, event.away_team_id,
+    )
+    base_home, base_away = soccer_model.league_average_goals(league_events)
+    probs = soccer_model.compute_match_probabilities(
+        home_elo, away_elo, base_home=base_home, base_away=base_away,
+    )
+
+    return {
+        "event_id": event_id,
+        "p_home": probs["p_home"],
+        "p_draw": probs["p_draw"],
+        "p_away": probs["p_away"],
+        "model_version": soccer_model.MODEL_VERSION,
+        "computed_at": datetime.now(tz=timezone.utc),
+        "model_inputs": {
+            "home_elo": home_elo,
+            "away_elo": away_elo,
+            "base_home_goals": base_home,
+            "base_away_goals": base_away,
+            "mu_home": probs["mu_home"],
+            "mu_away": probs["mu_away"],
+            "n_events_in_league": len(league_events),
+        },
+        "is_pre_match_snapshot": event.is_finalized,
+    }
+
+
+@router.get("/events/{event_id}/context")
+async def event_context(session: SessionDep, event_id: str) -> dict:
+    """Form-into-match for both teams + (for past events) H2H last 5.
+
+    Powers the event detail page's secondary panels. Read-only, no
+    cache, recomputed per request from the league's settled events."""
+    event = await session.scalar(
+        select(Event)
+        .where(Event.id == event_id)
+        .options(
+            selectinload(Event.home_team),
+            selectinload(Event.away_team),
+        )
+    )
+    if event is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
+
+    if not event.league_id or not event.home_team_id or not event.away_team_id:
+        return {
+            "event_id": event_id,
+            "form_into_match": {"home_last_5": [], "away_last_5": []},
+            "h2h_last_5": [],
+        }
+
+    league_events = list(await session.scalars(
+        select(Event)
+        .where(
+            Event.league_id == event.league_id,
+            Event.is_finalized.is_(True),
+        )
+        .options(
+            selectinload(Event.home_team),
+            selectinload(Event.away_team),
+        )
+        .order_by(Event.start_time.desc(), Event.id)
+    ))
+
+    home_form = soccer_model.compute_form_into_match(
+        event.home_team_id, league_events,
+        target_start_time=event.start_time, last_n=5,
+    )
+    away_form = soccer_model.compute_form_into_match(
+        event.away_team_id, league_events,
+        target_start_time=event.start_time, last_n=5,
+    )
+
+    h2h_last_5: list[dict] = []
+    # H2H always reflects fixtures strictly before this event so the
+    # number means "what their history looked like coming in," whether
+    # the user is looking at a past or upcoming match.
+    for ev in league_events:
+        if event.start_time and ev.start_time and ev.start_time >= event.start_time:
+            continue
+        if ev.id == event.id:
+            continue
+        pair_match = (
+            (ev.home_team_id == event.home_team_id and ev.away_team_id == event.away_team_id)
+            or (ev.home_team_id == event.away_team_id and ev.away_team_id == event.home_team_id)
+        )
+        if not pair_match:
+            continue
+        h2h_last_5.append({
+            "event_id": ev.id,
+            "start_time": ev.start_time,
+            "home_team": _team_dto(ev.home_team),
+            "away_team": _team_dto(ev.away_team),
+            "home_score": ev.home_score,
+            "away_score": ev.away_score,
+            "winner_code": ev.winner_code,
+        })
+        if len(h2h_last_5) == 5:
+            break
+
+    return {
+        "event_id": event_id,
+        "form_into_match": {
+            "home_last_5": home_form,
+            "away_last_5": away_form,
+        },
+        "h2h_last_5": h2h_last_5,
+    }
 
 
 @router.get("/events/{event_id}/best-prices")
