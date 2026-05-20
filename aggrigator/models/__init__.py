@@ -9,6 +9,7 @@ from aggrigator.models.auth import (
     UserRole,
 )
 from aggrigator.models.base import Base, TimestampMixin
+from aggrigator.models.bet import Bet, BetSelectionType, BetSettlementStatus
 from aggrigator.models.bookmaker import Bookmaker, BookmakerSelection
 from aggrigator.models.cron_run import CronRun, CronRunSource, CronRunStatus
 from aggrigator.models.event import Event
@@ -34,6 +35,9 @@ from aggrigator.models.webhook import WebhookDelivery
 __all__ = [
     "AuditLog",
     "Base",
+    "Bet",
+    "BetSelectionType",
+    "BetSettlementStatus",
     "Bookmaker",
     "BookmakerSelection",
     "CronRun",

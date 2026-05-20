@@ -22,6 +22,7 @@ from aggrigator.ingest.client import OddsClient
 from aggrigator.ingest.ingester import write_markets
 from aggrigator.ingest.lifecycle import EventState, Transition, decide_transition
 from aggrigator.ingest.normalize import EventSpec, event_spec_from_payload
+from aggrigator.ingest.bet_autosettle import autosettle_bets_for_event
 from aggrigator.ingest.odds_api_reconcile import reconcile_disappeared
 from aggrigator.ingest.settlement_computed import settle_event, void_remaining_pending
 from aggrigator.ingest.settlement_provider import grade_event
@@ -168,6 +169,11 @@ async def ingest_event(
         #    selections sneak out attached to an ``event.finalized`` event.
         await session.flush()
         selections_voided = await void_remaining_pending(session, event)
+        # 4) User-tracked bets attached to this event (Phase D bet log).
+        #    Idempotent — only touches bets with settlement_status='open'.
+        #    Out-of-band manual settlements set earlier by the user are
+        #    preserved.
+        await autosettle_bets_for_event(session, event)
 
     new_state = EventState(
         status_type=spec.status_type,
