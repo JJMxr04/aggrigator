@@ -47,18 +47,6 @@ router = APIRouter(
 )
 
 
-_SUMMARY_CATEGORIES = (
-    MarketCategory.MONEYLINE.value,
-    MarketCategory.SPREAD.value,
-    MarketCategory.TOTAL.value,
-)
-_CATEGORY_KEY = {
-    MarketCategory.MONEYLINE.value: "ml",
-    MarketCategory.SPREAD.value: "spread",
-    MarketCategory.TOTAL.value: "total",
-}
-
-
 def _team_dto(team) -> dict | None:
     """Compact team payload used by the events / fixtures endpoints. ``id``
     is the synthesized ``{league_id}:{team_id}`` PK that the explore
@@ -83,43 +71,65 @@ def _implied_prob(odds: Decimal | None) -> float | None:
     return float(Decimal(1) / odds)
 
 
-def _summary_market_dto(m: Market) -> dict:
-    """Compact view used by the Tonight list — just type, line, decimal_odds,
-    implied_prob. Per-book detail is reserved for the detail endpoints."""
-    selections: list[dict] = []
-    for sel in m.selections:
-        selections.append({
-            "type": sel.type,
-            "label": sel.label,
-            "decimal_odds": (
-                float(sel.decimal_odds) if sel.decimal_odds is not None else None
-            ),
-            "implied_prob": _implied_prob(sel.decimal_odds),
-        })
-    return {
-        "market_id": m.id,
-        "line": float(m.line) if m.line is not None else None,
-        "selections": selections,
-    }
-
-
 @router.get("/events/today")
 async def events_today(
     session: SessionDep,
-    hours_ahead: int = Query(default=24, ge=1, le=168),
-    sport: str | None = Query(default=None),
+    hours_ahead: int = Query(default=72, ge=1, le=168),
     league: str | None = Query(default=None),
-) -> list[dict]:
-    """Events kicking off within the next ``hours_ahead`` hours, each
-    enriched with ML/spread/total FULL_GAME markets."""
+) -> dict:
+    """Upcoming events with model probability + live odds + best edge.
+
+    Default window widened to 72 h (was 24 h in the pre-redesign shape
+    — see ``plans/analytics/dashboard_and_data/06-upcoming-and-picks.md``).
+    Past events are excluded (``is_finalized=False``)."""
+    rows, window = await _upcoming_rows(session, hours_ahead=hours_ahead, league=league)
+    return {"from": window[0], "to": window[1], "events": rows}
+
+
+@router.get("/picks")
+async def picks(
+    session: SessionDep,
+    threshold_pp: float = Query(default=3.0, ge=0.0, le=100.0),
+    hours_ahead: int = Query(default=72, ge=1, le=168),
+    league: str | None = Query(default=None),
+) -> dict:
+    """Same upcoming list filtered to rows whose best_edge clears the
+    threshold (percentage points). Sorted edge DESC."""
+    rows, window = await _upcoming_rows(session, hours_ahead=hours_ahead, league=league)
+    picks = [
+        r for r in rows
+        if r.get("best_edge") and r["best_edge"]["edge_pp"] >= threshold_pp
+    ]
+    picks.sort(key=lambda r: r["best_edge"]["edge_pp"], reverse=True)
+    return {
+        "from": window[0],
+        "to": window[1],
+        "threshold_pp": threshold_pp,
+        "events": picks,
+    }
+
+
+async def _upcoming_rows(
+    session,
+    *,
+    hours_ahead: int,
+    league: str | None,
+) -> tuple[list[dict], tuple[datetime, datetime]]:
+    """Shared backbone for ``events_today`` + ``picks``.
+
+    Pulls upcoming events in window, computes model probabilities once
+    per league (so 10 EPL events don't pay 10× the Elo walk), reads
+    live-odds from ``core_market`` in a single batched query, and
+    builds the dashboard row shape with ``best_edge`` joined."""
     now = datetime.now(tz=timezone.utc)
     window_end = now + timedelta(hours=hours_ahead)
 
     stmt = (
         select(Event)
         .where(
-            Event.start_time >= now - timedelta(hours=3),
+            Event.start_time >= now,
             Event.start_time < window_end,
+            Event.is_finalized.is_(False),
         )
         .options(
             selectinload(Event.home_team),
@@ -129,35 +139,64 @@ async def events_today(
         )
         .order_by(Event.start_time)
     )
-    if sport:
-        stmt = stmt.where(Event.sport_id == sport)
     if league:
         stmt = stmt.where(Event.league_id == league)
 
     events = list(await session.scalars(stmt))
     if not events:
-        return []
+        return [], (now, window_end)
 
-    event_ids = [e.id for e in events]
+    # ---- Per-league model state (computed once each) ----
+    elo_state_by_league, base_goals_by_league = await _league_model_states(
+        session, leagues={ev.league_id for ev in events if ev.league_id and ev.sport_id == "SOCCER"},
+    )
+
+    # ---- Live odds for every event in one bulk pull ----
+    event_ids = [ev.id for ev in events]
     markets_stmt = (
         select(Market)
         .where(
             Market.event_id.in_(event_ids),
-            Market.category.in_(_SUMMARY_CATEGORIES),
+            Market.category == MarketCategory.MONEYLINE.value,
             Market.scope == MarketScope.FULL_GAME.value,
         )
-        .options(selectinload(Market.selections))
-        .order_by(Market.event_id, Market.category, Market.line)
+        .options(
+            selectinload(Market.selections).selectinload(Selection.by_book)
+            .selectinload(BookmakerSelection.bookmaker),
+        )
+        .order_by(Market.event_id, Market.line)
     )
-    summary: dict[str, dict[str, Market]] = {}
+    markets_by_event: dict[str, list[Market]] = {}
     for m in await session.scalars(markets_stmt):
-        # First market per (event, category) wins — the deterministic
-        # ordering above keeps this stable across requests.
-        summary.setdefault(m.event_id, {}).setdefault(m.category, m)
+        markets_by_event.setdefault(m.event_id, []).append(m)
 
-    out: list[dict] = []
+    rows: list[dict] = []
     for ev in events:
-        row: dict = {
+        model_prob = None
+        if ev.sport_id == "SOCCER" and ev.league_id in elo_state_by_league:
+            state = elo_state_by_league[ev.league_id]
+            base_home, base_away = base_goals_by_league[ev.league_id]
+            if ev.home_team_id and ev.away_team_id:
+                home_elo, away_elo = soccer_model.elo_snapshot_at(
+                    state, None, ev.home_team_id, ev.away_team_id,
+                )
+                probs = soccer_model.compute_match_probabilities(
+                    home_elo, away_elo, base_home=base_home, base_away=base_away,
+                )
+                model_prob = {
+                    "p_home": probs["p_home"],
+                    "p_draw": probs["p_draw"],
+                    "p_away": probs["p_away"],
+                    "model_version": soccer_model.MODEL_VERSION,
+                }
+
+        live_odds_payload = _build_live_odds_payload(
+            ev.id, markets_by_event.get(ev.id, []), fetched_at=now,
+        )
+        has_live_odds = bool(live_odds_payload.get("markets"))
+        best_edge = _best_edge_from_live_odds(live_odds_payload, model_prob or {})
+
+        rows.append({
             "event_id": ev.id,
             "start_time": ev.start_time,
             "status_type": ev.status_type,
@@ -166,16 +205,110 @@ async def events_today(
             "league_id": ev.league_id,
             "home_team": _team_dto(ev.home_team),
             "away_team": _team_dto(ev.away_team),
-            "home_score": ev.home_score,
-            "away_score": ev.away_score,
-            "ml": None,
-            "spread": None,
-            "total": None,
+            "model_prob": model_prob,
+            "has_live_odds": has_live_odds,
+            "best_edge": best_edge,
+        })
+    return rows, (now, window_end)
+
+
+async def _league_model_states(
+    session, leagues: set[str | None],
+) -> tuple[dict, dict]:
+    """Build ``{league_id: EloLeagueState}`` and ``{league_id: (base_h, base_a)}``.
+
+    One SELECT per league for its settled events. Caller drops any
+    leagues outside soccer; if a league has zero settled events it's
+    silently absent from the result (the caller treats absence as
+    "no model available for this row")."""
+    elo_by_league: dict = {}
+    bases_by_league: dict = {}
+    for league_id in leagues:
+        if not league_id:
+            continue
+        league_events = list(await session.scalars(
+            select(Event)
+            .where(
+                Event.league_id == league_id,
+                Event.is_finalized.is_(True),
+            )
+            .order_by(Event.start_time.asc(), Event.id)
+        ))
+        if not league_events:
+            continue
+        elo_by_league[league_id] = soccer_model.compute_elo_for_league(league_events)
+        bases_by_league[league_id] = soccer_model.league_average_goals(league_events)
+    return elo_by_league, bases_by_league
+
+
+def _build_live_odds_payload(
+    event_id: str, markets: list[Market], *, fetched_at: datetime,
+) -> dict:
+    """Pure builder — used by the live-odds endpoint and the upcoming list.
+
+    ``markets`` is the moneyline FULL_GAME markets for one event, with
+    selections + by_book + bookmaker eager-loaded. Returns the same
+    shape as the ``/live-odds`` endpoint so consumers can treat them
+    interchangeably."""
+    if not markets:
+        return {
+            "event_id": event_id,
+            "fetched_at": fetched_at,
+            "markets": [],
+            "reason": "no_markets_for_event",
         }
-        for cat, market in summary.get(ev.id, {}).items():
-            row[_CATEGORY_KEY[cat]] = _summary_market_dto(market)
-        out.append(row)
-    return out
+
+    markets_out: list[dict] = []
+    for m in markets:
+        best_prices: list[dict] = []
+        raw_implied: dict[str, float] = {}
+        for sel in m.selections:
+            available_books = [
+                b for b in sel.by_book
+                if b.available and b.decimal_odds is not None and b.decimal_odds > 0
+            ]
+            if not available_books:
+                continue
+            best = max(available_books, key=lambda b: b.decimal_odds)
+            side = _selection_side(sel.type)
+            implied = _implied_prob(best.decimal_odds)
+            best_prices.append({
+                "side": side,
+                "selection_type": sel.type,
+                "label": sel.label,
+                "bookmaker_id": best.bookmaker_id,
+                "bookmaker_name": best.bookmaker.name if best.bookmaker else best.bookmaker_id,
+                "decimal_odds": float(best.decimal_odds),
+                "implied_prob": implied,
+                "deeplink": best.deeplink or None,
+            })
+            if side in {"home", "draw", "away"} and implied is not None:
+                raw_implied[side] = implied
+
+        if not best_prices:
+            continue
+
+        total = sum(raw_implied.values())
+        vig_adjusted: dict[str, float] = {}
+        if total > 0:
+            for side, val in raw_implied.items():
+                vig_adjusted[side] = val / total
+
+        markets_out.append({
+            "market_id": m.id,
+            "market_type": "moneyline",
+            "last_updated": m.last_updated,
+            "best_prices": best_prices,
+            "vig_adjusted_implied": vig_adjusted,
+            "vig": (total - 1.0) if total > 0 else None,
+        })
+
+    return {
+        "event_id": event_id,
+        "fetched_at": fetched_at,
+        "markets": markets_out,
+        "reason": None if markets_out else "no_books_cover_event",
+    }
 
 
 @router.get("/events/{event_id}/probabilities")
@@ -270,6 +403,115 @@ async def event_probabilities(session: SessionDep, event_id: str) -> dict:
         },
         "is_pre_match_snapshot": event.is_finalized,
     }
+
+
+@router.get("/events/{event_id}/live-odds")
+async def event_live_odds(session: SessionDep, event_id: str) -> dict:
+    """Best price per side + vig-adjusted implied probabilities for one event.
+
+    Reads from the existing market tables (``core_market`` +
+    ``core_selection`` + ``core_bookmaker_selection``) that the ingest
+    cron writes. v1 surfaces moneyline only; spread/total are reserved
+    for a future expansion.
+
+    Returns ``{markets: []}`` with a ``reason`` code when no coverage is
+    available — never raises 404 so the dashboard's empty-state copy
+    can branch on the reason instead of HTTP status. A genuinely
+    missing event is the only 404."""
+    event = await session.get(Event, event_id)
+    if event is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
+
+    fetched_at = datetime.now(tz=timezone.utc)
+
+    if event.is_finalized:
+        return {
+            "event_id": event_id,
+            "fetched_at": fetched_at,
+            "markets": [],
+            "reason": "event_is_finalized",
+        }
+
+    markets = list(await session.scalars(
+        select(Market)
+        .where(
+            Market.event_id == event_id,
+            Market.category == MarketCategory.MONEYLINE.value,
+            Market.scope == MarketScope.FULL_GAME.value,
+        )
+        .options(
+            selectinload(Market.selections).selectinload(Selection.by_book)
+            .selectinload(BookmakerSelection.bookmaker),
+        )
+        .order_by(Market.line)
+    ))
+
+    return _build_live_odds_payload(event_id, markets, fetched_at=fetched_at)
+
+
+def _selection_side(selection_type: str) -> str:
+    """Map ``Selection.type`` to the dashboard's side vocabulary."""
+    t = (selection_type or "").upper()
+    if t == "HOME":
+        return "home"
+    if t == "AWAY":
+        return "away"
+    if t == "DRAW":
+        return "draw"
+    return t.lower()
+
+
+def _best_edge_from_live_odds(
+    live_odds_payload: dict, model_prob: dict,
+) -> dict | None:
+    """Pick the highest +edge side from the model vs market comparison.
+
+    Returns ``{side, edge_pp, model_prob, market_prob, best_decimal,
+    best_bookmaker, best_deeplink}`` or None when there's no overlap.
+    Edge is signed; callers filter by the sign / threshold themselves.
+    """
+    if not live_odds_payload or not model_prob:
+        return None
+    if model_prob.get("p_home") is None:
+        return None
+    markets = live_odds_payload.get("markets") or []
+    ml = next((m for m in markets if m.get("market_type") == "moneyline"), None)
+    if ml is None:
+        return None
+    vig_adj = ml.get("vig_adjusted_implied") or {}
+    if not vig_adj:
+        return None
+    best_by_side = {
+        bp["side"]: bp for bp in ml.get("best_prices", []) if bp.get("side")
+    }
+    model_by_side = {
+        "home": model_prob.get("p_home"),
+        "draw": model_prob.get("p_draw"),
+        "away": model_prob.get("p_away"),
+    }
+
+    candidates: list[dict] = []
+    for side, market_p in vig_adj.items():
+        model_p = model_by_side.get(side)
+        if model_p is None or market_p is None:
+            continue
+        bp = best_by_side.get(side)
+        if bp is None:
+            continue
+        edge = model_p - market_p
+        candidates.append({
+            "side": side,
+            "edge_pp": edge * 100.0,
+            "model_prob": model_p,
+            "market_prob": market_p,
+            "best_decimal": bp.get("decimal_odds"),
+            "best_bookmaker": bp.get("bookmaker_name"),
+            "best_deeplink": bp.get("deeplink"),
+        })
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c["edge_pp"], reverse=True)
+    return candidates[0]
 
 
 @router.get("/events/{event_id}/context")
