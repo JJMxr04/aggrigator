@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "FOOTBALL",
+  "leagues": [
+    {
+      "canonical_id": "NFL",
+      "canonical_name": "National Football League",
+      "odds_api_io_key": "NFL",
+      "thesportsdb_league_id": false,
+      "confirmed": false,
+      "active": true
+    }
+  ]
+}

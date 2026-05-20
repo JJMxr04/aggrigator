@@ -200,6 +200,76 @@ async def trigger_ingest_event(
     }
 
 
+# ---- historical ingest (TheSportsDB) ---------------------------------------
+
+
+class HistoricalIngestIn(BaseModel):
+    league_id: str
+    season_label: str  # TheSportsDB strSeason; EPL "2024-2025", MLS "2024"
+
+
+@router.post(
+    "/historical-ingest",
+    summary=(
+        "Backfill historical events + final scores for one league, one "
+        "season, from TheSportsDB. No markets / odds are written."
+    ),
+)
+async def trigger_historical_ingest(
+    payload: HistoricalIngestIn,
+    session: SessionDep,
+    _admin: Annotated[User, Depends(require_admin)],
+) -> dict:
+    """One league + one season per call. Refuses any league where
+    ``can_pull_historical_scores=false`` (gate enforced in the
+    orchestrator via :class:`HistoricalIngestError`).
+
+    Runs synchronously and returns the report — for a full EPL season
+    (38 rounds × 1.5s throttle) expect ~5 minutes. Future improvement:
+    enqueue via ARQ if runs exceed admin-request timeouts.
+
+    Idempotent on re-run: same TheSportsDB event id → same
+    ``"tsdb:<id>"`` event_id → same upsert → no duplicate rows.
+    """
+    import dataclasses
+
+    from aggrigator.ingest.historical_orchestrator import (
+        HistoricalIngestError,
+        ingest_historical_league,
+    )
+    from aggrigator.ingest.thesportsdb_client import (
+        TheSportsDbClient,
+        TheSportsDbError,
+    )
+
+    if not payload.season_label.strip():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "season_label must be non-empty (e.g. '2024-2025' or '2024')",
+        )
+
+    client = TheSportsDbClient(api_key=get_settings().thesportsdb_api_key)
+
+    try:
+        async with client:
+            report = await ingest_historical_league(
+                session, payload.league_id, payload.season_label,
+                client=client,
+            )
+    except HistoricalIngestError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            str(exc),
+        ) from exc
+    except TheSportsDbError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"TheSportsDB error: {exc}",
+        ) from exc
+
+    return dataclasses.asdict(report)
+
+
 # ---- helpers ---------------------------------------------------------------
 
 

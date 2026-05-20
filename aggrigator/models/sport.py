@@ -19,4 +19,9 @@ class Sport(Base, TimestampMixin):
     # reset operator choices (per ``upsert_sport_from_spec``).
     active: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
+    # Provider-specific identifiers. Owned by the registry loader
+    # (``aggrigator.ingest.registry``), not by ``seed_sports``.
+    odds_api_io_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    thesportsdb_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     leagues = relationship("League", back_populates="sport")

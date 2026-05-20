@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "HOCKEY",
+  "leagues": [
+    {
+      "canonical_id": "NHL",
+      "canonical_name": "National Hockey League",
+      "odds_api_io_key": "NHL",
+      "thesportsdb_league_id": false,
+      "confirmed": false,
+      "active": true
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "SOCCER",
+  "leagues": [
+    {
+      "canonical_id": "EPL",
+      "canonical_name": "English Premier League",
+      "odds_api_io_key": "EPL",
+      "thesportsdb_league_id": "4328",
+      "confirmed": false,
+      "active": true
+    },
+    {
+      "canonical_id": "MLS",
+      "canonical_name": "Major League Soccer",
+      "odds_api_io_key": "MLS",
+      "thesportsdb_league_id": "4346",
+      "confirmed": false,
+      "active": true
+    }
+  ]
+}

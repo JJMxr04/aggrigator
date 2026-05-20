@@ -15,3 +15,6 @@ class LeagueOut(BaseModel):
     active: bool
     refresh_cadence_minutes: int
     last_refreshed_at: datetime | None
+    odds_api_io_key: str | None = None
+    thesportsdb_id: str | None = None
+    can_pull_historical_scores: bool = False

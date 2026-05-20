@@ -1,0 +1,181 @@
+{% extends "_base.html" %}
+
+{% block body %}
+<style>
+  .hi-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.5rem;
+    box-shadow: var(--shadow-sm);
+  }
+  .hi-form { display: grid; gap: 1rem; max-width: 520px; }
+  .hi-field { display: flex; flex-direction: column; gap: .35rem; }
+  .hi-field label { font-weight: 600; font-size: .85rem; }
+  .hi-field small { color: var(--text-soft); font-size: .78rem; }
+  .hi-field select, .hi-field input {
+    padding: .55rem .75rem; border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-2); color: var(--text);
+    font-size: .95rem; font-family: inherit;
+  }
+  .hi-field select:focus, .hi-field input:focus {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .hi-cost {
+    background: var(--info-soft); border-left: 3px solid var(--info);
+    border-radius: 4px; padding: .75rem 1rem;
+    font-size: .85rem; color: var(--text);
+  }
+  .hi-empty {
+    padding: 1rem 1.25rem; background: var(--surface-2);
+    border-radius: 8px; color: var(--text-soft);
+    border-left: 3px solid var(--text-mute);
+  }
+  .hi-report {
+    margin-top: 1.25rem; padding: 1rem 1.25rem;
+    background: var(--success-soft); border-left: 3px solid var(--success);
+    border-radius: 8px;
+  }
+  .hi-report--issues { background: var(--warning-soft); border-left-color: var(--warning); }
+  .hi-report__row {
+    display: grid; grid-template-columns: 200px 1fr; gap: .5rem;
+    font-size: .88rem; padding: .15rem 0;
+  }
+  .hi-report__label { color: var(--text-soft); font-weight: 600; }
+  .hi-report__value { font-variant-numeric: tabular-nums; }
+  .hi-issues {
+    margin-top: .75rem;
+    font-family: var(--mono); font-size: .78rem;
+    max-height: 12em; overflow: auto;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: .5rem .75rem;
+  }
+  .hi-issues p { margin: .15rem 0; }
+</style>
+
+<header style="margin-bottom: 1.25rem">
+  <h2 class="ops-title" style="font-size: 1.3rem">Historical events + final scores</h2>
+  <p class="ops-subtitle">
+    Backfill scored events for the chosen league + season directly from
+    TheSportsDB (independent of odds-api.io). Creates
+    <code>provider='thesportsdb'</code> Event rows linked to the same
+    canonical Teams as live data, with <code>home_score</code> /
+    <code>away_score</code> populated. <strong>No markets / odds are
+    written</strong> — TheSportsDB has no odds. Runs synchronously over
+    one round at a time; full EPL season ≈ 5 minutes.
+  </p>
+</header>
+
+{% if flash %}
+  <div class="hi-card" style="margin-bottom: 1rem; border-left: 3px solid var(--info);">
+    <strong>Note:</strong> {{ flash }}
+  </div>
+{% endif %}
+
+<div class="hi-card">
+  {% if not leagues %}
+    <div class="hi-empty">
+      No leagues are eligible for TheSportsDB backfill. A league becomes
+      eligible only when every team in it has both a
+      <code>thesportsdb_team_id</code> and <code>match_confirmed=true</code>.
+      Edit <code>aggrigator/data/sports/</code> and re-run
+      <code>load_registry</code>.
+    </div>
+  {% else %}
+    <form class="hi-form" method="post" action="/ops/historical-ingest"
+          onsubmit="return window.hiConfirm && window.hiConfirm(this);">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <div class="hi-field">
+        <label for="league_id">League</label>
+        <select id="league_id" name="league_id" required>
+          {% for lg in leagues %}
+            <option value="{{ lg.id }}"
+                    data-rounds="{{ estimates[lg.id]['rounds'] }}"
+                    data-seconds="{{ estimates[lg.id]['approx_seconds'] }}">
+              {{ lg.id }} — {{ lg.name }} (~{{ estimates[lg.id]['rounds'] }} rounds)
+            </option>
+          {% endfor %}
+        </select>
+        <small>Only leagues with <code>can_pull_historical_scores=true</code> are listed.</small>
+      </div>
+
+      <div class="hi-field">
+        <label for="season_label">Season label</label>
+        <input id="season_label" name="season_label" type="text"
+               value="{{ default_season_label }}" required
+               placeholder="e.g. 2024-2025 (EPL) or 2024 (MLS)">
+        <small>
+          TheSportsDB <code>strSeason</code> format. EPL uses
+          two-year labels (<code>2024-2025</code>); MLS uses single-year
+          (<code>2024</code>).
+        </small>
+      </div>
+
+      <div class="hi-cost">
+        <strong>Estimated runtime:</strong>
+        <span id="hi-runtime">—</span> seconds (≈ rounds × 1.5s throttle).
+        Free tier, no credits consumed. Re-runs are idempotent — already-
+        captured events are upserted in place.
+      </div>
+
+      <div>
+        <button type="submit" class="btn btn--primary">Run backfill</button>
+        <a href="/ops/crons" class="btn btn--ghost">Back to crons</a>
+      </div>
+    </form>
+
+    <script>
+      (function () {
+        const sel = document.getElementById('league_id');
+        const out = document.getElementById('hi-runtime');
+        function refresh() {
+          if (!sel || !sel.selectedOptions[0]) return;
+          out.textContent = sel.selectedOptions[0].getAttribute('data-seconds');
+        }
+        sel.addEventListener('change', refresh);
+        refresh();
+
+        window.hiConfirm = function (form) {
+          const opt = sel.selectedOptions[0];
+          const seconds = opt.getAttribute('data-seconds');
+          const lg = sel.value;
+          const season = form.season_label.value;
+          return window.confirm(
+            'TheSportsDB backfill: ' + lg + ' ' + season + '\n\n' +
+            'Expected runtime ≈ ' + seconds + ' seconds. Continue?'
+          );
+        };
+      })();
+    </script>
+  {% endif %}
+</div>
+
+{% if report %}
+  <div class="hi-report {% if report.issues %}hi-report--issues{% endif %}">
+    <strong>Run finished — {{ report.league_id }} {{ report.season_label }}</strong>
+    <div class="hi-report__row">
+      <span class="hi-report__label">Rounds fetched</span>
+      <span class="hi-report__value">{{ report.rounds_fetched }} (last: {{ report.last_round }})</span>
+    </div>
+    <div class="hi-report__row">
+      <span class="hi-report__label">Events upserted</span>
+      <span class="hi-report__value">{{ report.events_upserted }}</span>
+    </div>
+    <div class="hi-report__row">
+      <span class="hi-report__label">Events skipped</span>
+      <span class="hi-report__value">{{ report.events_skipped }}</span>
+    </div>
+    <div class="hi-report__row">
+      <span class="hi-report__label">Duration</span>
+      <span class="hi-report__value">{{ report.duration_seconds }}s</span>
+    </div>
+    {% if report.issues %}
+      <div class="hi-issues">
+        {% for issue in report.issues %}
+          <p>{{ issue }}</p>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+{% endif %}
+{% endblock %}

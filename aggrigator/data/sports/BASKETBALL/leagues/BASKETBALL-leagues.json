@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "BASKETBALL",
+  "leagues": [
+    {
+      "canonical_id": "NBA",
+      "canonical_name": "National Basketball Association",
+      "odds_api_io_key": "NBA",
+      "thesportsdb_league_id": false,
+      "confirmed": false,
+      "active": true
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "SOCCER",
+  "league_canonical_id": "EPL",
+  "teams": [
+    {"canonical_name": "Arsenal", "odds_api_io_key": "42", "thesportsdb_team_id": "133604", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Aston Villa", "odds_api_io_key": "40", "thesportsdb_team_id": "133601", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Bournemouth", "odds_api_io_key": "60", "thesportsdb_team_id": "134301", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Brentford", "odds_api_io_key": "50", "thesportsdb_team_id": "134355", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Brighton & Hove Albion", "odds_api_io_key": "30", "thesportsdb_team_id": "133619", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Burnley", "odds_api_io_key": "6", "thesportsdb_team_id": "133623", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Chelsea", "odds_api_io_key": "38", "thesportsdb_team_id": "133610", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Crystal Palace", "odds_api_io_key": "7", "thesportsdb_team_id": "133632", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Everton", "odds_api_io_key": "48", "thesportsdb_team_id": "133615", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Fulham", "odds_api_io_key": "43", "thesportsdb_team_id": "133600", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Leeds United", "odds_api_io_key": "34", "thesportsdb_team_id": "133635", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Liverpool", "odds_api_io_key": "44", "thesportsdb_team_id": "133602", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Manchester City", "odds_api_io_key": "17", "thesportsdb_team_id": "133613", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Manchester United", "odds_api_io_key": "35", "thesportsdb_team_id": "133612", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Newcastle United", "odds_api_io_key": "39", "thesportsdb_team_id": "134777", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Nottingham Forest", "odds_api_io_key": "14", "thesportsdb_team_id": "133720", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Sunderland", "odds_api_io_key": "41", "thesportsdb_team_id": "133603", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Tottenham Hotspur", "odds_api_io_key": "33", "thesportsdb_team_id": "133616", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "West Ham United", "odds_api_io_key": "37", "thesportsdb_team_id": "133636", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Wolverhampton Wanderers", "odds_api_io_key": "3", "thesportsdb_team_id": "133599", "confirmed": true, "source": "fuzzy_match"},
+    {"canonical_name": "Luton", "odds_api_io_key": false, "thesportsdb_team_id": "133888", "confirmed": true, "source": "manual_override"},
+    {"canonical_name": "Sheffield United", "odds_api_io_key": false, "thesportsdb_team_id": "133811", "confirmed": true, "source": "manual_override"},
+    {"canonical_name": "Leicester City", "odds_api_io_key": false, "thesportsdb_team_id": "133626", "confirmed": true, "source": "manual_override"},
+    {"canonical_name": "Ipswich Town", "odds_api_io_key": false, "thesportsdb_team_id": "133622", "confirmed": true, "source": "manual_override"},
+    {"canonical_name": "Southampton", "odds_api_io_key": false, "thesportsdb_team_id": "134778", "confirmed": true, "source": "manual_override"}
+  ]
+}

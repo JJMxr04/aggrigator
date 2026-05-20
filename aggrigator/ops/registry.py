@@ -20,6 +20,7 @@ from aggrigator.workers.tasks.ingest import (
     run_ingest_due_leagues,
     run_refresh_existing_events,
 )
+from aggrigator.workers.tasks.load_registry import run_load_registry
 from aggrigator.workers.tasks.seed import run_seed_leagues, run_seed_sports
 from aggrigator.workers.tasks.settle import run_settle_pending
 from aggrigator.workers.tasks.vacuum import run_vacuum_old_events
@@ -50,6 +51,23 @@ REGISTRY: list[CronSpec] = [
         schedule_human="manual only",
         runner=run_full_refresh,
         max_runtime_seconds=2400,
+    ),
+    CronSpec(
+        name="load_registry",
+        description=(
+            "Validate and apply the on-disk team/league/sport registry "
+            "under ``aggrigator/data/sports/``. Annotates Sport/League "
+            "rows with provider keys (odds_api_io_key, thesportsdb_id), "
+            "upserts canonical Team rows (including roster_filler entries "
+            "with both keys NULL), and recomputes "
+            "``League.can_pull_historical_scores`` per league. Requires "
+            "``seed_sports``/``seed_leagues`` to have run first — Sport "
+            "and League rows must exist before the registry can annotate "
+            "them. Re-run after editing the JSON files on disk."
+        ),
+        schedule_human="manual only",
+        runner=run_load_registry,
+        max_runtime_seconds=120,
     ),
     CronSpec(
         name="seed_sports",

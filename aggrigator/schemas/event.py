@@ -30,6 +30,8 @@ class EventOut(BaseModel):
     away_score: int | None
     winner_code: int | None
     winner: str | None
+    provider: str = "odds_api_io"
+    linked_event_id: str | None = None
     home_team: TeamOut | None
     away_team: TeamOut | None
     # Pre-joined nested objects (vs. just the FK strings above) so consumers

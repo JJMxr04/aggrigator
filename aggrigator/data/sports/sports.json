@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "sports": [
+    {
+      "canonical_id": "BASEBALL",
+      "canonical_name": "Baseball",
+      "odds_api_io_key": "BASEBALL",
+      "thesportsdb_strSport": false,
+      "confirmed": false,
+      "active": true
+    },
+    {
+      "canonical_id": "BASKETBALL",
+      "canonical_name": "Basketball",
+      "odds_api_io_key": "BASKETBALL",
+      "thesportsdb_strSport": false,
+      "confirmed": false,
+      "active": true
+    },
+    {
+      "canonical_id": "FOOTBALL",
+      "canonical_name": "American Football",
+      "odds_api_io_key": "FOOTBALL",
+      "thesportsdb_strSport": false,
+      "confirmed": false,
+      "active": true
+    },
+    {
+      "canonical_id": "HOCKEY",
+      "canonical_name": "Ice Hockey",
+      "odds_api_io_key": "HOCKEY",
+      "thesportsdb_strSport": false,
+      "confirmed": false,
+      "active": true
+    },
+    {
+      "canonical_id": "SOCCER",
+      "canonical_name": "Soccer",
+      "odds_api_io_key": "SOCCER",
+      "thesportsdb_strSport": "Soccer",
+      "confirmed": false,
+      "active": true
+    }
+  ]
+}

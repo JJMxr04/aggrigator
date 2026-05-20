@@ -38,4 +38,20 @@ class League(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # Provider-specific identifiers. Owned by the registry loader
+    # (``aggrigator.ingest.registry``), not by ``seed_leagues``.
+    odds_api_io_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    thesportsdb_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Derived flag — set by the registry loader. True only when every team
+    # in this league has ``thesportsdb_team_id`` non-null AND
+    # ``match_confirmed=true`` (``odds_api_io_key`` intentionally not
+    # required — relegated teams that only ever played in past seasons
+    # need a TheSportsDB id but no longer have a live-feed key). The
+    # historical-ingest orchestrator refuses to run on a league where
+    # this is False.
+    can_pull_historical_scores: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+
     sport = relationship("Sport", back_populates="leagues")

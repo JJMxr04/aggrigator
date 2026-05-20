@@ -10,3 +10,5 @@ class SportOut(BaseModel):
     name: str
     short_name: str
     active: bool
+    odds_api_io_key: str | None = None
+    thesportsdb_id: str | None = None

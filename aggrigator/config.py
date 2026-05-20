@@ -65,6 +65,14 @@ class Settings(BaseSettings):
         default=3, alias="AGG_ODDSAPI_MAX_RETRIES",
     )
 
+    # ---- TheSportsDB (historical scores) ---------------------------------
+    # API key for TheSportsDB v1. ``"3"`` is the free public key (no
+    # signup); paid keys unlock v2 + higher rate limits / Patreon
+    # endpoints. The free key tolerates ~30 req/min before 429s, which
+    # the client backs off through automatically. See
+    # plans/analytics/TheSportsDB/ for the full design.
+    thesportsdb_api_key: str = Field(default="3", alias="THESPORTSDB_API_KEY")
+
     # auth
     jwt_secret: str = Field(default="dev-only-change-me", alias="AGG_JWT_SECRET")
     # Independent secret for Starlette's SessionMiddleware (signs the

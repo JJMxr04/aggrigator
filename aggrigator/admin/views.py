@@ -177,25 +177,113 @@ class AuditLogView(ModelView, model=AuditLog):
 
 
 class SportView(ModelView, model=Sport):
-    column_list = ["id", "name", "active"]
+    column_list = [
+        "id", "name", "active",
+        "odds_api_io_key", "thesportsdb_id",
+    ]
+    # Provider keys are owned by the registry loader — edit the JSON
+    # under aggrigator/data/sports/ instead, then re-run load_registry.
+    form_excluded_columns = ["odds_api_io_key", "thesportsdb_id"]
 
 
 class LeagueView(ModelView, model=League):
-    column_list = ["id", "sport_id", "name", "active", "last_refreshed_at"]
+    column_list = [
+        "id", "sport_id", "name", "active",
+        "odds_api_io_key", "thesportsdb_id",
+        "can_pull_historical_scores", "last_refreshed_at",
+    ]
+    column_sortable_list = [
+        "id", "sport_id", "active", "can_pull_historical_scores",
+        "last_refreshed_at",
+    ]
+    # Registry-owned + derived columns — read-only via the admin form.
+    # can_pull_historical_scores is recomputed by load_registry, never
+    # set manually. The two *_key columns come from the on-disk JSON.
+    form_excluded_columns = [
+        "odds_api_io_key", "thesportsdb_id", "can_pull_historical_scores",
+    ]
 
 
 class TeamView(ModelView, model=Team):
-    column_list = ["id", "league_id", "team_id", "name_long"]
-    column_searchable_list = ["name_long", "team_id"]
+    column_list = [
+        "league_id", "canonical_name",
+        "odds_api_io_key", "thesportsdb_team_id",
+        "match_confirmed", "match_source",
+        "team_id",
+    ]
+    column_searchable_list = [
+        "canonical_name", "name_long", "team_id",
+        "odds_api_io_key", "thesportsdb_team_id",
+    ]
+    column_sortable_list = [
+        "league_id", "canonical_name", "match_confirmed", "match_source",
+    ]
+    # Float unconfirmed rows to the top so the operator's review queue is
+    # the default view.
+    column_default_sort = [("match_confirmed", False), ("league_id", False)]
+    # canonical_name and the two provider keys come from the JSON
+    # registry — editing them here would silently drift from disk. Leave
+    # match_confirmed editable so the operator can toggle it from the
+    # detail page; load_registry preserves the existing flag on re-load
+    # via the (league_id, canonical_name) match.
+    form_excluded_columns = [
+        "canonical_name", "odds_api_io_key", "thesportsdb_team_id",
+        "match_source", "id", "public_id", "team_id",
+    ]
+
+
+def _provider_badge(_model, attr) -> Markup:
+    """Color-coded provider chip so historical vs live is unmistakable
+    in any list/detail view."""
+    value = getattr(_model, attr, None) or ""
+    if value == "odds_api_io":
+        bg, fg, label = "#dceaff", "#0a64ff", "LIVE (odds-api.io)"
+    elif value == "thesportsdb":
+        bg, fg, label = "#fef0c7", "#92400e", "HIST (TheSportsDB)"
+    else:
+        bg, fg, label = "#eee", "#555", value or "—"
+    return Markup(
+        f'<span style="background:{bg};color:{fg};padding:2px 8px;'
+        f'border-radius:4px;font-size:.78rem;font-weight:600;'
+        f'font-family:ui-monospace,monospace">{label}</span>'
+    )
+
+
+# TheSportsDB event ids are prefixed ``tsdb:`` (e.g.
+# ``tsdb:2069556``); odds-api.io ids are unprefixed (typically numeric
+# like ``71173724``). Sniff the provider off the prefix without
+# crossing the ``Market.event`` relationship — that relationship is
+# configured ``lazy='raise'`` and we don't want to widen the lazy-load
+# contract for an admin badge.
+
+
+def _market_event_provider_badge(model, _attr) -> Markup:
+    """Render a provider badge for a Market by inferring its parent
+    Event's provider from the event_id prefix."""
+    ev_id = getattr(model, "event_id", "") or ""
+    inferred = "thesportsdb" if ev_id.startswith("tsdb:") else "odds_api_io"
+    # Fake the model shape ``_provider_badge`` expects.
+    fake = type("_Stub", (), {"provider": inferred})()
+    return _provider_badge(fake, "provider")
 
 
 class EventView(ModelView, model=Event):
     column_list = [
-        "id", "league_id", "status_type", "start_time",
+        "provider", "id", "linked_event_id", "league_id",
+        "status_type", "start_time",
         "home_team_id", "away_team_id", "home_score", "away_score",
     ]
-    column_searchable_list = ["id"]
-    column_sortable_list = ["start_time", "status_type"]
+    column_searchable_list = ["id", "provider", "linked_event_id"]
+    column_sortable_list = ["provider", "start_time", "status_type", "league_id"]
+    # Group by provider then sort by start_time so live + historical rows
+    # for the same date sit visually adjacent.
+    column_default_sort = [("provider", False), ("start_time", True)]
+    column_formatters = {
+        "provider": _provider_badge,
+    }
+    column_formatters_detail = column_formatters
+    # Provider + linked_event_id are set at ingest-time; not operator-editable.
+    form_excluded_columns = ["provider", "linked_event_id"]
 
 
 class BookmakerView(ModelView, model=Bookmaker):
@@ -211,11 +299,19 @@ class BookmakerSelectionView(ModelView, model=BookmakerSelection):
 
 
 class MarketView(ModelView, model=Market):
+    # Synthetic ``event_provider`` column resolves through the
+    # ``Market.event`` relationship — there is no provider column on
+    # core_market itself; provenance lives on the parent Event.
     column_list = [
-        "id", "event_id", "category", "type", "scope", "line", "side",
-        "is_live", "suspended", "last_updated",
+        "event_provider", "event_id", "type", "scope", "line", "side",
+        "category", "is_live", "suspended", "last_updated", "id",
     ]
+    column_labels = {"event_provider": "Provider"}
     column_searchable_list = ["id", "event_id", "type"]
+    column_formatters = {
+        "event_provider": _market_event_provider_badge,
+    }
+    column_formatters_detail = column_formatters
 
 
 class SelectionView(ModelView, model=Selection):
@@ -267,6 +363,24 @@ class CronsConsoleLink(BaseView):
         return RedirectResponse(url="/ops/crons", status_code=302)
 
 
+class HistoricalIngestLink(BaseView):
+    """Sidebar entry → /ops/historical-ingest (TheSportsDB backfill form).
+
+    Parameterized cron — doesn't fit the no-arg CronSpec list at
+    /ops/crons, so it lives on its own page. Admin-only; the route
+    enforces the same admin-session check as the cron-runner page.
+    """
+
+    name = "Historical ingest"
+    icon = "fa-solid fa-clock-rotate-left"
+
+    @expose(
+        "/historical-ingest", methods=["GET"], identity="historical-ingest",
+    )
+    async def historical_ingest(self, request):
+        return RedirectResponse(url="/ops/historical-ingest", status_code=302)
+
+
 class DataResetLink(BaseView):
     """Sidebar entry → /ops/data-reset (truncate-with-cascade UI).
 
@@ -304,6 +418,7 @@ def mount_admin(app, *, base_url: str = "/admin") -> Admin:
     )
     # Top of sidebar: operator action shortcuts.
     admin.add_base_view(CronsConsoleLink)
+    admin.add_base_view(HistoricalIngestLink)
     admin.add_base_view(DataResetLink)
     for view in [
         TenantUserView, TenantApiKeyView,

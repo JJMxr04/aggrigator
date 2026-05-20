@@ -49,6 +49,9 @@ async def upsert_sport_from_spec(session: AsyncSession, payload: dict) -> Sport 
         # the row is first inserted (default False) and never overwritten
         # by subsequent seeds. Operators flip sports on in SQLAdmin and
         # those decisions stick across daily seeds.
+        # The provider-key columns (odds_api_io_key, thesportsdb_id)
+        # are owned by the registry loader, not the seed feed — leave
+        # them untouched here.
     return row
 
 
@@ -81,6 +84,9 @@ async def upsert_league_from_spec(session: AsyncSession, payload: dict) -> Leagu
         # off stays off across daily seeds. New leagues land active=True
         # but are still gated by their parent Sport's ``active`` flag —
         # ``ingest_due_leagues`` requires both.
+        # Registry-managed columns are NOT touched here:
+        #   odds_api_io_key, thesportsdb_id, can_pull_historical_scores
+        # — those are owned by the registry loader.
     return row
 
 
@@ -97,6 +103,20 @@ async def upsert_team_from_spec(
         return None
     pk = Team.synth_pk(spec.league_id, spec.team_id)
     row = await session.get(Team, pk)
+
+    # Registry-aware fallback: a roster_filler row inserted by
+    # ``load_registry`` lives at PK ``{league}:_canon:<slug>`` but its
+    # canonical_name matches the live payload's name_long. Reuse that
+    # row instead of inserting a duplicate. We keep the row's PK stable
+    # — only odds_api_io_key + team_id get the real provider id.
+    if row is None:
+        row = await session.scalar(
+            select(Team).where(
+                Team.league_id == spec.league_id,
+                Team.canonical_name == (spec.name_long or spec.team_id),
+            )
+        )
+
     payload = dict(
         league_id=spec.league_id,
         team_id=spec.team_id,
@@ -111,11 +131,24 @@ async def upsert_team_from_spec(
         stat_entity_id=(spec.stat_entity_id or "")[:8],
     )
     if row is None:
-        row = Team(id=pk, **payload)
+        # Brand-new team — populate canonical_name + odds_api_io_key
+        # in the same shot so the registry-aware lookup above hits on
+        # the next live-feed pass.
+        row = Team(
+            id=pk,
+            canonical_name=(spec.name_long or spec.team_id)[:128],
+            odds_api_io_key=spec.team_id,
+            **payload,
+        )
         session.add(row)
     else:
         for k, v in payload.items():
             setattr(row, k, v)
+        # If this is the first time the live feed has surfaced an
+        # odds-api.io id for this canonical team, fill it in. Don't
+        # overwrite an existing key — registry is authoritative.
+        if row.odds_api_io_key is None:
+            row.odds_api_io_key = spec.team_id
     return row
 
 
@@ -143,6 +176,7 @@ async def upsert_event_from_spec(
     away: Team | None,
     skip_if_new_terminal: bool = False,
     skip_if_unknown_event: bool = False,
+    provider: str = "odds_api_io",
 ) -> UpsertedEvent | None:
     """Get-or-update an Event, returning the row and the *previous* state for
     transition decisions (mirrors MDProject's ``_should_settle`` / `_should_reopen``
@@ -162,6 +196,13 @@ async def upsert_event_from_spec(
     events only appear via the once-a-day discovery cron. Independent of
     ``skip_if_new_terminal``: the discovery walk uses one, the refresh
     walk uses the other.
+
+    ``provider`` is stamped onto the Event row so historical
+    (TheSportsDB) rows can be filtered cleanly from live (odds-api.io)
+    ones. The two providers have disjoint event_id namespaces
+    (TheSportsDB ids are prefixed ``tsdb:``), so there's no PK
+    collision risk — this column is the provenance marker, not a
+    uniqueness key.
     """
     league = await session.get(League, spec.league_id) if spec.league_id else None
     sport_id = (league.sport_id if league else None) or spec.sport_id
@@ -216,6 +257,7 @@ async def upsert_event_from_spec(
         # branch reads this to detect events that stop appearing in
         # /events. See cancelled-suspended.md §3 Layer 2.
         last_seen_upstream_at=now,
+        provider=provider,
     )
 
     if existing is None:
