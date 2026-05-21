@@ -560,10 +560,24 @@ async def event_context(session: SessionDep, event_id: str) -> dict:
         target_start_time=event.start_time, last_n=5,
     )
 
-    h2h_last_5: list[dict] = []
+    # Richer per-game detail for the upcoming-page form chart: most-recent
+    # last-N rows with date, opponent, venue, score, result, and points.
+    # The portal renders this as both the chip strip and a points-per-game
+    # bar chart; the chip-letters in ``form_into_match`` stay for the
+    # past-event layout that doesn't need the chart.
+    home_form_detail = _form_detail(
+        event.home_team_id, league_events,
+        target_start_time=event.start_time, last_n=10,
+    )
+    away_form_detail = _form_detail(
+        event.away_team_id, league_events,
+        target_start_time=event.start_time, last_n=10,
+    )
+
     # H2H always reflects fixtures strictly before this event so the
     # number means "what their history looked like coming in," whether
     # the user is looking at a past or upcoming match.
+    h2h_meetings: list[dict] = []
     for ev in league_events:
         if event.start_time and ev.start_time and ev.start_time >= event.start_time:
             continue
@@ -575,7 +589,7 @@ async def event_context(session: SessionDep, event_id: str) -> dict:
         )
         if not pair_match:
             continue
-        h2h_last_5.append({
+        h2h_meetings.append({
             "event_id": ev.id,
             "start_time": ev.start_time,
             "home_team": _team_dto(ev.home_team),
@@ -584,8 +598,11 @@ async def event_context(session: SessionDep, event_id: str) -> dict:
             "away_score": ev.away_score,
             "winner_code": ev.winner_code,
         })
-        if len(h2h_last_5) == 5:
-            break
+
+    h2h_last_5 = h2h_meetings[:5]
+    h2h_aggregate = _h2h_aggregate(
+        event.home_team_id, event.away_team_id, h2h_meetings,
+    )
 
     return {
         "event_id": event_id,
@@ -593,7 +610,141 @@ async def event_context(session: SessionDep, event_id: str) -> dict:
             "home_last_5": home_form,
             "away_last_5": away_form,
         },
+        "form_detail": {
+            "home": home_form_detail,
+            "away": away_form_detail,
+        },
         "h2h_last_5": h2h_last_5,
+        "h2h_aggregate": h2h_aggregate,
+    }
+
+
+@router.get("/events/{event_id}/historical-stats")
+async def event_historical_stats(session: SessionDep, event_id: str) -> dict:
+    """Season-context stats for a settled event's two teams.
+
+    Returns each team's season-to-date W-D-L / points / GF-GA / league
+    rank as of strictly before kickoff, the same numbers re-computed
+    through-and-including the match (so the template can show a delta),
+    and a scoring profile (gpg, scoring rate, clean-sheet %, home vs
+    away split) computed on the going-in slice.
+
+    Works for both past and upcoming events. For past events the "after"
+    snapshot reflects the match's result; for upcoming events it's
+    omitted (template renders the "going in" row only).
+
+    Events missing season_label / league / team context return the
+    matching reason code so the template can render an empty state."""
+    event = await session.scalar(
+        select(Event)
+        .where(Event.id == event_id)
+        .options(
+            selectinload(Event.home_team),
+            selectinload(Event.away_team),
+        )
+    )
+    if event is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
+
+    empty = {
+        "event_id": event_id,
+        "season_label": event.season_label or None,
+        "home": None,
+        "away": None,
+        "reason": None,
+    }
+    if not event.league_id or not event.home_team_id or not event.away_team_id:
+        return {**empty, "reason": "insufficient_event_context"}
+    if not event.season_label:
+        return {**empty, "reason": "no_season_label"}
+    if event.start_time is None:
+        # Without a kickoff time we can't split the season into "before"
+        # and "after" the match.
+        return {**empty, "reason": "no_start_time"}
+
+    season_events = list(await session.scalars(
+        select(Event)
+        .where(
+            Event.league_id == event.league_id,
+            Event.season_label == event.season_label,
+            Event.is_finalized.is_(True),
+        )
+        .options(
+            selectinload(Event.home_team),
+            selectinload(Event.away_team),
+        )
+        .order_by(Event.start_time.asc(), Event.id)
+    ))
+
+    # "Going in" = events strictly before the target by (start_time, id).
+    # "Through" = going-in + the target itself. We use the same (start_time,
+    # id) ordering as the query so the split is consistent with how the
+    # standings table would have looked at the moment of kickoff.
+    target_key = (event.start_time, event.id)
+    going_in: list[Event] = []
+    through: list[Event] = []
+    for ev in season_events:
+        if ev.start_time is None:
+            # Skip rows we can't place on the timeline. They'd appear in
+            # the "going in" set only by accident of tuple ordering with
+            # None, which Python can't compare to a datetime anyway.
+            continue
+        ev_key = (ev.start_time, ev.id)
+        if ev_key < target_key:
+            going_in.append(ev)
+            through.append(ev)
+        elif ev.id == event.id:
+            through.append(ev)
+
+    standings_before = _compute_standings(going_in)
+    standings_after = _compute_standings(through)
+    rank_before = {r["team_id"]: idx for idx, r in enumerate(standings_before, start=1)}
+    rank_after = {r["team_id"]: idx for idx, r in enumerate(standings_after, start=1)}
+
+    def _team_block(team) -> dict:
+        team_id = team.id if team else None
+        going_in_for_team = [e for e in going_in
+                             if team_id in (e.home_team_id, e.away_team_id)]
+        going_in_stats = _team_season_stats(team_id, going_in_for_team)
+        r_before = rank_before.get(team_id)
+        if r_before is not None and going_in_stats:
+            going_in_stats["rank"] = r_before
+
+        # "After this match" only makes sense for finalized events. For
+        # upcoming matches the going-in row IS the current season-to-date
+        # snapshot, and there's no delta to compute.
+        after_stats = None
+        if event.is_finalized:
+            through_for_team = [e for e in through
+                                if team_id in (e.home_team_id, e.away_team_id)]
+            after_stats = _team_season_stats(team_id, through_for_team)
+            r_after = rank_after.get(team_id)
+            if r_after is not None and after_stats:
+                after_stats["rank"] = r_after
+                after_stats["points_delta"] = (
+                    after_stats["points"] - (going_in_stats.get("points") or 0)
+                )
+                if r_before is not None:
+                    # Standings sort ascending by rank, so a smaller
+                    # rank-after means the team moved UP. Report the
+                    # delta as "places gained" so positive = improvement;
+                    # templates can use the sign directly.
+                    after_stats["rank_delta"] = r_before - r_after
+
+        return {
+            "team_id": team_id,
+            "team_name": (team.name_long if team else team_id),
+            "going_in": going_in_stats or None,
+            "after": after_stats or None,
+            "scoring_profile": _team_scoring_profile(team_id, going_in_for_team),
+        }
+
+    return {
+        "event_id": event_id,
+        "season_label": event.season_label,
+        "home": _team_block(event.home_team),
+        "away": _team_block(event.away_team),
+        "reason": None,
     }
 
 
@@ -1125,6 +1276,154 @@ def _team_season_stats(team_id: str, events: list[Event]) -> dict:
         "goals_for": gf, "goals_against": ga,
         "goal_difference": gf - ga,
         "points": wins * _POINTS_WIN + draws * _POINTS_DRAW,
+    }
+
+
+def _form_detail(
+    team_id: str,
+    league_events: list[Event],
+    *,
+    target_start_time,
+    last_n: int,
+) -> list[dict]:
+    """Last-N rich form rows for a team strictly before kickoff.
+
+    Mirrors ``soccer_model.compute_form_into_match`` (most-recent-first,
+    targets played strictly before the event) but returns dicts with
+    date, opponent, venue, score, result, and standings points. Powers
+    the upcoming-page points-per-game bar chart on the portal."""
+    rows: list[Event] = []
+    for ev in league_events:
+        if ev.start_time is None:
+            continue
+        if target_start_time is not None and ev.start_time >= target_start_time:
+            continue
+        if ev.home_team_id != team_id and ev.away_team_id != team_id:
+            continue
+        rows.append(ev)
+    rows.sort(key=lambda ev: ev.start_time, reverse=True)
+
+    out: list[dict] = []
+    for ev in rows[:last_n]:
+        is_home = ev.home_team_id == team_id
+        opp = ev.away_team if is_home else ev.home_team
+        team_score = ev.home_score if is_home else ev.away_score
+        opp_score = ev.away_score if is_home else ev.home_score
+        result = _team_result_letter(team_id, ev)
+        if result == "W":
+            points = _POINTS_WIN
+        elif result == "D":
+            points = _POINTS_DRAW
+        elif result == "L":
+            points = 0
+        else:
+            points = None
+        out.append({
+            "event_id": ev.id,
+            "start_time": ev.start_time,
+            "venue": "home" if is_home else "away",
+            "opponent_id": (opp.id if opp else None),
+            "opponent_name": (opp.name_long if opp else None),
+            "team_score": team_score,
+            "opponent_score": opp_score,
+            "result": result,
+            "points": points,
+        })
+    return out
+
+
+def _h2h_aggregate(
+    target_home_id: str, target_away_id: str, meetings: list[dict],
+) -> dict:
+    """Win/draw counts framed from the *upcoming* event's perspective.
+
+    Each meeting dict in ``meetings`` carries the historical match's
+    home_team / away_team — which may be flipped relative to the target.
+    The aggregate normalizes everything to "home team in the upcoming
+    match" vs "away team in the upcoming match" so the portal can render
+    'A won X, B won Y, drew Z' without re-checking sides itself."""
+    played = len(meetings)
+    home_wins = away_wins = draws = 0
+    for m in meetings:
+        hist_home = (m.get("home_team") or {}).get("id") if isinstance(m.get("home_team"), dict) else None
+        wc = m.get("winner_code")
+        if wc == 3:
+            draws += 1
+        elif wc == 1:
+            # Historical home won.
+            if hist_home == target_home_id:
+                home_wins += 1
+            elif hist_home == target_away_id:
+                away_wins += 1
+        elif wc == 2:
+            # Historical away won.
+            if hist_home == target_home_id:
+                away_wins += 1
+            elif hist_home == target_away_id:
+                home_wins += 1
+    return {
+        "played": played,
+        "home_team_id": target_home_id,
+        "away_team_id": target_away_id,
+        "home_team_wins": home_wins,
+        "away_team_wins": away_wins,
+        "draws": draws,
+    }
+
+
+def _team_scoring_profile(team_id: str, events: list[Event]) -> dict:
+    """Per-game scoring rates for a team across the given events.
+
+    Returns gpg for/against (overall and split by venue), the share of
+    games the team scored in, and the share where they kept a clean
+    sheet. Returns ``{}`` when there are no events so the template can
+    render an empty state. ``gpg_*`` are floats; ``scoring_rate`` and
+    ``clean_sheet_rate`` are 0..1."""
+    if not events:
+        return {}
+    played = 0
+    gf = ga = scored = clean_sheets = 0
+    home_p = away_p = 0
+    home_gf = home_ga = away_gf = away_ga = 0
+    for ev in events:
+        is_home = ev.home_team_id == team_id
+        ts = (ev.home_score if is_home else ev.away_score) or 0
+        os_ = (ev.away_score if is_home else ev.home_score) or 0
+        played += 1
+        gf += ts
+        ga += os_
+        if ts > 0:
+            scored += 1
+        if os_ == 0:
+            clean_sheets += 1
+        if is_home:
+            home_p += 1
+            home_gf += ts
+            home_ga += os_
+        else:
+            away_p += 1
+            away_gf += ts
+            away_ga += os_
+
+    def _avg(num: int, denom: int) -> float | None:
+        return (num / denom) if denom else None
+
+    return {
+        "played": played,
+        "gpg_for": _avg(gf, played),
+        "gpg_against": _avg(ga, played),
+        "scoring_rate": _avg(scored, played),
+        "clean_sheet_rate": _avg(clean_sheets, played),
+        "home": {
+            "played": home_p,
+            "gpg_for": _avg(home_gf, home_p),
+            "gpg_against": _avg(home_ga, home_p),
+        },
+        "away": {
+            "played": away_p,
+            "gpg_for": _avg(away_gf, away_p),
+            "gpg_against": _avg(away_ga, away_p),
+        },
     }
 
 

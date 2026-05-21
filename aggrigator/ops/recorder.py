@@ -182,7 +182,23 @@ def cron_run_recorder(
         @wraps(fn)
         async def _wrapped(ctx: dict, *args, **kwargs):
             ctx = ctx or {}
-            arq_job_id = ctx.get("job_id") or str(uuid.uuid4())
+            # arq's ctx["job_id"] is the queue-time id — fine for tracing,
+            # but NOT unique per execution when callers use a fixed
+            # coalescing `_job_id` (e.g. webhook_deliver:due, which the
+            # orchestrator + watchdog reuse so concurrent push-on-write
+            # calls dedupe into one queued job). The cron_run unique
+            # index on arq_job_id then rejects the second firing's
+            # INSERT. Suffix a short uuid token so each execution gets
+            # its own arq_job_id while keeping the original id as a
+            # searchable prefix in the admin / /ops UI.
+            base_id = ctx.get("job_id")
+            if base_id:
+                # Reserve 9 chars for "#xxxxxxxx" so the suffix is never
+                # truncated away — uniqueness is what matters.
+                max_base = 64 - 9
+                arq_job_id = f"{base_id[:max_base]}#{uuid.uuid4().hex[:8]}"
+            else:
+                arq_job_id = str(uuid.uuid4())
             try:
                 _, summary, _ = await run_with_recording(
                     spec,
