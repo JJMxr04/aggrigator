@@ -101,6 +101,16 @@ class Settings(BaseSettings):
     # the operator sets the env var.
     paradise_secret: str = Field(default="", alias="AGG_PARADISE_SECRET")
 
+    # ANALYTICS_FREE_FOR_ALL — paired with MDProject's setting of the
+    # same name. When True, ``require_pro_user`` still authenticates
+    # the tenant key (steps 1-5 in deps.py) but skips the PRO-tier +
+    # status check. Lets FREE-tier users reach /v1/analytics/* during
+    # a platform-wide free window. Flipping back to False instantly
+    # restores the paywall.
+    analytics_free_for_all: bool = Field(
+        default=False, alias="ANALYTICS_FREE_FOR_ALL",
+    )
+
     # CORS
     cors_origins: str = Field(
         default="http://localhost:3000,http://localhost:8000",

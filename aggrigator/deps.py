@@ -121,6 +121,7 @@ _ENTITLED_STATUSES = (
 
 async def require_pro_user(
     session: SessionDep,
+    settings: SettingsDep,
     x_aggrigator_tenant_key: Annotated[str | None, Header()] = None,
 ) -> TenantUser:
     """Read ``X-Aggrigator-Tenant-Key`` → ``TenantApiKey`` → ``TenantUser``,
@@ -133,6 +134,11 @@ async def require_pro_user(
     4. Key not revoked.
     5. User not revoked.
     6. Tier == PRO and status in (trialing | active | past_due).
+
+    Step 6 is skipped when ``settings.analytics_free_for_all`` is true —
+    paired with MDProject's matching kill-switch, this opens analytics
+    to every authenticated tenant regardless of tier. The auth steps
+    (1-5) still run, so per-user attribution + logging are preserved.
 
     Failures collapse to 401/403 without leaking which step failed — a
     timing oracle on which-error-message would let an attacker enumerate
@@ -178,7 +184,7 @@ async def require_pro_user(
             detail="invalid tenant key",
         )
 
-    if (
+    if not settings.analytics_free_for_all and (
         tenant_user.tier != TenantTier.PRO
         or tenant_user.status not in _ENTITLED_STATUSES
     ):
