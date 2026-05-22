@@ -17,7 +17,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aggrigator.db import session_scope
-from aggrigator.models import CronRun, CronRunSource, CronRunStatus, User
+from aggrigator.models import (
+    CronRun,
+    CronRunSource,
+    CronRunStatus,
+    CronSchedule,
+    User,
+)
 from aggrigator.ops import lock as lock_module
 from aggrigator.ops.recorder import run_with_recording
 from aggrigator.ops.registry import CronSpec, REGISTRY, by_name
@@ -67,6 +73,12 @@ class CronListItem:
     schedule_human: str
     last_run: CronRunOut | None
     is_running: bool
+    # True if the cron is wired into ARQ's schedule (workers/settings.py).
+    # Manual-only entries don't render the enable/disable toggle.
+    is_scheduled: bool = False
+    # True if the scheduled tick is currently allowed to run. Default True
+    # when no cron_schedule row exists yet (first deploy after migration).
+    enabled: bool = True
     # Computed at render time when is_running=True so the card shows
     # how long the in-flight run has been going.
     elapsed_seconds: float | None = None
@@ -121,15 +133,62 @@ class CronService:
                 datetime.now(tz=row.started_at.tzinfo) - row.started_at
             ).total_seconds()
             run_id = row.id
+        enabled = await self._enabled(spec.name)
         return CronListItem(
             name=spec.name,
             description=spec.description,
             schedule_human=spec.schedule_human,
             last_run=CronRunOut.from_row(row, email) if row else None,
             is_running=is_running,
+            is_scheduled=spec.is_scheduled,
+            enabled=enabled,
             elapsed_seconds=elapsed_seconds,
             run_id=run_id,
         )
+
+    # ---- enable / disable --------------------------------------------------
+
+    async def _enabled(self, name: str) -> bool:
+        """Default True when no row exists — first deploy after the migration
+        starts every cron in the active state."""
+        row = await self.session.get(CronSchedule, name)
+        return True if row is None else row.enabled
+
+    async def set_enabled(
+        self, name: str, *, enabled: bool, actor: User,
+    ) -> CronListItem:
+        """Upsert the cron_schedule row and return the refreshed list item.
+
+        Raises:
+            KeyError: ``name`` is not in the registry.
+            ValueError: cron is not on the ARQ schedule — refuse to toggle
+                manual-only crons so we never surface a stale ``enabled``
+                state in the UI for something the scheduler can't act on.
+        """
+        spec = by_name(name)
+        if spec is None:
+            raise KeyError(f"Unknown cron: {name}")
+        if not spec.is_scheduled:
+            raise ValueError(
+                f"{name} is manual-only — no scheduled tick to toggle"
+            )
+        async with session_scope() as write_session:
+            row = await write_session.get(CronSchedule, name)
+            if row is None:
+                row = CronSchedule(
+                    cron_name=name,
+                    enabled=enabled,
+                    updated_by_user_id=actor.id,
+                )
+                write_session.add(row)
+            else:
+                row.enabled = enabled
+                row.updated_by_user_id = actor.id
+        # Refresh the caller's view through the existing path so the
+        # returned item reflects the new state.
+        item = await self.get_cron(name)
+        assert item is not None
+        return item
 
     async def history(self, name: str, *, limit: int = 25) -> list[CronRunOut]:
         rows = list(await self.session.scalars(

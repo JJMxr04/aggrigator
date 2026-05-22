@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from aggrigator.db import session_scope
 from aggrigator.ingest.odds_api_errors import RateLimitExceededError
-from aggrigator.models import CronRun, CronRunSource, CronRunStatus
+from aggrigator.models import CronRun, CronRunSource, CronRunStatus, CronSchedule
 from aggrigator.ops.registry import CronSpec, by_name
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,28 @@ RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
 # Redis blip to clear and short enough that the next scheduled tick
 # doesn't beat us to it on hourly crons.
 DEFAULT_RETRY_DEFER_SECONDS = 300
+
+
+async def _scheduled_run_enabled(cron_name: str) -> bool:
+    """Read cron_schedule.enabled for a scheduled cron tick.
+
+    Defaults to True when no row exists (first deploy after the
+    migration). On any DB error we also default to True — a Postgres
+    blip should not silently stop the scheduler; the scheduled job will
+    run, fail loudly through the normal recorder path if there's a real
+    DB outage, and the operator will see it in /ops/crons.
+    """
+    try:
+        async with session_scope() as session:
+            row = await session.get(CronSchedule, cron_name)
+            return True if row is None else row.enabled
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "cron %s: could not read cron_schedule.enabled (%s: %s) — "
+            "assuming enabled and proceeding",
+            cron_name, type(exc).__name__, exc,
+        )
+        return True
 
 
 async def open_run(
@@ -182,6 +204,17 @@ def cron_run_recorder(
         @wraps(fn)
         async def _wrapped(ctx: dict, *args, **kwargs):
             ctx = ctx or {}
+            # Pause gate (cron_schedule.enabled, /ops/crons toggle). If an
+            # operator has flipped the cron off, skip the run entirely —
+            # no cron_run row, no provider calls. A disabled cron should
+            # be silent, not write a no-op record every tick. Manual
+            # triggers bypass this wrapper, so Run-now still works.
+            if not await _scheduled_run_enabled(spec_name):
+                logger.info(
+                    "cron %s: paused via /ops/crons — scheduled tick skipped",
+                    spec_name,
+                )
+                return {"skipped": True, "reason": "disabled"}
             # arq's ctx["job_id"] is the queue-time id — fine for tracing,
             # but NOT unique per execution when callers use a fixed
             # coalescing `_job_id` (e.g. webhook_deliver:due, which the

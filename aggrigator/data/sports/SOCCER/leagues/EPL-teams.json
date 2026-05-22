@@ -23,10 +23,10 @@
     {"canonical_name": "Tottenham Hotspur", "odds_api_io_key": "33", "thesportsdb_team_id": "133616", "confirmed": true, "source": "fuzzy_match"},
     {"canonical_name": "West Ham United", "odds_api_io_key": "37", "thesportsdb_team_id": "133636", "confirmed": true, "source": "fuzzy_match"},
     {"canonical_name": "Wolverhampton Wanderers", "odds_api_io_key": "3", "thesportsdb_team_id": "133599", "confirmed": true, "source": "fuzzy_match"},
-    {"canonical_name": "Luton", "odds_api_io_key": false, "thesportsdb_team_id": "133888", "confirmed": true, "source": "manual_override"},
-    {"canonical_name": "Sheffield United", "odds_api_io_key": false, "thesportsdb_team_id": "133811", "confirmed": true, "source": "manual_override"},
-    {"canonical_name": "Leicester City", "odds_api_io_key": false, "thesportsdb_team_id": "133626", "confirmed": true, "source": "manual_override"},
-    {"canonical_name": "Ipswich Town", "odds_api_io_key": false, "thesportsdb_team_id": "133622", "confirmed": true, "source": "manual_override"},
-    {"canonical_name": "Southampton", "odds_api_io_key": false, "thesportsdb_team_id": "134778", "confirmed": true, "source": "manual_override"}
+    {"canonical_name": "Luton", "odds_api_io_key": "72", "thesportsdb_team_id": "133888", "confirmed": true, "source": "manual_override"},
+    {"canonical_name": "Sheffield United", "odds_api_io_key": "15", "thesportsdb_team_id": "133811", "confirmed": true, "source": "manual_override"},
+    {"canonical_name": "Leicester City", "odds_api_io_key": "31", "thesportsdb_team_id": "133626", "confirmed": true, "source": "manual_override"},
+    {"canonical_name": "Ipswich Town", "odds_api_io_key": "32", "thesportsdb_team_id": "133622", "confirmed": true, "source": "manual_override"},
+    {"canonical_name": "Southampton", "odds_api_io_key": "45", "thesportsdb_team_id": "134778", "confirmed": true, "source": "manual_override"}
   ]
 }

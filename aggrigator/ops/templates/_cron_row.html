@@ -1,10 +1,15 @@
 {% set lr = item.last_run %}
 <article id="cron-row-{{ item.name }}"
-         class="cron-card {% if item.is_running %}is-running{% endif %}">
+         class="cron-card {% if item.is_running %}is-running{% endif %} {% if item.is_scheduled and not item.enabled %}is-paused{% endif %}">
 
   <header class="cron-head">
     <div>
-      <div class="cron-name">{{ item.name }}</div>
+      <div class="cron-name">
+        {{ item.name }}
+        {% if item.is_scheduled and not item.enabled %}
+          <span class="pill paused" title="Scheduler is paused — manual Run now still works">paused</span>
+        {% endif %}
+      </div>
       <div class="cron-desc">{{ item.description }}</div>
     </div>
     <span class="cron-schedule" title="Schedule">{{ item.schedule_human }}</span>
@@ -68,6 +73,27 @@
     </details>
 
     <div style="display:flex; gap:.5rem;">
+      {% if item.is_scheduled %}
+        {% if item.enabled %}
+          <button class="btn btn--ghost"
+                  title="Pause scheduled tick — manual Run now still works"
+                  hx-post="/ops/crons/{{ item.name }}/toggle"
+                  hx-vals='{"enabled": "false"}'
+                  hx-target="#cron-row-{{ item.name }}"
+                  hx-swap="outerHTML">
+            Pause
+          </button>
+        {% else %}
+          <button class="btn btn--ghost btn--resume"
+                  title="Resume scheduled tick"
+                  hx-post="/ops/crons/{{ item.name }}/toggle"
+                  hx-vals='{"enabled": "true"}'
+                  hx-target="#cron-row-{{ item.name }}"
+                  hx-swap="outerHTML">
+            Resume
+          </button>
+        {% endif %}
+      {% endif %}
       <button class="btn"
               hx-get="/ops/crons/{{ item.name }}/row"
               hx-target="#cron-row-{{ item.name }}"

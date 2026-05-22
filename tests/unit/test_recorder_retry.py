@@ -9,7 +9,7 @@ exception paths without spinning up Postgres/Redis.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from arq.worker import Retry
@@ -20,6 +20,17 @@ from aggrigator.ops.recorder import cron_run_recorder
 
 def _ctx(*, job_try: int = 1, max_tries: int = 2) -> dict:
     return {"job_id": "test-job", "job_try": job_try, "max_tries": max_tries}
+
+
+@pytest.fixture(autouse=True)
+def _allow_scheduled_run():
+    """Skip the cron_schedule.enabled DB lookup — these tests stub the
+    recorder upstream of the actual SQL paths and don't run migrations."""
+    with patch(
+        "aggrigator.ops.recorder._scheduled_run_enabled",
+        new=AsyncMock(return_value=True),
+    ):
+        yield
 
 
 @pytest.mark.asyncio

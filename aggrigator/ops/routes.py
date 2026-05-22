@@ -143,6 +143,46 @@ async def trigger_run_html(request: Request, name: str) -> HTMLResponse:
     )
 
 
+@router.post("/crons/{name}/toggle", response_class=HTMLResponse)
+async def toggle_enabled_html(request: Request, name: str) -> HTMLResponse:
+    """Pause / resume the scheduled tick. Returns the updated row partial
+    so the toggle UI reflects the new state without a full page reload.
+
+    The form submits ``enabled=true|false`` (the desired *new* state).
+    Manual ``Run now`` continues to work regardless — disabling only
+    stops the ARQ scheduled firing."""
+    user = await _admin_from_session(request)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+    await _require_csrf(request)
+
+    form = await request.form()
+    raw = (form.get("enabled") or "").strip().lower()
+    if raw not in ("true", "false"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "enabled must be 'true' or 'false'",
+        )
+    enabled = raw == "true"
+
+    async with async_session_factory() as session:
+        redis = _redis()
+        try:
+            svc = CronService(session, redis)
+            try:
+                item = await svc.set_enabled(name, enabled=enabled, actor=user)
+            except KeyError:
+                raise HTTPException(status.HTTP_404_NOT_FOUND)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+        finally:
+            await redis.aclose()
+    return templates.TemplateResponse(
+        request, "_cron_row.html",
+        {"item": item, "csrf_token": _csrf_token(request)},
+    )
+
+
 @router.get("/crons/{name}/history", response_class=HTMLResponse)
 async def history_panel(request: Request, name: str) -> HTMLResponse:
     user = await _admin_from_session(request)

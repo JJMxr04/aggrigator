@@ -12,6 +12,7 @@ from aggrigator.models.base import Base, TimestampMixin
 from aggrigator.models.bet import Bet, BetSelectionType, BetSettlementStatus
 from aggrigator.models.bookmaker import Bookmaker, BookmakerSelection
 from aggrigator.models.cron_run import CronRun, CronRunSource, CronRunStatus
+from aggrigator.models.cron_schedule import CronSchedule
 from aggrigator.models.event import Event
 from aggrigator.models.league import League
 from aggrigator.models.market import Market, MarketCategory, MarketScope
@@ -43,6 +44,7 @@ __all__ = [
     "CronRun",
     "CronRunSource",
     "CronRunStatus",
+    "CronSchedule",
     "Event",
     "League",
     "Market",

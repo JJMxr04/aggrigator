@@ -21,7 +21,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from sqlalchemy import select
 
@@ -132,6 +132,44 @@ async def trigger_run(
                 detail=str(exc),
             )
         return _run_to_dict(run)
+    finally:
+        await redis.aclose()
+
+
+# ---- enable / disable (pause scheduled tick) -------------------------------
+
+
+class CronEnabledIn(BaseModel):
+    enabled: bool = Field(
+        ...,
+        description=(
+            "True = scheduled tick runs as normal. False = scheduler "
+            "skips this cron. Manual /run still works either way."
+        ),
+    )
+
+
+@router.post(
+    "/{name}/enabled",
+    summary="Pause or resume the scheduled tick of a cron",
+)
+async def set_enabled(
+    name: str,
+    payload: CronEnabledIn,
+    session: SessionDep,
+    user: Annotated[User, Depends(require_admin)],
+) -> dict:
+    if not _is_registered(name):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "cron not found")
+    redis = _redis()
+    try:
+        svc = CronService(session, redis)
+        try:
+            item = await svc.set_enabled(name, enabled=payload.enabled, actor=user)
+        except ValueError as exc:
+            # Manual-only cron — nothing to pause.
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+        return _item_to_dict(item)
     finally:
         await redis.aclose()
 
@@ -283,6 +321,8 @@ def _item_to_dict(it) -> dict:
         "description": it.description,
         "schedule_human": it.schedule_human,
         "is_running": it.is_running,
+        "is_scheduled": it.is_scheduled,
+        "enabled": it.enabled,
         "last_run": _run_to_dict(it.last_run) if it.last_run else None,
     }
 

@@ -35,6 +35,11 @@ class CronSpec:
     schedule_human: str          # "every 30 min", "manual only", etc.
     runner: Callable[[], Awaitable[Any]]
     max_runtime_seconds: int
+    # True if this cron is wired into workers/settings.py:_build_cron_jobs.
+    # Drives whether the /ops/crons toggle is rendered — manual-only
+    # crons (full_refresh, load_registry, webhook_deliver, ...) have no
+    # scheduled tick to pause.
+    is_scheduled: bool = False
 
 
 # Order here drives the UI order. ``full_refresh`` sits at the top because
@@ -79,6 +84,7 @@ REGISTRY: list[CronSpec] = [
         schedule_human="daily @ 01:30 UTC",
         runner=run_seed_sports,
         max_runtime_seconds=120,
+        is_scheduled=True,
     ),
     CronSpec(
         name="seed_leagues",
@@ -95,6 +101,7 @@ REGISTRY: list[CronSpec] = [
         schedule_human="daily @ 02:00 UTC",
         runner=run_seed_leagues,
         max_runtime_seconds=300,
+        is_scheduled=True,
     ),
     CronSpec(
         name="ingest_due_leagues",
@@ -110,6 +117,7 @@ REGISTRY: list[CronSpec] = [
         schedule_human="daily @ 02:30 UTC",
         runner=run_ingest_due_leagues,
         max_runtime_seconds=1800,
+        is_scheduled=True,
     ),
     CronSpec(
         name="refresh_existing_events",
@@ -123,6 +131,7 @@ REGISTRY: list[CronSpec] = [
         schedule_human="hourly @ :00 UTC (skips 02:00)",
         runner=run_refresh_existing_events,
         max_runtime_seconds=1800,
+        is_scheduled=True,
     ),
     CronSpec(
         name="webhook_deliver",
@@ -148,6 +157,7 @@ REGISTRY: list[CronSpec] = [
         schedule_human="nightly @ 03:30 UTC",
         runner=run_settle_pending,
         max_runtime_seconds=900,
+        is_scheduled=True,
     ),
     CronSpec(
         name="vacuum_old_events",
@@ -159,6 +169,7 @@ REGISTRY: list[CronSpec] = [
         schedule_human="nightly @ 04:00 UTC",
         runner=run_vacuum_old_events,
         max_runtime_seconds=600,
+        is_scheduled=True,
     ),
     CronSpec(
         name="lifecycle_watchdog",
@@ -176,6 +187,7 @@ REGISTRY: list[CronSpec] = [
         schedule_human="hourly @ :45",
         runner=run_lifecycle_watchdog,
         max_runtime_seconds=300,
+        is_scheduled=True,
     ),
 ]
 
