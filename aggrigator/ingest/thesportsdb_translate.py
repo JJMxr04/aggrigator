@@ -166,6 +166,18 @@ def event_spec_from_thesportsdb_payload(
         )
         return None
 
+    # TheSportsDB is our *historical* source — odds-api.io owns live/upcoming
+    # (see plans/historical_data_source). When a current-season backfill walks
+    # rounds that include future fixtures, the unscored payloads collide with
+    # odds-api.io's row for the same match (different PK because tsdb ids are
+    # namespaced) and the union shows duplicates in /v1/events.
+    if start_time > datetime.now(timezone.utc):
+        logger.debug(
+            "TheSportsDB payload %r is future-dated (%s) — skipping",
+            raw_event_id, start_time.isoformat(),
+        )
+        return None
+
     home_score = _parse_score(payload.get("intHomeScore"))
     away_score = _parse_score(payload.get("intAwayScore"))
     winner_code = _winner_code(home_score, away_score)

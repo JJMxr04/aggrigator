@@ -149,6 +149,26 @@ def test_postponed_flag():
     assert spec.is_finalized is False
 
 
+def test_future_dated_payload_returns_none():
+    """TheSportsDB is the historical source — future-dated payloads
+    duplicate odds-api.io's upcoming rows. Translator must drop them."""
+    home = _StubTeam("A", "EPL", "A")
+    away = _StubTeam("B", "EPL", "B")
+    payload = {
+        "idEvent": "future-1",
+        "strTimestamp": "2099-08-16T19:00:00",
+        "idHomeTeam": "A", "strHomeTeam": "A",
+        "idAwayTeam": "B", "strAwayTeam": "B",
+        "intHomeScore": None, "intAwayScore": None,
+        "strStatus": "", "strPostponed": "no",
+    }
+    spec = event_spec_from_thesportsdb_payload(
+        payload, league_id="EPL", sport_id="SOCCER",
+        home_team=home, away_team=away,
+    )
+    assert spec is None
+
+
 def test_missing_id_returns_none():
     home = _StubTeam("A", "EPL", "A")
     away = _StubTeam("B", "EPL", "B")
