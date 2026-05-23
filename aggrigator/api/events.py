@@ -12,10 +12,11 @@ from datetime import date as Date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from aggrigator.api._http_cache import cached_json
 from aggrigator.config import get_settings
 from aggrigator.deps import SessionDep
 from aggrigator.ingest.lifecycle import compute_stale
@@ -30,6 +31,13 @@ from aggrigator.schemas.market import MarketOut
 from aggrigator.schemas.pagination import Page, PageParams
 
 router = APIRouter(prefix="/v1/events", tags=["events"])
+
+# Short TTLs — odds change frequently; we cache only long enough to
+# absorb thundering-herd page renders and let HTTP intermediaries collapse
+# repeated GETs while a single browser/portal session keeps moving.
+LIST_MAX_AGE = 30      # seconds — list of events (markets move fast)
+DETAIL_MAX_AGE = 30    # seconds — single event w/ odds
+MARKETS_MAX_AGE = 30   # seconds — markets list
 
 
 # Mirrors MDProject's `markets.py` SCOPE_SUBJECT_SHORTCUT — keep in sync.
@@ -47,16 +55,28 @@ def _bod(d: Date) -> datetime:
     return datetime.combine(d, time.min, tzinfo=timezone.utc)
 
 
-@router.get("", response_model=Page[EventWithMarketsOut])
+@router.get("")
 async def list_events(
     session: SessionDep,
+    response: Response,
     page_params: Annotated[PageParams, Depends()],
+    if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
     sport: str | None = Query(default=None, description="sportID, e.g. FOOTBALL"),
     league: str | None = Query(default=None, description="leagueID, e.g. NFL"),
     live: bool | None = Query(default=None),
     date: Date | None = Query(default=None, description="YYYY-MM-DD"),
+    starts_after: datetime | None = Query(
+        default=None,
+        description="ISO8601 datetime; inclusive lower bound on start_time. "
+                    "Overrides the default 3h-ago window. Ignored if `date` is set.",
+    ),
+    starts_before: datetime | None = Query(
+        default=None,
+        description="ISO8601 datetime; exclusive upper bound on start_time. "
+                    "Overrides the default 3-days-out window. Ignored if `date` is set.",
+    ),
     include: Literal["markets"] | None = Query(default=None),
-) -> Page:
+):
     stmt = select(Event).options(
         selectinload(Event.home_team),
         selectinload(Event.away_team),
@@ -72,12 +92,23 @@ async def list_events(
         stmt = stmt.where(Event.status_type == "inprogress")
     elif live is False:
         stmt = stmt.where(Event.status_type != "inprogress")
+
+    # Window resolution: `date` wins (single-day filter), else honor any
+    # explicit starts_after / starts_before, else fall back to the
+    # 3h-ago → 3-days-out default. MDProject's pick popup passes
+    # starts_after/starts_before to widen the window past the default;
+    # without those params being recognized, the popup was silently
+    # truncated to the 3-day default.
     if date is not None:
         start = _bod(date)
         end = start + timedelta(days=1)
         stmt = stmt.where(Event.start_time >= start, Event.start_time < end)
+    elif starts_after is not None or starts_before is not None:
+        if starts_after is not None:
+            stmt = stmt.where(Event.start_time >= starts_after)
+        if starts_before is not None:
+            stmt = stmt.where(Event.start_time < starts_before)
     else:
-        # Default window matches MDProject: from 3h ago to 3 days out.
         now = datetime.now(tz=timezone.utc)
         stmt = stmt.where(
             Event.start_time >= now - timedelta(hours=3),
@@ -104,20 +135,23 @@ async def list_events(
             for r in rows
         ]
 
-    return Page.build(
+    page = Page.build(
         items=items,
         page=page_params.page,
         page_size=page_params.page_size,
         total=total,
     )
+    return cached_json(page, response, if_none_match, max_age=LIST_MAX_AGE)
 
 
-@router.get("/{event_id}", response_model=EventDetailOut)
+@router.get("/{event_id}")
 async def get_event(
     session: SessionDep,
+    response: Response,
     event_id: str,
+    if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
     include: Literal["markets"] | None = Query(default=None),
-) -> EventDetailOut:
+):
     event = await session.scalar(
         select(Event)
         .where(Event.id == event_id)
@@ -137,7 +171,7 @@ async def get_event(
         markets = enriched[0].markets
 
     base = EventOut.model_validate(event)
-    return EventDetailOut(
+    payload = EventDetailOut(
         **base.model_dump(),
         markets=markets,
         odds_meta=OddsMeta(
@@ -149,6 +183,7 @@ async def get_event(
             last_provider_refresh_at=event.last_provider_refresh_at,
         ),
     )
+    return cached_json(payload, response, if_none_match, max_age=DETAIL_MAX_AGE)
 
 
 @router.get("/{event_id}/markets")

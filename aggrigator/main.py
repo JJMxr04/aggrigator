@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from redis.asyncio import Redis
@@ -321,6 +322,50 @@ def create_app() -> FastAPI:
         return response
 
     app.add_middleware(BaseHTTPMiddleware, dispatch=_security_headers_dispatch)
+
+    # Conditional-GET layer for analytics. Computes an ETag from the
+    # response body hash and sets Cache-Control: private, max-age=300.
+    # Clients (MDProject's AggrigatorClient, browsers, any HTTP cache)
+    # can replay the ETag via If-None-Match and get a 304 when the data
+    # hasn't changed — saves the JSON parse and the payload bytes.
+    #
+    # "private" because /v1/analytics requires a tenant API key — the
+    # response varies per tenant and shouldn't be stored by any shared
+    # intermediary. End-user browser cache + MDProject's per-process
+    # cache both honor private. 5 min TTL is chosen to bracket the
+    # "data only changes on event settle" expectation.
+    async def _analytics_cache_dispatch(request, call_next):
+        if request.method != "GET" or not request.url.path.startswith("/v1/analytics"):
+            return await call_next(request)
+        response = await call_next(request)
+        if response.status_code != 200:
+            return response
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk
+        etag = '"' + hashlib.md5(body).hexdigest() + '"'
+        cache_control = "private, max-age=300"
+        if request.headers.get("if-none-match") == etag:
+            return Response(
+                status_code=304,
+                headers={
+                    "ETag": etag,
+                    "Cache-Control": cache_control,
+                },
+            )
+        headers = dict(response.headers)
+        headers["ETag"] = etag
+        headers["Cache-Control"] = cache_control
+        # content-length will be re-derived from body length by Starlette.
+        headers.pop("content-length", None)
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=response.media_type,
+        )
+
+    app.add_middleware(BaseHTTPMiddleware, dispatch=_analytics_cache_dispatch)
 
     app.include_router(auth_router.router)
     app.include_router(references_router.router)

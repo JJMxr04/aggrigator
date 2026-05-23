@@ -22,7 +22,21 @@ _settings = get_settings()
 engine = create_async_engine(
     _settings.database_url,
     echo=False,
+    # pool_pre_ping issues a lightweight SELECT 1 before each checkout,
+    # transparently reconnecting if a Neon pooler timed out the
+    # underlying connection. Without this the next request after an
+    # idle period 500s instead of recovering.
     pool_pre_ping=True,
+    # pool_size + max_overflow tune the asyncpg pool. Conservative
+    # defaults assume ~3 workers × ~10 concurrent requests = ~30
+    # connections. Neon free tier allows 100, paid plans much more —
+    # bump if you scale workers up.
+    pool_size=10,
+    max_overflow=20,
+    # pool_recycle below the typical PgBouncer/Neon idle-close (Neon
+    # closes ~5 min) so we don't ever hand out a connection that's
+    # about to expire upstream.
+    pool_recycle=240,
 )
 
 async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
