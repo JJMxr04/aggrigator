@@ -17,6 +17,12 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
+# Runs once per deploy, before the new container takes traffic. If
+# alembic fails, the deploy aborts and the old image keeps serving —
+# no half-migrated state, no crash-loop. The web container's
+# entrypoint still runs `alembic upgrade head` on boot as a safety
+# net (idempotent), but this is the authoritative step.
+preDeployCommand = "alembic upgrade head"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
