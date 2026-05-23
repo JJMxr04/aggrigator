@@ -30,9 +30,10 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Iterable
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aggrigator.ingest.thesportsdb_client import (
@@ -43,7 +44,7 @@ from aggrigator.ingest.thesportsdb_translate import (
     event_spec_from_thesportsdb_payload,
 )
 from aggrigator.ingest.upserts import upsert_event_from_spec
-from aggrigator.models import League, Team
+from aggrigator.models import Event, League, Team
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +79,16 @@ class HistoricalIngestReport:
     rounds_fetched: int = 0
     events_upserted: int = 0
     events_skipped: int = 0  # team lookup miss or translator returned None
+    events_skipped_dup_oddsapi: int = 0  # odds-api.io already owns the match
     duration_seconds: float = 0.0
     last_round: int | None = None  # the final round number actually fetched
     issues: list[str] = field(default_factory=list)
+
+
+# Window for "same teams, same kickoff" cross-provider dedup. Two upstreams
+# rarely agree to the minute (timezone rounding, server-vs-broadcast time);
+# ±1h covers the realistic skew without letting a different match through.
+_DEDUP_WINDOW = timedelta(hours=1)
 
 
 # ---- public entry point ----------------------------------------------------
@@ -285,6 +293,16 @@ async def _ingest_one_event(
     if spec is None:
         return False
 
+    if await _odds_api_owns_match(session, spec.start_time, home_team.id, away_team.id):
+        logger.info(
+            "thesportsdb event %r: odds-api.io already owns this match "
+            "(teams=%s/%s, kickoff=%s) — skipping",
+            payload.get("idEvent"), home_team.id, away_team.id,
+            spec.start_time.isoformat(),
+        )
+        report.events_skipped_dup_oddsapi += 1
+        return False
+
     upserted = await upsert_event_from_spec(
         session, spec,
         home=home_team,
@@ -292,3 +310,33 @@ async def _ingest_one_event(
         provider=PROVIDER,
     )
     return upserted is not None
+
+
+async def _odds_api_owns_match(
+    session: AsyncSession,
+    start_time,
+    home_team_id: str,
+    away_team_id: str,
+) -> bool:
+    """True if an odds-api.io Event row already exists for the same two
+    teams (either home/away ordering) within ±1h of ``start_time``.
+
+    odds-api.io is the priority source for live + scored events; if it
+    has the match, TheSportsDB's row would be a duplicate from MDProject's
+    point of view (the two have disjoint id namespaces, so the PK
+    constraint won't catch it).
+    """
+    exists = await session.scalar(
+        select(Event.id).where(
+            Event.provider == "odds_api_io",
+            or_(
+                and_(Event.home_team_id == home_team_id,
+                     Event.away_team_id == away_team_id),
+                and_(Event.home_team_id == away_team_id,
+                     Event.away_team_id == home_team_id),
+            ),
+            Event.start_time >= start_time - _DEDUP_WINDOW,
+            Event.start_time <= start_time + _DEDUP_WINDOW,
+        ).limit(1)
+    )
+    return exists is not None

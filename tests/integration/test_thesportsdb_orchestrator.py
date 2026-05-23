@@ -156,6 +156,49 @@ async def test_round_walk_writes_events_no_markets(session):
     assert len(markets) == 0
 
 
+async def test_skips_when_odds_api_owns_match(session):
+    """Cross-provider dedup: if odds-api.io already has the same two
+    teams + start_time (within 1h), the TheSportsDB row is skipped so
+    /v1/events doesn't surface both providers' copies of the same match."""
+    from datetime import datetime, timezone
+    await _seed_epl(session)
+
+    # Round 1's first fixture is Man United (idHomeTeam=133612) vs
+    # Fulham (idHomeTeam=133600) on 2024-08-16T19:00:00 UTC. Pre-insert
+    # the odds-api.io row that "owns" it.
+    home_pk = Team.synth_pk("EPL", "133612")
+    away_pk = Team.synth_pk("EPL", "133600")
+    session.add(Event(
+        id="oai-manu-fulham",
+        sport_id="SOCCER",
+        league_id="EPL",
+        home_team_id=home_pk,
+        away_team_id=away_pk,
+        start_time=datetime(2024, 8, 16, 19, 0, tzinfo=timezone.utc),
+        provider="odds_api_io",
+    ))
+    await session.commit()
+
+    report = await ingest_historical_league(
+        session, "EPL", "2024-2025",
+        client=FixtureTheSportsDbClient(),
+        rounds=[1],
+    )
+
+    assert report.events_skipped_dup_oddsapi == 1
+    assert report.events_upserted == 9  # 10 in round 1, one ceded to odds-api.io
+
+    # No tsdb row was created for the Man United / Fulham match.
+    tsdb_for_match = await session.scalar(
+        select(Event).where(
+            Event.provider == "thesportsdb",
+            Event.home_team_id == home_pk,
+            Event.away_team_id == away_pk,
+        )
+    )
+    assert tsdb_for_match is None
+
+
 async def test_idempotent_rerun(session):
     """Re-running the same backfill yields the same row count + ids."""
     await _seed_epl(session)

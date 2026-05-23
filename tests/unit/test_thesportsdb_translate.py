@@ -104,9 +104,9 @@ def test_winner_codes_cover_all_outcomes():
     assert draw.winner_code == 3
 
 
-def test_missing_scores_marks_non_terminal():
-    """Postponed / TBD matches arrive with null/empty scores. The
-    translator must NOT mark them finalized, and winner_code stays None."""
+def test_unscored_payload_returns_none():
+    """In-progress / unknown-status payloads (no scores, no postponed flag)
+    aren't yet historical — odds-api.io still owns them. Translator drops."""
     home = _StubTeam("A", "EPL", "A")
     away = _StubTeam("B", "EPL", "B")
     payload = {
@@ -123,13 +123,12 @@ def test_missing_scores_marks_non_terminal():
         payload, league_id="EPL", sport_id="SOCCER",
         home_team=home, away_team=away,
     )
-    assert spec.winner_code is None
-    assert spec.is_finalized is False
-    assert spec.completed is False
-    assert spec.status_type == "unknown"
+    assert spec is None
 
 
-def test_postponed_flag():
+def test_postponed_payload_returns_none():
+    """Postponed matches re-emit as 'finished' on a later round walk once
+    they're rescheduled and played — until then, don't write a row."""
     home = _StubTeam("A", "EPL", "A")
     away = _StubTeam("B", "EPL", "B")
     payload = {
@@ -145,8 +144,7 @@ def test_postponed_flag():
         payload, league_id="EPL", sport_id="SOCCER",
         home_team=home, away_team=away,
     )
-    assert spec.status_type == "postponed"
-    assert spec.is_finalized is False
+    assert spec is None
 
 
 def test_future_dated_payload_returns_none():
