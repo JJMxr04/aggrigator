@@ -29,6 +29,8 @@ import logging
 
 from aggrigator.config import get_settings
 from aggrigator.ingest.odds_api_quota import quota_status
+from aggrigator.ops.recorder import cron_run_recorder
+from aggrigator.workers.app import app
 from aggrigator.workers.tasks.ingest import _build_client, run_ingest_due_leagues
 from aggrigator.workers.tasks.seed import run_seed_sports_and_leagues
 
@@ -68,16 +70,15 @@ async def run_full_refresh() -> dict:
     return combined
 
 
-async def full_refresh_task(ctx: dict) -> dict:
-    """ARQ-callable wrapper. Records each scheduled run in ``cron_run``.
-    Marked ``retryable=True`` because the bulk of its time is spent in
-    the same orchestrator walk as ``ingest_due_leagues`` — same transient
-    failure modes, same per-league commit boundaries, same retry calculus.
-    """
-    from aggrigator.ops.recorder import cron_run_recorder
-
-    @cron_run_recorder("full_refresh", retryable=True)
-    async def _runner(ctx_):
-        return await run_full_refresh()
-
-    return await _runner(ctx)
+# Manual-only — no ``@app.periodic``. The hourly ingest walk reaches the
+# same steady state on its own; ``full_refresh`` exists for operators to
+# click after a fresh deploy. ``queueing_lock`` matches the cron name so
+# double-clicks dedup the same way scheduled tasks do.
+@app.task(
+    name="aggrigator.full_refresh",
+    pass_context=True,
+    queueing_lock="full_refresh",
+)
+@cron_run_recorder("full_refresh")
+async def full_refresh_task(context):
+    return await run_full_refresh()

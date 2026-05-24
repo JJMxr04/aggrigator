@@ -19,6 +19,8 @@ from aggrigator.ingest.registry import (
     report_as_dict,
     validate_registry,
 )
+from aggrigator.ops.recorder import cron_run_recorder
+from aggrigator.workers.app import app
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +47,16 @@ async def run_load_registry() -> dict:
     return result
 
 
-# ---- ARQ entry point ------------------------------------------------------
+# ---- Procrastinate entry point --------------------------------------------
 
 
-async def load_registry_task(ctx: dict) -> dict:
-    from aggrigator.ops.recorder import cron_run_recorder
-
-    @cron_run_recorder("load_registry")
-    async def _runner(ctx_):
-        return await run_load_registry()
-
-    return await _runner(ctx)
+# Manual-only — no ``@app.periodic``. Operators trigger it from /ops/crons
+# after editing the on-disk registry JSON.
+@app.task(
+    name="aggrigator.load_registry",
+    pass_context=True,
+    queueing_lock="load_registry",
+)
+@cron_run_recorder("load_registry")
+async def load_registry_task(context) -> dict:
+    return await run_load_registry()

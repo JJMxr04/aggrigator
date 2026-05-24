@@ -2,12 +2,15 @@
 
 Each entry maps a stable ``name`` (used as a URL segment + DB key) to:
 - the human-readable schedule string the page shows
-- the ``runner`` async function that the trigger endpoint calls inline (so the
-  ARQ enqueue side and the manual-run side hit identical code paths)
-- the ``max_runtime_seconds`` budget — also the Redis lock TTL
+- the ``runner`` async function that the manual trigger calls inline (so the
+  scheduled-execution side and the manual-run side hit identical code paths)
+- the ``task`` Procrastinate task object used by the trigger path to defer
+  a job onto the same queue scheduled runs use (so duplicate-click dedup via
+  ``queueing_lock`` works for manual triggers too)
+- the ``max_runtime_seconds`` budget — informational; surfaced in the UI
 
-Adding a new cron is one entry here plus a ``run_*`` function in
-``workers/tasks/``. The HTMX page picks it up automatically.
+Adding a new cron is one entry here plus a ``run_*`` function + Procrastinate
+``@app.task`` in ``workers/tasks/``. The HTMX page picks it up automatically.
 """
 
 from __future__ import annotations
@@ -15,17 +18,38 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from aggrigator.workers.tasks.full_refresh import run_full_refresh
+from procrastinate.tasks import Task
+
+from aggrigator.workers.tasks.full_refresh import full_refresh_task, run_full_refresh
 from aggrigator.workers.tasks.ingest import (
+    ingest_due_leagues_task,
+    refresh_existing_events_task,
     run_ingest_due_leagues,
     run_refresh_existing_events,
 )
-from aggrigator.workers.tasks.load_registry import run_load_registry
-from aggrigator.workers.tasks.seed import run_seed_leagues, run_seed_sports
-from aggrigator.workers.tasks.settle import run_settle_pending
-from aggrigator.workers.tasks.vacuum import run_vacuum_old_events
-from aggrigator.workers.tasks.watchdog import run_lifecycle_watchdog
-from aggrigator.workers.tasks.webhook_deliver import run_deliver_due
+from aggrigator.workers.tasks.load_registry import (
+    load_registry_task,
+    run_load_registry,
+)
+from aggrigator.workers.tasks.seed import (
+    run_seed_leagues,
+    run_seed_sports,
+    seed_leagues_task,
+    seed_sports_task,
+)
+from aggrigator.workers.tasks.settle import run_settle_pending, settle_pending_task
+from aggrigator.workers.tasks.vacuum import (
+    run_vacuum_old_events,
+    vacuum_old_events_task,
+)
+from aggrigator.workers.tasks.watchdog import (
+    lifecycle_watchdog_task,
+    run_lifecycle_watchdog,
+)
+from aggrigator.workers.tasks.webhook_deliver import (
+    run_deliver_due,
+    webhook_deliver_task,
+)
 
 
 @dataclass
@@ -34,11 +58,12 @@ class CronSpec:
     description: str
     schedule_human: str          # "every 30 min", "manual only", etc.
     runner: Callable[[], Awaitable[Any]]
+    task: Task                   # Procrastinate task — used by the trigger path
     max_runtime_seconds: int
-    # True if this cron is wired into workers/settings.py:_build_cron_jobs.
-    # Drives whether the /ops/crons toggle is rendered — manual-only
-    # crons (full_refresh, load_registry, webhook_deliver, ...) have no
-    # scheduled tick to pause.
+    # True if this cron is wired into Procrastinate's periodic schedule
+    # via ``@app.periodic`` on the task. Drives whether the /ops/crons
+    # toggle is rendered — manual-only crons (full_refresh, load_registry,
+    # webhook_deliver, ...) have no scheduled tick to pause.
     is_scheduled: bool = False
 
 
@@ -55,6 +80,7 @@ REGISTRY: list[CronSpec] = [
         ),
         schedule_human="manual only",
         runner=run_full_refresh,
+        task=full_refresh_task,
         max_runtime_seconds=2400,
     ),
     CronSpec(
@@ -72,6 +98,7 @@ REGISTRY: list[CronSpec] = [
         ),
         schedule_human="manual only",
         runner=run_load_registry,
+        task=load_registry_task,
         max_runtime_seconds=120,
     ),
     CronSpec(
@@ -83,6 +110,7 @@ REGISTRY: list[CronSpec] = [
         ),
         schedule_human="daily @ 01:30 UTC",
         runner=run_seed_sports,
+        task=seed_sports_task,
         max_runtime_seconds=120,
         is_scheduled=True,
     ),
@@ -100,6 +128,7 @@ REGISTRY: list[CronSpec] = [
         ),
         schedule_human="daily @ 02:00 UTC",
         runner=run_seed_leagues,
+        task=seed_leagues_task,
         max_runtime_seconds=300,
         is_scheduled=True,
     ),
@@ -116,6 +145,7 @@ REGISTRY: list[CronSpec] = [
         ),
         schedule_human="daily @ 02:30 UTC",
         runner=run_ingest_due_leagues,
+        task=ingest_due_leagues_task,
         max_runtime_seconds=1800,
         is_scheduled=True,
     ),
@@ -130,6 +160,7 @@ REGISTRY: list[CronSpec] = [
         ),
         schedule_human="hourly @ :00 UTC (skips 02:00)",
         runner=run_refresh_existing_events,
+        task=refresh_existing_events_task,
         max_runtime_seconds=1800,
         is_scheduled=True,
     ),
@@ -137,14 +168,14 @@ REGISTRY: list[CronSpec] = [
         name="webhook_deliver",
         description=(
             "Drain pending webhook deliveries. Push-driven — the ingest "
-            "orchestrator + watchdog enqueue this on commit, and failed "
-            "deliveries re-enqueue themselves with a deferred job at "
-            "next_retry_at. NOT on the auto schedule (would write a "
-            "no-op cron_run row every tick). Click Run here only to "
-            "recover after a Redis outage that swallowed the push."
+            "orchestrator + watchdog defer this on commit, and failed "
+            "deliveries re-defer themselves at next_retry_at. NOT on the "
+            "auto schedule (would write a no-op cron_run row every tick). "
+            "Click Run here only to recover from a backlog."
         ),
         schedule_human="push-driven (manual recovery)",
         runner=run_deliver_due,
+        task=webhook_deliver_task,
         max_runtime_seconds=120,
     ),
     CronSpec(
@@ -156,6 +187,7 @@ REGISTRY: list[CronSpec] = [
         ),
         schedule_human="nightly @ 03:30 UTC",
         runner=run_settle_pending,
+        task=settle_pending_task,
         max_runtime_seconds=900,
         is_scheduled=True,
     ),
@@ -168,6 +200,7 @@ REGISTRY: list[CronSpec] = [
         ),
         schedule_human="nightly @ 04:00 UTC",
         runner=run_vacuum_old_events,
+        task=vacuum_old_events_task,
         max_runtime_seconds=600,
         is_scheduled=True,
     ),
@@ -186,6 +219,7 @@ REGISTRY: list[CronSpec] = [
         ),
         schedule_human="hourly @ :45",
         runner=run_lifecycle_watchdog,
+        task=lifecycle_watchdog_task,
         max_runtime_seconds=300,
         is_scheduled=True,
     ),

@@ -20,6 +20,8 @@ import logging
 
 from aggrigator.db import session_scope
 from aggrigator.ingest.seed import seed_leagues, seed_sports, seed_all
+from aggrigator.ops.recorder import cron_run_recorder
+from aggrigator.workers.app import app
 from aggrigator.workers.tasks.ingest import _build_client
 
 logger = logging.getLogger(__name__)
@@ -65,24 +67,26 @@ async def run_seed_sports_and_leagues() -> dict:
     return result
 
 
-# ---- ARQ entry points ------------------------------------------------------
+# ---- Procrastinate entry points -------------------------------------------
 
 
-async def seed_sports_task(ctx: dict) -> dict:
-    from aggrigator.ops.recorder import cron_run_recorder
+@app.periodic(cron="30 1 * * *")
+@app.task(
+    name="aggrigator.seed_sports",
+    pass_context=True,
+    queueing_lock="seed_sports",
+)
+@cron_run_recorder("seed_sports")
+async def seed_sports_task(context, timestamp: int | None = None) -> dict:
+    return await run_seed_sports()
 
-    @cron_run_recorder("seed_sports")
-    async def _runner(ctx_):
-        return await run_seed_sports()
 
-    return await _runner(ctx)
-
-
-async def seed_leagues_task(ctx: dict) -> dict:
-    from aggrigator.ops.recorder import cron_run_recorder
-
-    @cron_run_recorder("seed_leagues")
-    async def _runner(ctx_):
-        return await run_seed_leagues()
-
-    return await _runner(ctx)
+@app.periodic(cron="0 2 * * *")
+@app.task(
+    name="aggrigator.seed_leagues",
+    pass_context=True,
+    queueing_lock="seed_leagues",
+)
+@cron_run_recorder("seed_leagues")
+async def seed_leagues_task(context, timestamp: int | None = None) -> dict:
+    return await run_seed_leagues()

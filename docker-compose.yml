@@ -1,10 +1,14 @@
 # Local prod-like stack for the aggregator. Mirrors what Coolify will
-# deploy (web + worker + postgres + redis) so behavior parity is testable
+# deploy (web + worker + postgres) so behavior parity is testable
 # before pushing.
 #
 # Coolify itself doesn't read this file — it builds the Dockerfile per
 # Application. But you can `docker compose up` here to validate the same
 # image runs end-to-end before deploying.
+#
+# Redis was removed in the Procrastinate cutover — task queue, periodic
+# schedule, and per-cron debounce lock all live in Postgres now (the
+# advisory-lock primitive replaces the old SET NX EX).
 
 services:
   postgres:
@@ -23,28 +27,16 @@ services:
       timeout: 3s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6380:6379"   # 6380 host-side to coexist with Homebrew Redis on 6379
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   web:
     build: .
     depends_on:
       postgres: { condition: service_healthy }
-      redis:    { condition: service_healthy }
     environment:
       AGG_ENV: dev
       AGG_DEBUG: "false"
       AGG_TEST_MODE: "false"   # production-like; flip true to enable data-reset
       AGG_DATABASE_URL: postgresql+asyncpg://aggrigator:aggrigator@postgres:5432/aggrigator
       AGG_DATABASE_URL_SYNC: postgresql+psycopg2://aggrigator:aggrigator@postgres:5432/aggrigator
-      AGG_REDIS_URL: redis://redis:6379/0
       AGG_JWT_SECRET: dev-only-change-me
       AGG_SECRET_ENCRYPTION_KEY: dXuPg8VG-pEz3w6mF1gAo0FVXa5Y9xqNxGgfZ7jEz0o=
       AGG_CORS_ORIGINS: http://localhost:3000,http://localhost:8000
@@ -56,14 +48,12 @@ services:
     build: .
     depends_on:
       postgres: { condition: service_healthy }
-      redis:    { condition: service_healthy }
       web:      { condition: service_healthy }
     command: ["worker"]
     environment:
       AGG_ENV: dev
       AGG_DATABASE_URL: postgresql+asyncpg://aggrigator:aggrigator@postgres:5432/aggrigator
       AGG_DATABASE_URL_SYNC: postgresql+psycopg2://aggrigator:aggrigator@postgres:5432/aggrigator
-      AGG_REDIS_URL: redis://redis:6379/0
       AGG_SECRET_ENCRYPTION_KEY: dXuPg8VG-pEz3w6mF1gAo0FVXa5Y9xqNxGgfZ7jEz0o=
 
 volumes:

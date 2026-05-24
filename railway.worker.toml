@@ -1,4 +1,5 @@
-## Railway service config for `agg-worker` (the arq background worker).
+## Railway service config for `agg-worker` (the Procrastinate background
+## worker — task execution + in-process periodic scheduler).
 ##
 ## Used INSTEAD of the default `railway.toml` — point the worker service's
 ## **Config Path** at `railway.worker.toml` in its Settings tab. (Railway
@@ -16,8 +17,15 @@
 ##   unhealthy and Railway would crashloop the container forever.
 ## - Restart policy is ALWAYS, not ON_FAILURE — if the worker exits cleanly
 ##   (e.g. a deploy / kill signal), we still want it back up. Without
-##   ALWAYS, a graceful arq shutdown would leave the cron schedule dead
-##   until the next manual redeploy.
+##   ALWAYS, a graceful shutdown would leave the schedule dead until the
+##   next manual redeploy.
+##
+## Procrastinate uses Postgres LISTEN/NOTIFY for job delivery, so the
+## worker holds one persistent Postgres connection while idle (no polling,
+## no Redis). The periodic schedule lives in-process; scaling to multiple
+## replicas is safe (they cooperate via row-level locks on the
+## procrastinate_periodic_defers table) but unnecessary at this app's
+## volume — keep it at one replica unless you have a reason.
 
 [build]
 builder = "DOCKERFILE"
@@ -30,9 +38,9 @@ dockerfilePath = "Dockerfile"
 ## crashloop. The entrypoint script's `case` block dispatches on $1.
 startCommand = "/app/docker-entrypoint.sh worker"
 
-## No healthcheckPath — worker has no HTTP listener. Liveness is
-## visible via the arq heartbeat key in Redis (read by the
-## /ops/crons banner + /v1/admin/crons/worker-status endpoint).
+## No healthcheckPath — worker has no HTTP listener. Liveness is visible
+## via the /ops/crons dashboard (reads recent rows from cron_run) and the
+## procrastinate_jobs table.
 
 restartPolicyType = "ALWAYS"
 restartPolicyMaxRetries = 10

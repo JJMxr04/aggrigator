@@ -1,19 +1,37 @@
-"""Ingest task — runnable both as an ARQ job and as a plain async function
-(so tests can call it without a Redis dependency)."""
+"""Ingest task — runnable both as a Procrastinate job and as a plain async
+function (so tests can call it without a worker / Postgres queue dependency)."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
+
+from procrastinate import RetryStrategy
 
 from aggrigator.config import get_settings
 from aggrigator.db import session_scope
 from aggrigator.ingest.client import OddsClient
+from aggrigator.ingest.odds_api_errors import RateLimitExceededError
 from aggrigator.ingest.odds_api_http import OddsApiHttpClient
 from aggrigator.ingest.odds_api_quota import quota_status
 from aggrigator.ingest.orchestrator import ingest_due_leagues
+from aggrigator.ops.recorder import cron_run_recorder
+from aggrigator.workers.app import app
 
 logger = logging.getLogger(__name__)
+
+
+# Retry policy shared by the discovery + refresh walks. Identical failure
+# modes (network-bound, same orchestrator path, per-league commits make
+# the retry naturally pick up where the original left off). ``wait=300``
+# = five minutes — long enough for an upstream blip to clear, short enough
+# that the next scheduled tick won't beat us to it on hourly crons.
+_INGEST_RETRY = RetryStrategy(
+    max_attempts=2,
+    wait=300,
+    retry_exceptions=(asyncio.TimeoutError, RateLimitExceededError),
+)
 
 
 def _build_client() -> OddsClient:
@@ -90,7 +108,7 @@ async def run_ingest_due_leagues(
     return summary
 
 
-# ---- ARQ entry point -------------------------------------------------------
+# ---- Procrastinate entry points -------------------------------------------
 
 
 async def run_refresh_existing_events() -> dict[str, Any]:
@@ -99,30 +117,29 @@ async def run_refresh_existing_events() -> dict[str, Any]:
     return await run_ingest_due_leagues(discover_new_events=False)
 
 
-async def ingest_due_leagues_task(ctx: dict) -> dict:
-    """ARQ-callable wrapper for the daily DISCOVERY walk. Wrapped by
-    ``cron_run_recorder(retryable=True)`` so transient failures (timeout,
-    rate-limit hit just before bucket reset, Redis blip) get one auto
-    retry deferred 5 min — the orchestrator's per-league commits make
-    the retry naturally pick up where the original left off."""
-    from aggrigator.ops.recorder import cron_run_recorder
-
-    @cron_run_recorder("ingest_due_leagues", retryable=True)
-    async def _runner(ctx_):
-        return await run_ingest_due_leagues(discover_new_events=True)
-
-    return await _runner(ctx)
+# Daily DISCOVERY walk: inserts newly surfaced events + refreshes existing ones.
+@app.periodic(cron="30 2 * * *")
+@app.task(
+    name="aggrigator.ingest_due_leagues",
+    pass_context=True,
+    queueing_lock="ingest_due_leagues",
+    retry=_INGEST_RETRY,
+)
+@cron_run_recorder("ingest_due_leagues")
+async def ingest_due_leagues_task(context, timestamp: int | None = None) -> dict:
+    return await run_ingest_due_leagues(discover_new_events=True)
 
 
-async def refresh_existing_events_task(ctx: dict) -> dict:
-    """ARQ-callable wrapper for the intra-day REFRESH-only walk. Same
-    pipeline as the discovery walk but skips events not already in DB —
-    new events get picked up on the next daily discovery cron. Same
-    retry classification as the discovery walk (see above)."""
-    from aggrigator.ops.recorder import cron_run_recorder
-
-    @cron_run_recorder("refresh_existing_events", retryable=True)
-    async def _runner(ctx_):
-        return await run_ingest_due_leagues(discover_new_events=False)
-
-    return await _runner(ctx)
+# REFRESH-only walk for events already in DB. Hourly @ :00 except hour 2,
+# which is the daily discovery slot — running both at once would race on
+# the same league.
+@app.periodic(cron="0 0,1,3-23 * * *")
+@app.task(
+    name="aggrigator.refresh_existing_events",
+    pass_context=True,
+    queueing_lock="refresh_existing_events",
+    retry=_INGEST_RETRY,
+)
+@cron_run_recorder("refresh_existing_events")
+async def refresh_existing_events_task(context, timestamp: int | None = None) -> dict:
+    return await run_ingest_due_leagues(discover_new_events=False)

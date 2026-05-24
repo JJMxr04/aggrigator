@@ -24,9 +24,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from redis.asyncio import Redis
 
-from aggrigator.config import get_settings
 from aggrigator.db import async_session_factory
 from aggrigator.models.auth import User, UserRole
 from aggrigator.ops.data_reset import (
@@ -34,7 +32,7 @@ from aggrigator.ops.data_reset import (
     list_table_info,
     truncate_table,
 )
-from aggrigator.ops.service import CronService, LockUnavailable, TriggerRejected
+from aggrigator.ops.service import CronService, TriggerRejected
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +40,6 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 router = APIRouter(prefix="/ops", tags=["ops"], include_in_schema=False)
-
-
-def _redis() -> Redis:
-    return Redis.from_url(get_settings().redis_url, decode_responses=True)
 
 
 # ---- main page -------------------------------------------------------------
@@ -61,12 +55,8 @@ async def crons_page(request: Request):
         )
 
     async with async_session_factory() as session:
-        redis = _redis()
-        try:
-            svc = CronService(session, redis)
-            items = await svc.list_crons()
-        finally:
-            await redis.aclose()
+        svc = CronService(session)
+        items = await svc.list_crons()
 
     return templates.TemplateResponse(
         request,
@@ -90,12 +80,8 @@ async def cron_row(request: Request, name: str) -> HTMLResponse:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED)
 
     async with async_session_factory() as session:
-        redis = _redis()
-        try:
-            svc = CronService(session, redis)
-            item = await svc.get_cron(name)
-        finally:
-            await redis.aclose()
+        svc = CronService(session)
+        item = await svc.get_cron(name)
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     return templates.TemplateResponse(
@@ -113,30 +99,16 @@ async def trigger_run_html(request: Request, name: str) -> HTMLResponse:
     await _require_csrf(request)
 
     async with async_session_factory() as session:
-        redis = _redis()
+        svc = CronService(session)
         try:
-            svc = CronService(session, redis)
-            try:
-                await svc.trigger(name, actor=user)
-            except TriggerRejected:
-                pass
-            except KeyError:
-                raise HTTPException(status.HTTP_404_NOT_FOUND)
-            except LockUnavailable as exc:
-                logger.warning(
-                    "trigger_run_html: lock unavailable for cron=%s: %s",
-                    name, exc,
-                )
-                raise HTTPException(
-                    status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail=(
-                        "Cron lock subsystem unavailable — Redis is unreachable "
-                        "from agg-web. Check AGG_REDIS_URL and the Redis plugin."
-                    ),
-                )
-            item = await svc.get_cron(name)
-        finally:
-            await redis.aclose()
+            await svc.trigger(name, actor=user)
+        except TriggerRejected:
+            # 409-equivalent — already running. The row partial below
+            # will render the in-flight state from the cron_run row.
+            pass
+        except KeyError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND)
+        item = await svc.get_cron(name)
     return templates.TemplateResponse(
         request, "_cron_row.html",
         {"item": item, "csrf_token": _csrf_token(request)},
@@ -150,7 +122,7 @@ async def toggle_enabled_html(request: Request, name: str) -> HTMLResponse:
 
     The form submits ``enabled=true|false`` (the desired *new* state).
     Manual ``Run now`` continues to work regardless — disabling only
-    stops the ARQ scheduled firing."""
+    stops the periodic scheduled firing."""
     user = await _admin_from_session(request)
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED)
@@ -166,17 +138,13 @@ async def toggle_enabled_html(request: Request, name: str) -> HTMLResponse:
     enabled = raw == "true"
 
     async with async_session_factory() as session:
-        redis = _redis()
+        svc = CronService(session)
         try:
-            svc = CronService(session, redis)
-            try:
-                item = await svc.set_enabled(name, enabled=enabled, actor=user)
-            except KeyError:
-                raise HTTPException(status.HTTP_404_NOT_FOUND)
-            except ValueError as exc:
-                raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
-        finally:
-            await redis.aclose()
+            item = await svc.set_enabled(name, enabled=enabled, actor=user)
+        except KeyError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
     return templates.TemplateResponse(
         request, "_cron_row.html",
         {"item": item, "csrf_token": _csrf_token(request)},
@@ -190,12 +158,8 @@ async def history_panel(request: Request, name: str) -> HTMLResponse:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED)
 
     async with async_session_factory() as session:
-        redis = _redis()
-        try:
-            svc = CronService(session, redis)
-            runs = await svc.history(name, limit=25)
-        finally:
-            await redis.aclose()
+        svc = CronService(session)
+        runs = await svc.history(name, limit=25)
     return templates.TemplateResponse(
         request, "_run_panel.html",
         {"name": name, "runs": runs},
@@ -212,12 +176,8 @@ async def run_detail_panel(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED)
 
     async with async_session_factory() as session:
-        redis = _redis()
-        try:
-            svc = CronService(session, redis)
-            detail = await svc.get_run(run_id)
-        finally:
-            await redis.aclose()
+        svc = CronService(session)
+        detail = await svc.get_run(run_id)
     if detail is None or detail["cron_name"] != name:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
 

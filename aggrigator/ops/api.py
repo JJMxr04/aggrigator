@@ -22,7 +22,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from redis.asyncio import Redis
 from sqlalchemy import select
 
 from aggrigator.config import get_settings
@@ -30,7 +29,7 @@ from aggrigator.deps import SessionDep, require_admin
 from aggrigator.ingest.orchestrator import ingest_event as _ingest_event
 from aggrigator.models import League, User
 from aggrigator.ops.registry import REGISTRY
-from aggrigator.ops.service import CronService, LockUnavailable, TriggerRejected
+from aggrigator.ops.service import CronService, TriggerRejected
 from aggrigator.workers.tasks.ingest import _build_client
 
 logger = logging.getLogger(__name__)
@@ -42,35 +41,23 @@ router = APIRouter(
 )
 
 
-def _redis() -> Redis:
-    return Redis.from_url(get_settings().redis_url, decode_responses=True)
-
-
 # ---- list / detail ---------------------------------------------------------
 
 
 @router.get("", summary="List every registered cron + last_run")
 async def list_crons(session: SessionDep) -> list[dict]:
-    redis = _redis()
-    try:
-        svc = CronService(session, redis)
-        items = await svc.list_crons()
-        return [_item_to_dict(it) for it in items]
-    finally:
-        await redis.aclose()
+    svc = CronService(session)
+    items = await svc.list_crons()
+    return [_item_to_dict(it) for it in items]
 
 
 @router.get("/{name}", summary="One cron + last_run (HTMX poll target)")
 async def get_cron(name: str, session: SessionDep) -> dict:
-    redis = _redis()
-    try:
-        svc = CronService(session, redis)
-        item = await svc.get_cron(name)
-        if item is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "cron not found")
-        return _item_to_dict(item)
-    finally:
-        await redis.aclose()
+    svc = CronService(session)
+    item = await svc.get_cron(name)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "cron not found")
+    return _item_to_dict(item)
 
 
 @router.get("/{name}/runs", summary="Run history (newest first)")
@@ -80,12 +67,8 @@ async def list_runs(
 ) -> list[dict]:
     if not _is_registered(name):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "cron not found")
-    redis = _redis()
-    try:
-        svc = CronService(session, redis)
-        return [_run_to_dict(r) for r in await svc.history(name, limit=limit)]
-    finally:
-        await redis.aclose()
+    svc = CronService(session)
+    return [_run_to_dict(r) for r in await svc.history(name, limit=limit)]
 
 
 @router.get("/{name}/runs/{run_id}", summary="Full run detail (untruncated)")
@@ -94,15 +77,11 @@ async def get_run(
 ) -> dict:
     if not _is_registered(name):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "cron not found")
-    redis = _redis()
-    try:
-        svc = CronService(session, redis)
-        body = await svc.get_run(run_id)
-        if body is None or body["cron_name"] != name:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
-        return _detail_to_dict(body)
-    finally:
-        await redis.aclose()
+    svc = CronService(session)
+    body = await svc.get_run(run_id)
+    if body is None or body["cron_name"] != name:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+    return _detail_to_dict(body)
 
 
 # ---- trigger ---------------------------------------------------------------
@@ -116,24 +95,12 @@ async def trigger_run(
 ) -> dict:
     if not _is_registered(name):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "cron not found")
-    redis = _redis()
+    svc = CronService(session)
     try:
-        svc = CronService(session, redis)
-        try:
-            run = await svc.trigger(name, actor=user)
-        except TriggerRejected as exc:
-            raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
-        except LockUnavailable as exc:
-            # Redis lock died. service.trigger already logged + recorded a
-            # FAILED cron_run row. Surface a 503 (not 500) so callers /
-            # alerting can distinguish "infra problem" from "your fault".
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=str(exc),
-            )
-        return _run_to_dict(run)
-    finally:
-        await redis.aclose()
+        run = await svc.trigger(name, actor=user)
+    except TriggerRejected as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    return _run_to_dict(run)
 
 
 # ---- enable / disable (pause scheduled tick) -------------------------------
@@ -161,17 +128,13 @@ async def set_enabled(
 ) -> dict:
     if not _is_registered(name):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "cron not found")
-    redis = _redis()
+    svc = CronService(session)
     try:
-        svc = CronService(session, redis)
-        try:
-            item = await svc.set_enabled(name, enabled=payload.enabled, actor=user)
-        except ValueError as exc:
-            # Manual-only cron — nothing to pause.
-            raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
-        return _item_to_dict(item)
-    finally:
-        await redis.aclose()
+        item = await svc.set_enabled(name, enabled=payload.enabled, actor=user)
+    except ValueError as exc:
+        # Manual-only cron — nothing to pause.
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    return _item_to_dict(item)
 
 
 # ---- single-event ingest (carried over from v0 — ad-hoc, not cron-recorded) ---
@@ -264,7 +227,7 @@ async def trigger_historical_ingest(
 
     Runs synchronously and returns the report — for a full EPL season
     (38 rounds × 1.5s throttle) expect ~5 minutes. Future improvement:
-    enqueue via ARQ if runs exceed admin-request timeouts.
+    defer via Procrastinate if runs exceed admin-request timeouts.
 
     Idempotent on re-run: same TheSportsDB event id → same
     ``"tsdb:<id>"`` event_id → same upsert → no duplicate rows.

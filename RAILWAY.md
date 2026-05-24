@@ -2,8 +2,9 @@
 
 Step-by-step guide for getting the aggregator running on
 [Railway](https://railway.app) via the GitHub connector, with Postgres
-hosted on [Neon](https://neon.tech) (free tier) and Redis as a Railway
-plugin.
+hosted on [Neon](https://neon.tech) (free tier). The task queue +
+periodic schedule live in Postgres via Procrastinate, so there's no
+Redis or other broker to provision.
 
 This setup targets the **Hobby plan ($5/mo)** and typically runs at
 ~$5–10/mo all-in.
@@ -12,10 +13,9 @@ This setup targets the **Hobby plan ($5/mo)** and typically runs at
 
 | Service        | Source                              | Purpose                                         |
 | -------------- | ----------------------------------- | ----------------------------------------------- |
-| Postgres       | Neon (external, free tier)          | persistent DB                                   |
-| `agg-redis`    | Railway plugin (Redis)              | queue + rate limiter                            |
+| Postgres       | Neon (external, free tier)          | persistent DB + task queue (Procrastinate)      |
 | `agg-web`      | GitHub repo, Dockerfile             | gunicorn + uvicorn workers (the FastAPI app)    |
-| `agg-worker`   | Same GitHub repo, **same Dockerfile** | arq (background jobs + scheduled crons)       |
+| `agg-worker`   | Same GitHub repo, **same Dockerfile** | Procrastinate worker (background jobs + cron) |
 
 `agg-web` and `agg-worker` are built from the **same Dockerfile** — they
 just override the start command. Railway lets you do this by creating
@@ -73,13 +73,12 @@ startup.
 
 ---
 
-## 3. Add the Redis plugin
+## 3. (No broker plugin needed)
 
-In the project canvas → **+ New → Database → Add Redis**.
-
-Railway provisions a Redis instance and exposes connection variables
-(`REDIS_URL`, `REDISHOST`, etc.). You'll reference these from your app
-services using Railway's variable-reference syntax.
+Procrastinate stores task queue + periodic-schedule state in the same
+Neon Postgres database the rest of the app uses — the bundled Alembic
+migration installs its tables on first `alembic upgrade head`. Skip
+straight to §4.
 
 ---
 
@@ -107,9 +106,6 @@ AGG_TEST_MODE=false
 AGG_DATABASE_URL=postgresql+asyncpg://USER:PASS@HOST/DB?ssl=require
 AGG_DATABASE_URL_SYNC=postgresql+psycopg2://USER:PASS@HOST/DB?sslmode=require
 
-# Railway Redis — variable reference fills this in at deploy time.
-AGG_REDIS_URL=${{Redis.REDIS_URL}}
-
 # Generate with: openssl rand -hex 32
 AGG_JWT_SECRET=<64 hex chars>
 
@@ -128,9 +124,6 @@ AGG_CORS_ORIGINS=https://app.example.com
 # Host-header allowlist — Railway domain + any custom domain you attach.
 # REQUIRED in prod (rejects Host-spoofed / DNS-rebinding requests).
 AGG_ALLOWED_HOSTS=aggrigator-production.up.railway.app
-
-# Optional but recommended
-AGG_SENTRY_DSN=https://<key>@sentry.io/<project>
 
 AGG_WEB_WORKERS=4
 AGG_WEB_TIMEOUT=30
@@ -209,35 +202,25 @@ with `${{shared.AGG_JWT_SECRET}}` etc. (Or just paste the raw editor
 contents into both services; less elegant but works.)
 
 Hit **Deploy**. The worker has no public ingress — it just consumes
-the queue and runs the cron schedule from
-`aggrigator.workers.settings.WorkerSettings`.
+the queue and runs the periodic schedule declared via
+`@app.periodic(...)` decorators on each task in
+`aggrigator/workers/tasks/`.
 
 ### Verify the worker is running
 
 Two ways to confirm:
 
-1. **`/ops/crons` banner** (the easy one). Load
-   `https://<your-aggregator-domain>/ops/crons` — the banner at the
-   top should show **arq worker — online** (green) within ~30 seconds
-   of the worker booting. If it shows **OFFLINE** or **STALE**, the
-   worker isn't writing its heartbeat → check the worker's
-   **Deployments → Logs**.
+1. **`/ops/crons` dashboard** (the easy one). Load
+   `https://<your-aggregator-domain>/ops/crons` — within a minute the
+   scheduled crons should start showing recent `last_run` rows. If
+   nothing fires after a scheduled tick should have hit, the worker
+   isn't connected → check **Deployments → Logs**.
 
-2. **Worker logs.** Look for the boot banner that
-   `aggrigator/workers/settings.py` prints once at startup:
-
-   ```
-   [arq-worker] booted — cron schedule registered:
-     - seed_sports         weekday=0 hour=1 minute=30 second=0
-     - seed_leagues        hour=2 minute=0 second=0
-     - ingest_due_leagues  minute=0 second=0
-     ...
-   [arq-worker] redis=redis://default:***@...  queue=arq:queue  heartbeat_every=30s
-   ```
-
-   No banner = the worker never reached its `on_startup` hook (almost
-   always missing/wrong env vars — most often `AGG_REDIS_URL` not
-   matching the one `agg-web` uses).
+2. **Worker logs.** Procrastinate logs a line per registered task at
+   boot (look for "Registering task aggrigator.* with periodic id"
+   and "Worker booted"). No registration lines = the worker never
+   imported the task modules (almost always a wrong
+   `AGG_DATABASE_URL_SYNC` value).
 
 ---
 
@@ -288,7 +271,7 @@ the response carries 5 markets or 500.
 | `AGG_INGEST_CRON_HOURS` | *(unset)* | Hour filter — e.g. `0,6,12,18` runs only every 6h. Empty = every hour. |
 | `AGG_INGEST_WINDOW_DAYS_AHEAD` | `7` | Smaller window = fewer events returned per walk. |
 | `AGG_INGEST_WINDOW_DAYS_BEHIND` | `2` | Same, for past events. Drop to 1 if you don't need to refresh post-game scores. |
-| `AGG_FULL_REFRESH_WEEKDAY` | *(unset)* | arq weekday (0=Mon…6=Sun) for daily `full_refresh`. Unset = every day. Set to `0` for Mondays only. |
+| `AGG_FULL_REFRESH_WEEKDAY` | *(unset)* | Cron weekday (0=Mon…6=Sun) for daily `full_refresh`. Unset = every day. Set to `0` for Mondays only. |
 | `AGG_SGO_QUOTA_THRESHOLD_PCT` | `90` | Skip ingest crons when usage ≥ this percent. `100` disables. |
 | `AGG_SGO_QUOTA_PACE_FLOOR_PCT` | `5` | Below this % of cap, the proportional pace check is bypassed. **Bump to 20 if a single seed is enough to trip the pacer.** |
 
@@ -369,7 +352,7 @@ env vars.
 ## 8. Railway-specific knobs
 
 - **Persistent storage**: not needed for the aggregator. Postgres lives
-  on Neon, Redis on the Railway plugin.
+  on Neon (which holds both app data and the Procrastinate queue tables).
 - **Build cache**: Railway caches Docker layers per service. Force a
   clean rebuild with **Settings → Redeploy → Skip Cache**.
 - **Logs**: Railway aggregates stdout/stderr per-service under each
@@ -377,15 +360,13 @@ env vars.
 - **Rolling deploys**: Railway honors the Dockerfile `HEALTHCHECK` (and
   the `healthcheckPath` from `railway.toml`) — old container stays up
   until the new one reports healthy on `/healthz`.
-- **Worker singleton**: keep `agg-worker` at **1 replica**. ARQ's
-  scheduler isn't HA — running two workers means two copies of every
-  cron job.
+- **Worker singleton (recommended)**: keep `agg-worker` at **1 replica**.
+  Procrastinate cooperates safely under multiple replicas (row-level
+  locks on `procrastinate_periodic_defers`) but at this volume there's
+  no reason to scale out.
 - **Web replicas**: keep `agg-web` at 1 replica unless you split out
   Alembic migrations into a separate one-shot deploy job. Two web
   replicas can race on the migration lock at startup.
-- **Internal networking**: Railway plugins (Redis) are reachable from
-  app services via the project's private network — `${{Redis.REDIS_URL}}`
-  resolves to a private hostname automatically.
 
 ---
 
@@ -496,10 +477,11 @@ hit the cap, either upgrade to Neon Launch ($19/mo), or migrate Postgres
 to the Railway plugin (~$5/mo metered) by changing the two `AGG_DATABASE_URL*`
 values.
 
-**Worker can't reach Redis**
-→ The worker's `AGG_REDIS_URL` must reference the same Redis plugin as
-`agg-web`. If you used `${{Redis.REDIS_URL}}` in both, it's automatic.
-If you typed the URL by hand, confirm the host matches.
+**Worker can't reach Postgres**
+→ The worker's `AGG_DATABASE_URL_SYNC` (used by Procrastinate via
+psycopg3) must point at the same Neon database `agg-web` uses. If the
+worker boots but no jobs ever fire, check the worker's logs for
+psycopg connection errors.
 
 **`SECURE_SSL_REDIRECT`-style infinite loop**
 → Doesn't apply (FastAPI side); but if you're behind Cloudflare in front

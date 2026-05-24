@@ -15,7 +15,9 @@ from typing import Any
 from aggrigator.config import get_settings
 from aggrigator.db import session_scope
 from aggrigator.ingest.watchdog import run_watchdog
+from aggrigator.ops.recorder import cron_run_recorder
 from aggrigator.webhooks.notify import notify_webhook_worker
+from aggrigator.workers.app import app
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +56,13 @@ async def run_lifecycle_watchdog() -> dict[str, Any]:
     return summary
 
 
-async def lifecycle_watchdog_task(ctx: dict) -> dict:
-    """ARQ-callable wrapper. Wrapped by ``cron_run_recorder`` so each run
-    lands in ``cron_run`` for /ops visibility."""
-    from aggrigator.ops.recorder import cron_run_recorder
-
-    @cron_run_recorder("lifecycle_watchdog")
-    async def _runner(ctx_):
-        return await run_lifecycle_watchdog()
-
-    return await _runner(ctx)
+# Hourly @ :45 — keeps it clear of the refresh tick at :00.
+@app.periodic(cron="45 * * * *")
+@app.task(
+    name="aggrigator.lifecycle_watchdog",
+    pass_context=True,
+    queueing_lock="lifecycle_watchdog",
+)
+@cron_run_recorder("lifecycle_watchdog")
+async def lifecycle_watchdog_task(context, timestamp: int | None = None) -> dict:
+    return await run_lifecycle_watchdog()

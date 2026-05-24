@@ -1,9 +1,9 @@
-"""Tests for the ARQ task functions.
+"""Tests for the worker task functions.
 
-We don't actually run ARQ here (that would need a Redis fixture); the task
-functions are plain async functions, so we call them directly to prove they
-do the right side-effects against a real DB. The ARQ scheduling mechanism is
-trusted to call them on its cron.
+We don't actually start a Procrastinate worker here; the task bodies (the
+``run_*`` helpers in workers/tasks/) are plain async functions, so we call
+them directly to prove they do the right side-effects against a real DB.
+Procrastinate's dispatch + scheduling is trusted to call them on cron.
 """
 
 from __future__ import annotations
@@ -164,6 +164,17 @@ async def test_run_deliver_due_retries_on_5xx(session, monkeypatch) -> None:
         return httpx.Response(503)
 
     _patch_httpx(monkeypatch, httpx.MockTransport(handler))
+
+    # Patch notify_webhook_retry to a no-op — the retry-defer path would
+    # otherwise reach into Procrastinate (which has no schema loaded in
+    # this test) when the 503 triggers an attempted re-defer.
+    async def _noop_retry(_id, _at):
+        return True
+
+    monkeypatch.setattr(
+        "aggrigator.workers.tasks.webhook_deliver.notify_webhook_retry",
+        _noop_retry,
+    )
 
     summary = await run_deliver_due()
     assert summary == {"sent": 0, "retried": 1, "failed": 0}

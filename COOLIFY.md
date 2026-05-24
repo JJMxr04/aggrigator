@@ -8,10 +8,9 @@ server reachable from the public internet and a domain pointed at it.
 
 | Service              | Type                        | Purpose                                        |
 | -------------------- | --------------------------- | ---------------------------------------------- |
-| `agg-postgres`       | Coolify resource (Postgres) | persistent DB (zfs-backed volume)              |
-| `agg-redis`          | Coolify resource (Redis)    | queue + rate limiter                           |
+| `agg-postgres`       | Coolify resource (Postgres) | persistent DB + task queue (Procrastinate)     |
 | `agg-web`            | Application (Dockerfile)    | gunicorn + uvicorn workers (the FastAPI app)   |
-| `agg-worker`         | Application (Dockerfile)    | arq (background jobs + scheduled crons)        |
+| `agg-worker`         | Application (Dockerfile)    | Procrastinate worker (background jobs + cron)  |
 
 `agg-web` and `agg-worker` are built from the **same Dockerfile in this
 repo** — they just override `CMD`. Coolify lets you do this by creating
@@ -26,10 +25,10 @@ In Coolify → **Resources**:
 
 1. Click **New Resource → Postgres** (version 18). Note the generated
    connection URL — you'll paste it into the apps below.
-2. Click **New Resource → Redis** (version 7). Note the generated URL.
 
-Both resources should be on the same Coolify project so the apps can
-reach them via the internal network.
+Procrastinate creates its task-queue tables inside this same Postgres
+on first `alembic upgrade head` — no separate broker / Redis service
+to provision.
 
 ---
 
@@ -54,7 +53,6 @@ AGG_TEST_MODE=false                      # MUST be false in prod (gates data-res
 
 AGG_DATABASE_URL=postgresql+asyncpg://<user>:<pass>@<coolify-pg-host>:5432/<db>
 AGG_DATABASE_URL_SYNC=postgresql+psycopg2://<user>:<pass>@<coolify-pg-host>:5432/<db>
-AGG_REDIS_URL=redis://<coolify-redis-host>:6379/0
 
 # Generate with: openssl rand -hex 32
 AGG_JWT_SECRET=<64 hex chars>
@@ -70,9 +68,6 @@ SPORTSGAMEODDS_API_KEY=<your real SGO key>
 # Comma-separated origins of MDProject (and any other portal that talks
 # to this aggregator). Wildcards are rejected.
 AGG_CORS_ORIGINS=https://app.example.com
-
-# Optional but recommended
-AGG_SENTRY_DSN=https://<key>@sentry.io/<project>
 
 AGG_WEB_WORKERS=4
 AGG_WEB_TIMEOUT=30
@@ -123,9 +118,10 @@ Git source, **same** Dockerfile):
 - **Custom CMD**: `worker`
 - **Health check**: disable, or use a custom command if you want one.
 
-Same env vars as `agg-web` (it shares the DB + Redis + secrets). The
-ARQ worker bootstraps the cron schedule from
-`aggrigator.workers.settings.WorkerSettings`.
+Same env vars as `agg-web` (it shares the DB + secrets). The
+Procrastinate worker loads the periodic schedule by importing every
+task module — the registrations live as `@app.periodic(cron=...)`
+decorators on each task function.
 
 Hit **Deploy**. The worker has no public ingress — it just consumes the
 queue.
@@ -171,8 +167,10 @@ sets up the league refresh cadence.
 - **Rolling deploys**: Coolify uses the Dockerfile's HEALTHCHECK — old
   container stays up until the new one reports healthy on `/healthz`.
 - **Multi-region / horizontal scale**: bump replicas in the app's
-  **Resource limits**. Web is stateless; the worker should stay at
-  replicas=1 (ARQ scheduler isn't HA).
+  **Resource limits**. Web is stateless; the worker can scale to
+  multiple replicas safely (Procrastinate's periodic scheduler uses
+  row-level locks on `procrastinate_periodic_defers` to cooperate)
+  but at this app's volume there's no reason to.
 
 ---
 

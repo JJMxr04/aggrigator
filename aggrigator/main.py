@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
-from redis.asyncio import Redis
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -28,9 +27,9 @@ from aggrigator.config import get_settings
 from aggrigator.db import engine
 from aggrigator.observability.logging import configure_logging
 from aggrigator.observability.prometheus import register_metrics
-from aggrigator.observability.sentry import init_sentry
 from aggrigator.ops import api as ops_api_router
 from aggrigator.ops import routes as ops_routes_router
+from aggrigator.workers.app import app as procrastinate_app
 
 logger = logging.getLogger(__name__)
 
@@ -39,33 +38,6 @@ logger = logging.getLogger(__name__)
 # way to catch "operator forgot to set the env var" before it bites in
 # production. Kept in sync with aggrigator/config.py defaults.
 _DEFAULT_JWT_SECRET = "dev-only-change-me"
-_DEFAULT_REDIS_URL = "redis://localhost:6379/0"
-
-
-async def _probe_redis(redis_url: str) -> None:
-    """PING the configured Redis. ALWAYS non-fatal — even URL-parsing
-    errors are caught here. Crashing the lifespan on a bad env var means
-    the operator can't reach /healthz to debug; instead we log loudly
-    and let the app boot.
-    """
-    r = None
-    try:
-        r = Redis.from_url(redis_url, decode_responses=True)
-        ok = await r.ping()
-        logger.info("[startup] redis ping ok=%s url=%s", ok, _redacted(redis_url))
-    except Exception as exc:  # noqa: BLE001 — never fatal at startup
-        logger.error(
-            "[startup] redis ping FAILED url=%s err=%s: %s — "
-            "cron triggers will 503 until this is fixed. Check AGG_REDIS_URL "
-            "(must start with redis:// or rediss://).",
-            _redacted(redis_url), type(exc).__name__, exc,
-        )
-    finally:
-        if r is not None:
-            try:
-                await r.aclose()
-            except Exception:  # noqa: BLE001
-                pass
 
 
 async def _probe_db() -> None:
@@ -92,9 +64,6 @@ def _redacted(url: str) -> str:
     creds, host = rest.split("@", 1)
     user = creds.split(":", 1)[0] if ":" in creds else creds
     return f"{scheme}://{user}:***@{host}"
-
-
-_REDIS_VALID_SCHEMES = ("redis://", "rediss://", "unix://")
 
 
 class InsecureProductionConfig(RuntimeError):
@@ -148,27 +117,9 @@ def _warn_on_misconfig(settings) -> None:
     NOT checked here because they're already fatal in prod — see
     ``_enforce_prod_secrets``.
     """
-    # URL-shape checks fire in any env (dev too) — a malformed URL is a
-    # bug regardless of where you're running.
-    if settings.redis_url and not settings.redis_url.startswith(_REDIS_VALID_SCHEMES):
-        logger.error(
-            "[startup] AGG_REDIS_URL has no valid scheme (got %r) — "
-            "must start with redis://, rediss://, or unix://. "
-            "Common cause: variable reference like ${{Redis.REDIS_URL}} "
-            "didn't resolve (Redis plugin name may not match) so the "
-            "value got set to a literal string or empty.",
-            settings.redis_url[:60],
-        )
-
     is_prod = settings.env in ("prod", "production")
     if not is_prod:
         return
-    if settings.redis_url == _DEFAULT_REDIS_URL:
-        logger.warning(
-            "[startup] AGG_REDIS_URL is the localhost default in prod — "
-            "cron triggers will 503. Set ${{Redis.REDIS_URL}} from the "
-            "Railway Redis plugin."
-        )
     if not settings.allowed_hosts_list:
         logger.warning(
             "[startup] AGG_ALLOWED_HOSTS is empty in prod — Host-header "
@@ -195,6 +146,7 @@ async def _lifespan(app: FastAPI):
     # catch-all means a bug in the boot logic can never take the app
     # down. If something raises, gunicorn's worker stays up and we lose
     # only the diagnostic line — better than no service.
+    procrastinate_opened = False
     try:
         settings = get_settings()
         logger.info(
@@ -203,11 +155,33 @@ async def _lifespan(app: FastAPI):
         )
         _warn_on_misconfig(settings)
         await _probe_db()
-        await _probe_redis(settings.redis_url)
+        # Open the Procrastinate connection pool once per FastAPI process.
+        # Required for ``task.defer_async()`` calls from the orchestrator +
+        # watchdog (push-on-write webhook notifications). If this fails we
+        # log and continue — defer_async will surface its own error if hit,
+        # which is preferable to refusing to serve traffic.
+        try:
+            await procrastinate_app.open_async()
+            procrastinate_opened = True
+            logger.info("[startup] procrastinate app pool opened")
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "[startup] procrastinate open_async FAILED %s: %s — "
+                "task defers will error until this is fixed.",
+                type(exc).__name__, exc,
+            )
     except Exception as exc:  # noqa: BLE001 — never fail startup
         logger.exception("[startup] lifespan probe crashed: %s", exc)
     yield
     logger.info("[shutdown] aggrigator stopping")
+    if procrastinate_opened:
+        try:
+            await procrastinate_app.close_async()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[shutdown] procrastinate close_async failed %s: %s",
+                type(exc).__name__, exc,
+            )
 
 
 def create_app() -> FastAPI:
@@ -215,7 +189,6 @@ def create_app() -> FastAPI:
     is_prod = settings.env in ("prod", "production")
 
     configure_logging(settings.log_level)
-    init_sentry(settings)
 
     # Fail-closed on default secrets in prod — raises before the app
     # starts serving. Better an immediate boot-loop than a quietly

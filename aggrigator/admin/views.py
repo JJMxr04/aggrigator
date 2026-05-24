@@ -335,7 +335,7 @@ class CronRunView(ModelView, model=CronRun):
         "id", "cron_name", "trigger_source", "started_at", "finished_at",
         "status", "items_processed",
     ]
-    column_searchable_list = ["cron_name", "arq_job_id"]
+    column_searchable_list = ["cron_name", "job_id"]
     column_sortable_list = ["started_at", "cron_name", "status"]
     can_create = False
     can_edit = False

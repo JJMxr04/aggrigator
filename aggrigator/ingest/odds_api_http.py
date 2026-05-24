@@ -77,7 +77,7 @@ _APIKEY_RE = re.compile(r"(apiKey=)[^&\s]+")
 
 def redact_api_key(url_or_msg: str) -> str:
     """Strip ``apiKey=<value>`` from a URL or log message. Cheap defense
-    against accidental key leakage in deploy logs / Sentry / proxies."""
+    against accidental key leakage in deploy logs / proxies."""
     return _APIKEY_RE.sub(r"\1REDACTED", url_or_msg)
 
 

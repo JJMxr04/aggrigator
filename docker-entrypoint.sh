@@ -4,7 +4,8 @@
 # background worker by overriding ``Custom CMD``.
 #
 #   web    — apply DB migrations then start gunicorn (FastAPI)
-#   worker — start arq (consumes the queue + cron schedule)
+#   worker — start the Procrastinate worker (task execution +
+#            in-process periodic scheduler)
 #   migrate-only — run alembic and exit (one-shot job)
 #   anything else — exec it directly (debugging: e.g. ``sh``, ``python -i``)
 set -e
@@ -43,8 +44,18 @@ case "$ROLE" in
     ;;
 
   worker)
-    echo "[entrypoint] starting arq worker..."
-    exec arq aggrigator.workers.settings.WorkerSettings
+    echo "[entrypoint] starting procrastinate worker..."
+    # Migrations run on the web container; the worker waits for that to
+    # finish via the dependency setting in docker-compose / Coolify. We do
+    # NOT re-run them here — racing two services for the schema lock is
+    # the leading cause of "migrate hangs forever" reports.
+    #
+    # --concurrency tunes how many jobs run in parallel within this
+    # process. Procrastinate uses Postgres LISTEN/NOTIFY for push-based
+    # job delivery (no polling), so small concurrency is plenty for this
+    # app's volume.
+    exec procrastinate -a aggrigator.workers.app.app worker \
+        --concurrency "${AGG_WORKER_CONCURRENCY:-2}"
     ;;
 
   migrate-only)

@@ -41,9 +41,6 @@ class Settings(BaseSettings):
         alias="AGG_DATABASE_URL_SYNC",
     )
 
-    # redis — Homebrew default. docker-compose uses 6380 to coexist.
-    redis_url: str = Field(default="redis://localhost:6379/0", alias="AGG_REDIS_URL")
-
     # --- odds-api.io ---
     # Base URL is hardcoded in aggrigator/ingest/odds_api_http.py as the
     # OddsApiHttpClient kwarg default — there is no env override.
@@ -124,9 +121,6 @@ class Settings(BaseSettings):
     # are honored by Starlette.
     allowed_hosts: str = Field(default="", alias="AGG_ALLOWED_HOSTS")
 
-    # observability
-    sentry_dsn: str = Field(default="", alias="AGG_SENTRY_DSN")
-
     # FastAPI's auto-generated /docs, /redoc, /openapi.json. OFF BY
     # DEFAULT — they leak the full route + schema graph, which is recon
     # material for any unauthenticated probe. Flip to True only when
@@ -135,9 +129,9 @@ class Settings(BaseSettings):
     docs_enabled: bool = Field(default=False, alias="AGG_DOCS_ENABLED")
 
     # --- ingest window (storage + quota tuning) ---
-    # Cron times are hardcoded in workers/settings.py — see the schedule
-    # block there. To change cadence, edit that file and redeploy (cadence
-    # is product policy, not infra knob).
+    # Cron times are hardcoded next to each task in workers/tasks/ via
+    # ``@app.periodic(cron=...)``. To change cadence, edit that decorator
+    # and redeploy (cadence is product policy, not infra knob).
     #
     # ``ingest_due_leagues`` only walks events whose ``start_time`` falls
     # in [now - days_behind, now + days_ahead]. Cuts both directions of cost:

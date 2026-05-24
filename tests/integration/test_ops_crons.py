@@ -2,7 +2,7 @@
 
 Covers:
 - Manual trigger writes a ``cron_run`` row + runs the cron + records summary
-- A second trigger while one is in flight gets 409
+- A second trigger while one is in flight gets 409 (Postgres advisory lock)
 - The list endpoint returns every registered cron with last_run
 - The history endpoint paginates newest-first
 - The HTMX HTML routes refuse non-admin sessions
@@ -15,17 +15,13 @@ real cron tasks running against the local odds simulator.
 from __future__ import annotations
 
 import asyncio
-import os
-import uuid
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from aggrigator.models import CronRun, User, UserRole
-from aggrigator.ops.registry import CronSpec
 from aggrigator.security.passwords import hash_password
 from tests.integration.factories import login_and_get_token
 
@@ -56,53 +52,6 @@ async def _admin_token(client: AsyncClient, session) -> str:
     return r.json()["access_token"]
 
 
-# Lightweight in-memory Redis stub used by the trigger path. The aggregator
-# code calls ``Redis.from_url(...)``; we monkeypatch that at module import to
-# return our stub so tests don't need a real Redis connection.
-class _InMemoryRedis:
-    def __init__(self) -> None:
-        self.store: dict[str, str] = {}
-        self.closed = False
-
-    @classmethod
-    def from_url(cls, _url: str, **_kw):
-        return cls()
-
-    async def set(self, key, value, *, nx=False, ex=None):
-        if nx and key in self.store:
-            return False
-        self.store[key] = value
-        return True
-
-    async def eval(self, script, num_keys, *args):
-        key, val = args[0], args[1]
-        if self.store.get(key) == val:
-            del self.store[key]
-            return 1
-        return 0
-
-    async def exists(self, key):
-        return 1 if key in self.store else 0
-
-    async def aclose(self):
-        self.closed = True
-
-
-@pytest.fixture
-def stub_redis(monkeypatch):
-    """Patch the Redis import sites the ops module uses so no live Redis is
-    needed. One stub instance is shared across api.py + routes.py + service.py
-    so the lock works transitively."""
-    instance = _InMemoryRedis()
-
-    def _factory(_url, **_kw):
-        return instance
-
-    monkeypatch.setattr("aggrigator.ops.api.Redis.from_url", _factory)
-    monkeypatch.setattr("aggrigator.ops.routes.Redis.from_url", _factory)
-    return instance
-
-
 # ---- list / detail ---------------------------------------------------------
 
 
@@ -119,7 +68,7 @@ async def test_list_crons_rejects_non_admin(client, session) -> None:
     assert r.status_code == 403
 
 
-async def test_list_crons_returns_registered(client, session, stub_redis) -> None:
+async def test_list_crons_returns_registered(client, session) -> None:
     token = await _admin_token(client, session)
     r = await client.get(
         "/v1/admin/crons", headers={"Authorization": f"Bearer {token}"}
@@ -131,13 +80,14 @@ async def test_list_crons_returns_registered(client, session, stub_redis) -> Non
     assert "ingest_due_leagues" in names
     assert "webhook_deliver" in names
     assert "settle_pending" in names
-    assert "seed_sports_and_leagues" in names
+    assert "seed_sports" in names
+    assert "seed_leagues" in names
     # No last_run yet — fresh DB.
     assert all(it["last_run"] is None for it in body)
     assert all(it["is_running"] is False for it in body)
 
 
-async def test_get_cron_404_for_unknown(client, session, stub_redis) -> None:
+async def test_get_cron_404_for_unknown(client, session) -> None:
     token = await _admin_token(client, session)
     r = await client.get(
         "/v1/admin/crons/does-not-exist",
@@ -150,7 +100,7 @@ async def test_get_cron_404_for_unknown(client, session, stub_redis) -> None:
 
 
 async def test_trigger_writes_cron_run_row(
-    client, session, stub_redis, monkeypatch,
+    client, session, monkeypatch,
 ) -> None:
     """Patch the cron's runner to a stub so the test doesn't depend on real
     provider calls. Confirm the row lands with status=success and the summary."""
@@ -189,7 +139,7 @@ async def test_trigger_writes_cron_run_row(
 
 
 async def test_trigger_records_failure_with_error(
-    client, session, stub_redis, monkeypatch,
+    client, session, monkeypatch,
 ) -> None:
     token = await _admin_token(client, session)
 
@@ -213,7 +163,49 @@ async def test_trigger_records_failure_with_error(
     assert "simulated explosion" in (body.get("error_excerpt") or "")
 
 
-async def test_trigger_unknown_cron_404(client, session, stub_redis) -> None:
+async def test_trigger_409_when_advisory_lock_held(
+    client, session, monkeypatch,
+) -> None:
+    """Two concurrent triggers — the second hits the Postgres advisory
+    lock held by the first and gets a 409 Conflict (the same UX the old
+    Redis lock provided). Uses a sleep-based runner to make the race
+    deterministic without timing assumptions."""
+    token = await _admin_token(client, session)
+
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def _slow_runner():
+        started.set()
+        await finish.wait()
+        return {"events_processed": 1}
+
+    from aggrigator.ops import registry as reg
+    target = next(s for s in reg.REGISTRY if s.name == "ingest_due_leagues")
+    monkeypatch.setattr(target, "runner", _slow_runner, raising=False)
+
+    # First request — held open until we set ``finish``.
+    first = asyncio.create_task(
+        client.post(
+            "/v1/admin/crons/ingest_due_leagues/run",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    )
+    await started.wait()  # ensures the advisory lock is acquired
+
+    # Second request — should 409 because the lock is held.
+    second = await client.post(
+        "/v1/admin/crons/ingest_due_leagues/run",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert second.status_code == 409
+
+    finish.set()
+    first_response = await first
+    assert first_response.status_code == 200
+
+
+async def test_trigger_unknown_cron_404(client, session) -> None:
     token = await _admin_token(client, session)
     r = await client.post(
         "/v1/admin/crons/nope/run",
@@ -231,7 +223,7 @@ async def test_trigger_requires_admin(client) -> None:
 
 
 async def test_history_returns_newest_first(
-    client, session, stub_redis, monkeypatch,
+    client, session, monkeypatch,
 ) -> None:
     token = await _admin_token(client, session)
 
@@ -264,7 +256,7 @@ async def test_history_returns_newest_first(
 
 
 async def test_run_detail_returns_full_summary(
-    client, session, stub_redis, monkeypatch,
+    client, session, monkeypatch,
 ) -> None:
     token = await _admin_token(client, session)
 
@@ -288,3 +280,42 @@ async def test_run_detail_returns_full_summary(
     assert r.status_code == 200
     body = r.json()
     assert body["summary"] == {"events_processed": 12, "events_failed": 1, "leagues": 3}
+
+
+# ---- pause / resume -------------------------------------------------------
+
+
+async def test_pause_resume_toggle_persists(client, session) -> None:
+    """Pause then resume — confirm the dashboard list reports the new
+    ``enabled`` state on each step. (The scheduled-fire-skips-while-paused
+    behavior is covered by the recorder unit tests.)"""
+    token = await _admin_token(client, session)
+
+    r = await client.post(
+        "/v1/admin/crons/seed_sports/enabled",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"enabled": False},
+    )
+    assert r.status_code == 200
+    assert r.json()["enabled"] is False
+
+    r = await client.post(
+        "/v1/admin/crons/seed_sports/enabled",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"enabled": True},
+    )
+    assert r.status_code == 200
+    assert r.json()["enabled"] is True
+
+
+async def test_pause_rejected_for_manual_only_cron(client, session) -> None:
+    """Manual-only crons (full_refresh, webhook_deliver, load_registry)
+    aren't on the periodic schedule, so toggling them would silently
+    have no effect. Refuse with 409 so the UI never shows a stale state."""
+    token = await _admin_token(client, session)
+    r = await client.post(
+        "/v1/admin/crons/full_refresh/enabled",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"enabled": False},
+    )
+    assert r.status_code == 409

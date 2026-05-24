@@ -1,5 +1,5 @@
-"""``cron_run`` write helpers — used by both ARQ scheduled runs and manual
-trigger paths so every execution lands in the same table.
+"""``cron_run`` write helpers — used by both the Procrastinate worker and the
+manual trigger path so every execution lands in the same table.
 
 Two entry points:
 
@@ -7,15 +7,20 @@ Two entry points:
   shape — opens a cron_run row, calls ``spec.runner()``, marks success/failure,
   truncates errors, returns the resulting CronRun row.
 
-- ``cron_run_recorder(spec_name)``: ARQ-task decorator that wraps a scheduled
-  task body in the same machinery. The wrapper looks up the spec from the
-  registry and delegates to ``run_with_recording`` with
-  ``trigger_source='scheduled'``.
+- ``cron_run_recorder(spec_name)``: decorator wrapped around each Procrastinate
+  task body so scheduled executions write the same kind of row as manual
+  triggers. The wrapper looks up the spec from the registry and delegates to
+  ``run_with_recording`` with ``trigger_source='scheduled'``.
+
+Retry policy lives on the task itself via ``@app.task(retry=RetryStrategy(...))``
+— this decorator just re-raises retryable exceptions so Procrastinate's
+strategy decides whether to schedule another attempt. That keeps the retry
+math next to the task declaration where someone editing the cadence will see
+it, instead of behind a decorator wrapper.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import traceback
 import uuid
@@ -23,36 +28,18 @@ from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Awaitable, Callable
 
-import redis.exceptions as _redis_exc
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aggrigator.db import session_scope
-from aggrigator.ingest.odds_api_errors import RateLimitExceededError
 from aggrigator.models import CronRun, CronRunSource, CronRunStatus, CronSchedule
-from aggrigator.ops.registry import CronSpec, by_name
+
+if False:  # TYPE_CHECKING guard — avoid the circular import at runtime
+    from aggrigator.ops.registry import CronSpec
 
 logger = logging.getLogger(__name__)
 
 ERROR_TRUNCATE_CHARS = 4000
-
-# Errors a retry might actually fix. Anything outside this set
-# (ValidationError, InvalidApiKeyError, programming bugs, etc.) is
-# terminal — retrying just burns API quota and worker slots.
-#
-# - asyncio.TimeoutError: arq's job_timeout fired or upstream stalled.
-# - RateLimitExceededError: per-hour bucket exhausted; defers past reset.
-# - redis.RedisError + ConnectionError: transient infra hiccup on the
-#   arq queue / lock path.
-RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
-    asyncio.TimeoutError,
-    RateLimitExceededError,
-    _redis_exc.RedisError,
-    _redis_exc.ConnectionError,
-)
-# Default deferral for an auto-retry. Five minutes is long enough for a
-# Redis blip to clear and short enough that the next scheduled tick
-# doesn't beat us to it on hourly crons.
-DEFAULT_RETRY_DEFER_SECONDS = 300
 
 
 async def _scheduled_run_enabled(cron_name: str) -> bool:
@@ -79,17 +66,17 @@ async def _scheduled_run_enabled(cron_name: str) -> bool:
 
 async def open_run(
     session: AsyncSession,
-    spec: CronSpec,
+    spec: "CronSpec",
     *,
     trigger_source: str,
     started_by_user_id: uuid.UUID | None,
-    arq_job_id: str,
+    job_id: str,
 ) -> CronRun:
     row = CronRun(
         cron_name=spec.name,
         trigger_source=trigger_source,
         started_by_user_id=started_by_user_id,
-        arq_job_id=arq_job_id,
+        job_id=job_id,
         status=CronRunStatus.RUNNING,
     )
     session.add(row)
@@ -125,19 +112,14 @@ async def close_run(
 
 
 async def run_with_recording(
-    spec: CronSpec,
+    spec: "CronSpec",
     *,
     trigger_source: str,
     started_by_user_id: uuid.UUID | None = None,
-    arq_job_id: str | None = None,
+    job_id: str | None = None,
 ) -> tuple[CronRun, dict | None, BaseException | None]:
-    """Runs ``spec.runner()`` and writes a ``cron_run`` row on either path.
-
-    The caller is responsible for the Redis lock (§2.1.6) — this function
-    deliberately does NOT acquire it, because both the manual-trigger path
-    and the ARQ scheduled path need it but acquire it at different layers.
-    """
-    aji = arq_job_id or str(uuid.uuid4())
+    """Runs ``spec.runner()`` and writes a ``cron_run`` row on either path."""
+    jid = job_id or str(uuid.uuid4())
     summary: dict | None = None
     error: BaseException | None = None
 
@@ -146,7 +128,7 @@ async def run_with_recording(
             session, spec,
             trigger_source=trigger_source,
             started_by_user_id=started_by_user_id,
-            arq_job_id=aji,
+            job_id=jid,
         )
         await session.commit()
         run_id = row.id
@@ -162,8 +144,9 @@ async def run_with_recording(
 
     if error is not None:
         logger.error("cron run failed: cron=%s run_id=%s", spec.name, run_id)
-        # Re-raise so ARQ marks the job failed too. Manual-trigger callers
-        # catch this themselves to surface the error in the API response.
+        # Re-raise so Procrastinate marks the job failed too (and its retry
+        # strategy decides whether to schedule another attempt). Manual-trigger
+        # callers catch this themselves to surface the error in the API.
         raise error
 
     logger.info("cron run ok: cron=%s run_id=%s", spec.name, run_id)
@@ -172,38 +155,44 @@ async def run_with_recording(
 
 def cron_run_recorder(
     spec_name: str,
-    *,
-    retryable: bool = False,
-    retry_defer_seconds: int = DEFAULT_RETRY_DEFER_SECONDS,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
-    """Decorator for ARQ task bodies — wraps them with cron_run recording.
+    """Wrap a Procrastinate task body in cron_run recording + the pause gate.
 
-    When ``retryable=True``, transient failures (see ``RETRYABLE_EXCEPTIONS``)
-    are converted into ``arq.worker.Retry(defer=retry_defer_seconds)`` IF the
-    cron's ``max_tries`` budget allows another attempt. The cron_run row is
-    still written by ``run_with_recording`` so the failure is visible in
-    /ops/crons; arq enqueues a fresh job for the retry. Per-league commits
-    in the orchestrator mean the retry naturally picks up where the
-    original left off (already-finished leagues are cheap UPSERTs).
+    Scheduled runs hit this; manual triggers go through
+    ``CronService.trigger`` which calls ``run_with_recording`` directly
+    and bypasses this wrapper (manual Run-now still works on paused
+    crons by design).
 
-    Terminal failures (ValidationError, InvalidApiKeyError, bugs) and
-    arq.CronJobs without a retry budget propagate unchanged — re-raised so
-    arq marks the job failed.
+    Retry math lives in the ``@app.task(retry=RetryStrategy(...))`` decorator
+    on the task itself — Procrastinate consults the strategy on raise. This
+    wrapper just records the attempt and re-raises so the strategy fires.
 
     Usage::
 
-        @cron_run_recorder("ingest_due_leagues", retryable=True)
-        async def ingest_due_leagues_task(ctx):
+        @app.periodic(cron="30 2 * * *")
+        @app.task(name="aggrigator.ingest_due_leagues",
+                  pass_context=True,
+                  queueing_lock="ingest_due_leagues",
+                  retry=RetryStrategy(max_attempts=2, wait=300,
+                                       retry_exceptions=(asyncio.TimeoutError,
+                                                          RateLimitExceededError)))
+        @cron_run_recorder("ingest_due_leagues")
+        async def ingest_due_leagues_task(context):
             ...
     """
-    spec = by_name(spec_name)
-    if spec is None:
-        raise ValueError(f"Unknown cron spec: {spec_name}")
-
     def _decorate(fn: Callable[..., Awaitable[Any]]):
         @wraps(fn)
-        async def _wrapped(ctx: dict, *args, **kwargs):
-            ctx = ctx or {}
+        async def _wrapped(*args, **kwargs):
+            # Lazy imports — the registry imports the task modules to build
+            # CronSpec entries, which would cycle if we resolved at module
+            # import / decorator-apply time. By call time the cycle is
+            # closed (every module fully loaded) and the lookup is cheap.
+            from aggrigator.ops.registry import by_name
+            from aggrigator.ops.service import _advisory_key
+
+            spec = by_name(spec_name)
+            if spec is None:
+                raise ValueError(f"Unknown cron spec: {spec_name}")
             # Pause gate (cron_schedule.enabled, /ops/crons toggle). If an
             # operator has flipped the cron off, skip the run entirely —
             # no cron_run row, no provider calls. A disabled cron should
@@ -215,55 +204,44 @@ def cron_run_recorder(
                     spec_name,
                 )
                 return {"skipped": True, "reason": "disabled"}
-            # arq's ctx["job_id"] is the queue-time id — fine for tracing,
-            # but NOT unique per execution when callers use a fixed
-            # coalescing `_job_id` (e.g. webhook_deliver:due, which the
-            # orchestrator + watchdog reuse so concurrent push-on-write
-            # calls dedupe into one queued job). The cron_run unique
-            # index on arq_job_id then rejects the second firing's
-            # INSERT. Suffix a short uuid token so each execution gets
-            # its own arq_job_id while keeping the original id as a
-            # searchable prefix in the admin / /ops UI.
-            base_id = ctx.get("job_id")
-            if base_id:
-                # Reserve 9 chars for "#xxxxxxxx" so the suffix is never
-                # truncated away — uniqueness is what matters.
-                max_base = 64 - 9
-                arq_job_id = f"{base_id[:max_base]}#{uuid.uuid4().hex[:8]}"
-            else:
-                arq_job_id = str(uuid.uuid4())
-            try:
-                _, summary, _ = await run_with_recording(
-                    spec,
-                    trigger_source=CronRunSource.SCHEDULED,
-                    arq_job_id=arq_job_id,
+
+            # Procrastinate hands the task body a ``context`` keyword arg
+            # when the task is decorated with ``pass_context=True``. The
+            # job's row ID is unique per attempt, which is exactly what
+            # the cron_run.job_id unique index wants.
+            context = kwargs.get("context") or (args[0] if args else None)
+            base_id = getattr(getattr(context, "job", None), "id", None)
+            job_id = f"procrastinate-{base_id}" if base_id else str(uuid.uuid4())
+
+            # Mutex with the manual-trigger path (CronService.trigger).
+            # Manual runs execute inline in the FastAPI worker and hold
+            # this advisory lock for the duration; if the scheduler fires
+            # while one is in flight, we skip rather than racing the
+            # inline run. The lock is released when ``lock_session`` exits.
+            lock_key = _advisory_key(spec_name)
+            async with session_scope() as lock_session:
+                got = await lock_session.scalar(
+                    text("SELECT pg_try_advisory_lock(:k)"),
+                    {"k": lock_key},
                 )
-            except RETRYABLE_EXCEPTIONS as exc:
-                if not retryable:
-                    raise
-                # ctx["job_try"] is 1-indexed; ctx["max_tries"] is the
-                # budget arq passed in (set per-cron in workers/settings.py).
-                # If neither is present we're outside an arq context (test
-                # harness, manual call) so just re-raise.
-                job_try = ctx.get("job_try")
-                max_tries = ctx.get("max_tries")
-                if job_try is None or max_tries is None:
-                    raise
-                if job_try >= max_tries:
-                    logger.warning(
-                        "cron %s: transient failure on final try %d/%d — "
-                        "giving up, will wait for next scheduled tick (%s)",
-                        spec_name, job_try, max_tries, type(exc).__name__,
+                if not got:
+                    logger.info(
+                        "cron %s: scheduled tick skipped — a manual run "
+                        "is in flight (advisory lock held)",
+                        spec_name,
                     )
-                    raise
-                from arq.worker import Retry  # local import — keeps cold-start light
-                logger.warning(
-                    "cron %s: transient failure on try %d/%d — deferring "
-                    "%ds for retry (%s: %s)",
-                    spec_name, job_try, max_tries, retry_defer_seconds,
-                    type(exc).__name__, exc,
-                )
-                raise Retry(defer=retry_defer_seconds)
+                    return {"skipped": True, "reason": "manual_in_flight"}
+                try:
+                    _, summary, _ = await run_with_recording(
+                        spec,
+                        trigger_source=CronRunSource.SCHEDULED,
+                        job_id=job_id,
+                    )
+                finally:
+                    await lock_session.execute(
+                        text("SELECT pg_advisory_unlock(:k)"),
+                        {"k": lock_key},
+                    )
             return summary
 
         return _wrapped

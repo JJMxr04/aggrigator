@@ -35,6 +35,8 @@ from aggrigator.config import get_settings
 from aggrigator.db import session_scope
 from aggrigator.ingest.lifecycle import TERMINAL_STATUSES
 from aggrigator.models.event import Event
+from aggrigator.ops.recorder import cron_run_recorder
+from aggrigator.workers.app import app
 
 logger = logging.getLogger(__name__)
 
@@ -112,15 +114,15 @@ async def run_vacuum_old_events() -> dict[str, Any]:
     }
 
 
-# ---- ARQ entry point -------------------------------------------------------
+# ---- Procrastinate entry point --------------------------------------------
 
 
-async def vacuum_old_events_task(ctx: dict) -> dict:
-    """ARQ-callable wrapper. Records each scheduled run in ``cron_run``."""
-    from aggrigator.ops.recorder import cron_run_recorder
-
-    @cron_run_recorder("vacuum_old_events")
-    async def _runner(ctx_):
-        return await run_vacuum_old_events()
-
-    return await _runner(ctx)
+@app.periodic(cron="0 4 * * *")
+@app.task(
+    name="aggrigator.vacuum_old_events",
+    pass_context=True,
+    queueing_lock="vacuum_old_events",
+)
+@cron_run_recorder("vacuum_old_events")
+async def vacuum_old_events_task(context, timestamp: int | None = None) -> dict:
+    return await run_vacuum_old_events()

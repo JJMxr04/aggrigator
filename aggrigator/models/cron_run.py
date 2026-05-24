@@ -1,7 +1,8 @@
 """``cron_run`` — append-only record of every cron execution (scheduled or manual).
 
-Per plan §2.1.4. Both the ARQ wrapper (`cron_run_recorder`) and manual triggers
-write rows here; the operator UI reads them.
+Both the Procrastinate task wrapper (`cron_run_recorder`) and manual triggers
+write rows here; the operator UI reads them. ``job_id`` holds the Procrastinate
+job row ID for scheduled runs, a UUID for manual triggers.
 """
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ class CronRun(Base):
             "cron_name",
             postgresql_where="status = 'running'",
         ),
-        Index("ix_cron_run_arq_job_id", "arq_job_id", unique=True),
+        Index("ix_cron_run_job_id", "job_id", unique=True),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -51,7 +52,7 @@ class CronRun(Base):
         ForeignKey("auth_user.id", ondelete="SET NULL"),
         nullable=True,
     )
-    arq_job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default="now()"
     )
