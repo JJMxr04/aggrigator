@@ -30,7 +30,7 @@ from aggrigator.ingest.upserts import (
     upsert_event_from_spec,
     upsert_team_from_spec,
 )
-from aggrigator.models import Event, League, Sport
+from aggrigator.models import Event, League, Sport, WebhookDelivery
 from aggrigator.webhooks.enqueue import enqueue_for_event
 from aggrigator.webhooks.notify import notify_webhook_worker
 
@@ -134,14 +134,47 @@ async def ingest_event(
         and prev.away_score == spec.away_score
     )
     if finalized_stable:
+        # Backstop: if a past ingest hit this branch and returned NONE
+        # before any delivery row was ever inserted (e.g. AGG_MDPROJECT_URL
+        # was unset at the time, so ``enqueue_for_event`` silently dropped),
+        # the event is stranded — every subsequent walk would also hit this
+        # cheap exit and ``decide_transition`` would also return NONE
+        # (finished → finished, scores unchanged). Confirm at least one
+        # delivery row exists for this event; if not, fire one synthetic
+        # FINALIZED enqueue now (markets + grades are already correct
+        # from the original finalize walk, so the cheap-exit skip of
+        # write_markets / grading remains valid).
+        from sqlalchemy import select  # local — keeps top-level light
+        has_delivery = (await session.scalars(
+            select(WebhookDelivery.id)
+            .where(WebhookDelivery.event_id == event.id)
+            .limit(1)
+        )).first() is not None
+        if has_delivery:
+            return IngestResult(
+                event=event,
+                transition=Transition.NONE,
+                selections_written=0,
+                selections_graded=0,
+                selections_computed=0,
+                selections_voided=0,
+                deliveries_enqueued=0,
+            )
+        logger.warning(
+            "Stranded finalized event detected: %s has no webhook_delivery "
+            "row — synthesizing FINALIZED enqueue.", event.id,
+        )
+        deliveries = await enqueue_for_event(
+            session, event, Transition.FINALIZED,
+        )
         return IngestResult(
             event=event,
-            transition=Transition.NONE,
+            transition=Transition.FINALIZED,
             selections_written=0,
             selections_graded=0,
             selections_computed=0,
             selections_voided=0,
-            deliveries_enqueued=0,
+            deliveries_enqueued=len(deliveries),
         )
 
     selections_written = await write_markets(session, event, spec.markets)
