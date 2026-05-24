@@ -13,6 +13,12 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# Hardcoded path on the MDProject receiver — see
+# ``MDProject/CoreRoot/urls.py`` (``path('sportgameodds/webhook', ...)``).
+# Operator sets ``AGG_MDPROJECT_URL`` to the base URL and we append this.
+MDPROJECT_WEBHOOK_PATH = "/sportgameodds/webhook"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -82,14 +88,23 @@ class Settings(BaseSettings):
         default=14 * 24 * 3600, alias="AGG_JWT_REFRESH_TTL_SECONDS"
     )
 
-    # Outbound webhook delivery target. Single hardcoded receiver
-    # (MDProject) — there is no per-tenant webhook subscription. Empty
-    # default so dev boots without one; the dispatcher logs and skips
-    # delivery if unset.
-    webhook_target_url: str = Field(default="", alias="AGG_WEBHOOK_TARGET_URL")
+    # Base URL of the MDProject receiver, e.g.
+    # ``https://mdproject-production.up.railway.app``. The actual webhook
+    # path (``MDPROJECT_WEBHOOK_PATH``) is hardcoded — operator only configures
+    # the host. Empty default so dev boots without one; the dispatcher logs
+    # and skips delivery if unset.
+    mdproject_url: str = Field(default="", alias="AGG_MDPROJECT_URL")
     # HMAC-SHA256 secret shared with MDProject's AGGRIGATOR_WEBHOOK_SECRET.
     # Used by aggrigator/security/webhook_signing.sign() at delivery time.
     webhook_secret: str = Field(default="", alias="AGG_WEBHOOK_SECRET")
+
+    @property
+    def webhook_target_url(self) -> str:
+        """Full URL to POST webhooks to. Derived from ``mdproject_url`` +
+        the hardcoded receiver path. Empty when ``mdproject_url`` is unset."""
+        if not self.mdproject_url:
+            return ""
+        return f"{self.mdproject_url.rstrip('/')}{MDPROJECT_WEBHOOK_PATH}"
 
     # Inbound "Paradise" channel: HMAC secret for /v1/internal/* signed by
     # MDProject. Same value as MDProject's PARADISE_SECRET. NEVER reuse

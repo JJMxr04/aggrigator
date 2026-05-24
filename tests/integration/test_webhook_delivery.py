@@ -44,19 +44,23 @@ pytestmark = pytest.mark.asyncio
 
 
 TEST_SECRET = "shared-test-secret-deadbeef"
-TEST_URL = "https://example.com/hook"
+TEST_BASE_URL = "https://example.com"
+# Matches what Settings.webhook_target_url derives from TEST_BASE_URL +
+# MDPROJECT_WEBHOOK_PATH — kept in sync so tests that call ``send_one``
+# directly pass the same URL the deploy would actually use.
+TEST_URL = f"{TEST_BASE_URL}/sportgameodds/webhook"
 
 
 @pytest.fixture(autouse=True)
 def _set_webhook_target():
     """Point the dispatcher at a placeholder URL so enqueue produces rows."""
     s = get_settings()
-    original_url = s.webhook_target_url
+    original_base = s.mdproject_url
     original_secret = s.webhook_secret
-    s.webhook_target_url = TEST_URL
+    s.mdproject_url = TEST_BASE_URL
     s.webhook_secret = TEST_SECRET
     yield
-    s.webhook_target_url = original_url
+    s.mdproject_url = original_base
     s.webhook_secret = original_secret
 
 

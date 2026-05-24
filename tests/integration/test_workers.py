@@ -31,18 +31,19 @@ pytestmark = pytest.mark.asyncio
 
 
 TEST_SECRET = "worker-test-secret"
-TEST_URL = "https://example.test/hook"
+TEST_BASE_URL = "https://example.test"
+TEST_URL = f"{TEST_BASE_URL}/sportgameodds/webhook"
 
 
 @pytest.fixture(autouse=True)
 def _set_webhook_target():
     s = get_settings()
-    original_url = s.webhook_target_url
+    original_base = s.mdproject_url
     original_secret = s.webhook_secret
-    s.webhook_target_url = TEST_URL
+    s.mdproject_url = TEST_BASE_URL
     s.webhook_secret = TEST_SECRET
     yield
-    s.webhook_target_url = original_url
+    s.mdproject_url = original_base
     s.webhook_secret = original_secret
 
 
@@ -128,9 +129,9 @@ async def test_run_deliver_due_drains_pending(session, monkeypatch) -> None:
 
 
 async def test_run_deliver_due_skips_when_target_unset(session, monkeypatch) -> None:
-    """No-op when the operator hasn't configured AGG_WEBHOOK_TARGET_URL."""
+    """No-op when the operator hasn't configured AGG_MDPROJECT_URL."""
     s = get_settings()
-    monkeypatch.setattr(s, "webhook_target_url", "")
+    monkeypatch.setattr(s, "mdproject_url", "")
     event = await _seed_event_with_market(session)
     delivery = WebhookDelivery(
         event_id=event.id,

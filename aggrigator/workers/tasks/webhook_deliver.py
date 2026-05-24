@@ -48,7 +48,7 @@ async def run_deliver_due(
 
     if not target_url or not secret:
         logger.warning(
-            "webhook_deliver: AGG_WEBHOOK_TARGET_URL / AGG_WEBHOOK_SECRET "
+            "webhook_deliver: AGG_MDPROJECT_URL / AGG_WEBHOOK_SECRET "
             "unset — skipping run. Rows remain in webhook_delivery for the "
             "next dispatch once config is set."
         )

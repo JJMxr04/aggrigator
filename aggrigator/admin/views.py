@@ -4,10 +4,14 @@ edits. Mounted at /admin in main.py."""
 from __future__ import annotations
 
 from markupsafe import Markup
-from sqladmin import Admin, BaseView, ModelView, expose
-from starlette.responses import RedirectResponse
+from sqladmin import Admin, BaseView, ModelView, action, expose
+from sqladmin.flash import Flash
+from starlette.requests import Request
+from starlette.responses import RedirectResponse, Response
 
-from aggrigator.db import engine
+from aggrigator.db import async_session_factory, engine
+from aggrigator.webhooks.enqueue import force_enqueue_for_event
+from aggrigator.webhooks.notify import notify_webhook_worker
 
 
 # ---- click-to-reveal helpers (mirrors MDProject's UserAdmin) ---------------
@@ -284,6 +288,72 @@ class EventView(ModelView, model=Event):
     column_formatters_detail = column_formatters
     # Provider + linked_event_id are set at ingest-time; not operator-editable.
     form_excluded_columns = ["provider", "linked_event_id"]
+
+    @action(
+        name="re-enqueue-webhook",
+        label="Re-enqueue webhook",
+        confirmation_message=(
+            "Force a fresh webhook delivery for the selected event(s)? "
+            "MDProject will re-apply the current event/market/selection "
+            "state — useful when the original delivery never arrived."
+        ),
+    )
+    async def re_enqueue_webhook(self, request: Request) -> Response:
+        """Force-enqueue a webhook for each selected event, then push the
+        delivery worker. Mirrors the orchestrator's enqueue path with a
+        unique idempotency-key suffix so MDProject doesn't 409-dedup it."""
+        pks_param = request.query_params.get("pks", "") or ""
+        event_ids = [p for p in pks_param.split(",") if p]
+
+        enqueued = 0
+        skipped = 0
+        errors: list[str] = []
+
+        if event_ids:
+            async with async_session_factory() as session:
+                for event_id in event_ids:
+                    event = await session.get(Event, event_id)
+                    if event is None:
+                        errors.append(f"{event_id}: not found")
+                        continue
+                    try:
+                        delivery = await force_enqueue_for_event(session, event)
+                    except Exception as exc:  # noqa: BLE001 — surface to operator
+                        await session.rollback()
+                        errors.append(f"{event_id}: {type(exc).__name__}: {exc}")
+                        continue
+                    if delivery is None:
+                        skipped += 1
+                    else:
+                        enqueued += 1
+                await session.commit()
+
+            if enqueued:
+                # Push the worker so the row drains immediately rather than
+                # waiting for the next ingest-driven notify.
+                await notify_webhook_worker()
+
+        # ---- flash a summary so the operator sees the outcome ----------
+        if enqueued:
+            Flash.success(
+                request,
+                f"Re-enqueued {enqueued} webhook deliver{'y' if enqueued == 1 else 'ies'}.",
+            )
+        if skipped:
+            Flash.warning(
+                request,
+                f"Skipped {skipped} event(s) — AGG_MDPROJECT_URL is unset.",
+            )
+        for err in errors:
+            Flash.error(request, err)
+        if not enqueued and not skipped and not errors:
+            Flash.info(request, "No events selected.")
+
+        # Bounce back to wherever the operator clicked from (list or detail).
+        referer = request.headers.get("referer") or str(
+            request.url_for("admin:list", identity=self.identity)
+        )
+        return RedirectResponse(referer, status_code=302)
 
 
 class BookmakerView(ModelView, model=Bookmaker):

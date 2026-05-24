@@ -32,12 +32,12 @@ pytestmark = pytest.mark.asyncio
 def _set_webhook_target():
     """Configure the dispatcher so the auto-void path enqueues a delivery."""
     s = get_settings()
-    original_url = s.webhook_target_url
+    original_base = s.mdproject_url
     original_secret = s.webhook_secret
-    s.webhook_target_url = "https://example.test/voided-hook"
+    s.mdproject_url = "https://example.test"
     s.webhook_secret = "watchdog-test-secret"
     yield
-    s.webhook_target_url = original_url
+    s.mdproject_url = original_base
     s.webhook_secret = original_secret
 
 

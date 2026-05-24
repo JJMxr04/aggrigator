@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aggrigator.config import get_settings
-from aggrigator.ingest.lifecycle import Transition
+from aggrigator.ingest.lifecycle import EventState, Transition, decide_transition
 from aggrigator.models import Event, Selection, WebhookDelivery
 from aggrigator.webhooks.idempotency import (
     idempotency_key as _idempotency_key,
@@ -48,7 +48,7 @@ async def enqueue_for_event(
         # will never be dispatched. Log once per call so an operator can
         # diagnose silently-dropped deliveries.
         logger.warning(
-            "Skipping webhook enqueue for event=%s: AGG_WEBHOOK_TARGET_URL "
+            "Skipping webhook enqueue for event=%s: AGG_MDPROJECT_URL "
             "is unset.", event.id,
         )
         return []
@@ -92,6 +92,76 @@ async def enqueue_for_event(
         event.id, transition.value,
     )
     return [row]
+
+
+async def force_enqueue_for_event(
+    session: AsyncSession,
+    event: Event,
+) -> WebhookDelivery | None:
+    """Manually enqueue a delivery for ``event`` as if a fresh change was just
+    detected. Used by the admin "Re-enqueue webhook" action for ops recovery.
+
+    Three differences from ``enqueue_for_event``:
+
+    1. Picks the transition from the event's *current* state — same call the
+       orchestrator would make on first observation (``previous=None``).
+    2. Generates a unique ``idempotency_key`` with a ``:manual:<short-uuid>``
+       suffix so MDProject's ``WebhookReceived`` table doesn't 409-dedup
+       this delivery against the original.
+    3. Always inserts — no ``ON CONFLICT DO NOTHING`` guard, since the
+       operator explicitly asked for a re-send.
+
+    Caller commits and triggers ``notify_webhook_worker`` separately.
+    """
+    if not get_settings().webhook_target_url:
+        logger.warning(
+            "Skipping force-enqueue for event=%s: AGG_MDPROJECT_URL is unset.",
+            event.id,
+        )
+        return None
+
+    # decide_transition(previous=None, current) → FINALIZED for finished,
+    # VOIDED for postponed/canceled, LIFECYCLE_CHANGED otherwise. Mirrors
+    # what the orchestrator would have fired the first time it saw this
+    # state — exactly the semantics of "re-detect this event".
+    current = EventState(
+        status_type=event.status_type,
+        home_score=event.home_score,
+        away_score=event.away_score,
+    )
+    transition = decide_transition(None, current)
+
+    selection_states = await _load_selection_states(session, event.id)
+    blob = state_blob_from_event(
+        status_type=event.status_type,
+        home_score=event.home_score,
+        away_score=event.away_score,
+        selection_states=selection_states,
+    )
+    base_key = _idempotency_key(event.id, blob)
+    idempotency_key = f"{base_key}:manual:{uuid.uuid4().hex[:8]}"
+
+    delivery_id = uuid.uuid4()
+    payload = await build_payload(
+        session, event,
+        event_name=transition.value,
+        delivery_id=delivery_id,
+        idempotency_key=idempotency_key,
+    )
+    row = WebhookDelivery(
+        id=delivery_id,
+        event_id=event.id,
+        event_name=transition.value,
+        idempotency_key=idempotency_key,
+        payload=payload,
+    )
+    session.add(row)
+    await session.flush()
+    logger.info(
+        "Force-enqueued webhook delivery for event=%s transition=%s key=%s",
+        event.id, transition.value, idempotency_key,
+    )
+    return row
 
 
 # ---- internals -------------------------------------------------------------

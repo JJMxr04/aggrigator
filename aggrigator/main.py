@@ -93,11 +93,11 @@ def _enforce_prod_secrets(settings) -> None:
             "AGG_WEBHOOK_SECRET is unset. Set the same value as MDProject's "
             "AGGRIGATOR_WEBHOOK_SECRET so HMAC verification matches."
         )
-    if not settings.webhook_target_url:
+    if not settings.mdproject_url:
         failures.append(
-            "AGG_WEBHOOK_TARGET_URL is unset. Point this at MDProject's "
-            "inbound webhook endpoint, e.g. "
-            "https://mdproject.example.com/sportgameodds/webhook."
+            "AGG_MDPROJECT_URL is unset. Point this at MDProject's base URL, "
+            "e.g. https://mdproject.example.com — the receiver path "
+            "(/sportgameodds/webhook) is appended automatically."
         )
     if not failures:
         return
@@ -113,7 +113,7 @@ def _warn_on_misconfig(settings) -> None:
     """One-shot log audit at startup: surface the most expensive-if-missed
     misconfigs (default secrets in prod, missing host allowlist, etc.).
 
-    Note: AGG_JWT_SECRET / AGG_WEBHOOK_SECRET / AGG_WEBHOOK_TARGET_URL are
+    Note: AGG_JWT_SECRET / AGG_WEBHOOK_SECRET / AGG_MDPROJECT_URL are
     NOT checked here because they're already fatal in prod — see
     ``_enforce_prod_secrets``.
     """
