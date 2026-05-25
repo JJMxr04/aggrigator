@@ -247,6 +247,44 @@ class OddsApiHttpClient:
             )
         return out
 
+    def get_league_activity(self) -> dict[str, int]:
+        """Probe upstream ``/leagues?sport=<slug>`` for every mapped sport,
+        return ``{internal_league_id: eventsCount}``.
+
+        Used by the ingest orchestrator to skip walks for offseason
+        leagues (eventsCount == 0). One HTTP call per mapped sport — small
+        and cacheable upstream, ~free at our call volume.
+
+        Caveats:
+          * ``eventsCount`` may include past events (odds-api.md R7); we
+            use it only as a *zero-vs-nonzero* signal, not for sizing.
+          * On any HTTP failure we return ``{}`` so the orchestrator falls
+            back to walking every active league (no false negatives — we
+            only skip when upstream explicitly says zero).
+        """
+        from aggrigator.ingest.odds_api_translate import ODDSAPI_TO_INTERNAL_LEAGUE
+
+        out: dict[str, int] = {}
+        for slug in INTERNAL_TO_ODDSAPI_SPORT.values():
+            try:
+                body = self._send("/leagues", {"sport": slug})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "get_league_activity: /leagues?sport=%s failed (%s) — "
+                    "skipping activity probe for this sport.", slug, exc,
+                )
+                continue
+            leagues = body if isinstance(body, list) else []
+            for ln in leagues:
+                lslug = ln.get("slug") or ""
+                internal_league_id = ODDSAPI_TO_INTERNAL_LEAGUE.get(lslug)
+                if internal_league_id is None:
+                    continue
+                count = ln.get("eventsCount")
+                if isinstance(count, int):
+                    out[internal_league_id] = count
+        return out
+
     def get_teams(self, league_id: str) -> list[dict]:
         """Not supported — odds-api.io's /participants is sport-scoped, not
         league-scoped, and returns players + teams without a clean filter.

@@ -103,6 +103,13 @@ class FixtureOddsClient:
                 })
         return out
 
+    def get_league_activity(self) -> dict[str, int]:
+        """Empty dict = "no activity info" — orchestrator falls back to
+        walking every active league. Fixtures don't carry ``eventsCount``,
+        and the existing per-league ``events__<id>.json`` fixtures are
+        enough to drive ingest tests without it."""
+        return {}
+
     def get_teams(self, league_id: str) -> list[dict]:
         return []
 

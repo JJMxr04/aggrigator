@@ -43,6 +43,20 @@ async def enqueue_for_event(
     if transition == Transition.NONE:
         return []
 
+    # MDProject's receiver only runs business logic for finalized + voided
+    # (settle / reopen). LIFECYCLE_CHANGED would just upsert Event/Market
+    # rows the portal already reads through-the-aggregator, so we don't
+    # bother enqueuing — saves a delivery + a receiver-side write per
+    # ``notstarted → inprogress`` flip on every live event. The classifier
+    # still returns LIFECYCLE_CHANGED for reports / logs.
+    if transition == Transition.LIFECYCLE_CHANGED:
+        logger.debug(
+            "Skipping webhook enqueue for event=%s: LIFECYCLE_CHANGED "
+            "transitions are filtered out (only FINALIZED + VOIDED fire).",
+            event.id,
+        )
+        return []
+
     if not get_settings().webhook_target_url:
         # No receiver configured — skip enqueue rather than queue rows that
         # will never be dispatched. Log once per call so an operator can
@@ -130,6 +144,18 @@ async def force_enqueue_for_event(
         away_score=event.away_score,
     )
     transition = decide_transition(None, current)
+    # Mirror the LIFECYCLE_CHANGED filter from ``enqueue_for_event``: only
+    # finalized + voided events have receiver-side business logic, so the
+    # manual button shouldn't fabricate a delivery for an in-progress
+    # event either. The admin action surfaces this as "skipped — not in a
+    # terminal state" rather than silently returning None.
+    if transition == Transition.LIFECYCLE_CHANGED:
+        logger.info(
+            "Skipping force-enqueue for event=%s: status_type=%s is not a "
+            "terminal state (only finished/postponed/canceled fire webhooks).",
+            event.id, event.status_type,
+        )
+        return None
 
     selection_states = await _load_selection_states(session, event.id)
     blob = state_blob_from_event(

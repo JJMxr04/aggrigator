@@ -5,8 +5,8 @@
       "canonical_id": "BASEBALL",
       "canonical_name": "Baseball",
       "odds_api_io_key": "BASEBALL",
-      "thesportsdb_strSport": false,
-      "confirmed": false,
+      "thesportsdb_strSport": "Baseball",
+      "confirmed": true,
       "active": true
     },
     {

@@ -6,8 +6,8 @@
       "canonical_id": "MLB",
       "canonical_name": "Major League Baseball",
       "odds_api_io_key": "MLB",
-      "thesportsdb_league_id": false,
-      "confirmed": false,
+      "thesportsdb_league_id": "4424",
+      "confirmed": true,
       "active": true
     }
   ]

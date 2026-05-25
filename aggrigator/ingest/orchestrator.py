@@ -450,6 +450,38 @@ async def ingest_due_leagues(
         .join(Sport, League.sport_id == Sport.id)
         .where(League.active.is_(True), Sport.active.is_(True))
     ))
+
+    # Upstream-activity probe. odds-api.io's /leagues response carries an
+    # ``eventsCount`` per league; ``0`` means the provider has no events
+    # at all (offseason). We skip those walks instead of burning an HTTP
+    # call + DB transaction to learn the same thing from an empty /events
+    # response. A {} return from the probe means "no info" (fixture
+    # client, transient HTTP failure) — fall through to walking every
+    # league so we never wrongly skip a live league.
+    try:
+        activity = client.get_league_activity()
+    except Exception as exc:  # noqa: BLE001 — probe must never fail ingest
+        logger.warning(
+            "ingest_due_leagues: league-activity probe raised %s: %s — "
+            "walking every active league.", type(exc).__name__, exc,
+        )
+        activity = {}
+    if activity:
+        skipped: list[str] = []
+        kept: list[League] = []
+        for lg in leagues:
+            count = activity.get(lg.id)
+            if count == 0:
+                skipped.append(lg.id)
+            else:
+                kept.append(lg)
+        if skipped:
+            logger.info(
+                "ingest_due_leagues: skipping %d league(s) with upstream "
+                "eventsCount=0: %s", len(skipped), skipped,
+            )
+        leagues = kept
+
     logger.info("ingest_due_leagues: walking %d league(s)", len(leagues))
     reports: list[LeagueReport] = []
     for idx, league in enumerate(leagues, start=1):

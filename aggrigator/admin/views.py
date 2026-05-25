@@ -342,7 +342,10 @@ class EventView(ModelView, model=Event):
         if skipped:
             Flash.warning(
                 request,
-                f"Skipped {skipped} event(s) — AGG_MDPROJECT_URL is unset.",
+                f"Skipped {skipped} event(s) — either AGG_MDPROJECT_URL is "
+                f"unset, or the event isn't in a terminal state "
+                f"(finished/postponed/canceled). Check worker logs for the "
+                f"per-event reason.",
             )
         for err in errors:
             Flash.error(request, err)

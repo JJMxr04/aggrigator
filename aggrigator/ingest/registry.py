@@ -308,6 +308,17 @@ async def _upsert_team_from_entry(
             )
         )
 
+    if existing is None:
+        # Last-resort PK lookup. The two scoped lookups above can miss
+        # (canonical_name diverged from the live-feed insert; team_id was
+        # mutated by an earlier upsert) — but PK is deterministic from
+        # (league_id, team_id) so an existing row at the same PK *will*
+        # collide on insert. Reuse it instead of raising IntegrityError.
+        candidate_team_id = io_key if io_key is not None else Team.synth_filler_team_id(
+            entry.canonical_name
+        )
+        existing = await session.get(Team, Team.synth_pk(league.id, candidate_team_id))
+
     if existing is not None:
         existing.canonical_name = entry.canonical_name
         existing.odds_api_io_key = io_key

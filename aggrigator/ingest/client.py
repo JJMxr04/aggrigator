@@ -22,6 +22,17 @@ class OddsClient(Protocol):
 
     def get_leagues(self, sport_id: str | None = None) -> list[dict]: ...
 
+    def get_league_activity(self) -> dict[str, int]:
+        """Map of ``internal_league_id -> upstream eventsCount``.
+
+        Lets the orchestrator skip walks for leagues the provider says have
+        zero events (typically offseason). Returning an empty dict means
+        "no activity info available" — callers should walk every active
+        league as before (no false negatives). Concrete adapters that
+        can't report this (TheSportsDB, fixtures) just return ``{}``.
+        """
+        ...
+
     def get_teams(self, league_id: str) -> list[dict]: ...
 
     def get_events(

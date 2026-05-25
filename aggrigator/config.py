@@ -156,8 +156,14 @@ class Settings(BaseSettings):
     # started in the past) plus just-finished games still flowing through
     # the lifecycle → settle pipeline. Combined with skip_if_new_terminal,
     # nothing older than this window leaks into the DB.
+    # 30-day default matches the MDProject portal's "upcoming" horizon
+    # (it asks for events up to 90 days out, but 30 is the common-case
+    # planning window). Per-month odds-api entity quota scales linearly
+    # with the ahead-window — bumping from 7 → 30 is ~4× quota for events
+    # in that range. If you start hitting the per-month cap, narrow this
+    # back down via the env override before lowering ingest cadence.
     ingest_window_days_ahead: int = Field(
-        default=7, alias="AGG_INGEST_WINDOW_DAYS_AHEAD",
+        default=30, alias="AGG_INGEST_WINDOW_DAYS_AHEAD",
     )
     ingest_window_days_behind: int = Field(
         default=2, alias="AGG_INGEST_WINDOW_DAYS_BEHIND",
