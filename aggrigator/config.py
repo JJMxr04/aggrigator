@@ -143,6 +143,24 @@ class Settings(BaseSettings):
     # short-lived environments.
     docs_enabled: bool = Field(default=False, alias="AGG_DOCS_ENABLED")
 
+    # --- profilers (pyinstrument + sqltap) ---
+    # OFF by default; flip ON for a debugging session and back OFF when
+    # done. Both add real overhead — sqltap accumulates query history in
+    # worker memory, pyinstrument samples the call stack at 1ms intervals
+    # on every profiled request. Safe in staging; avoid leaving on in
+    # prod for long. See aggrigator/observability/profiler.py.
+    profiler_enabled: bool = Field(
+        default=False, alias="AGG_PROFILER_ENABLED",
+    )
+    # Shared secret. Required as the X-Profile-Token header (or
+    # ``?token=`` query param) on every profiler request. When unset,
+    # the endpoints 404 even if profiler_enabled=True — a paranoid
+    # default so a forgotten flag flip can't expose query text and
+    # stack traces to the public internet.
+    profiler_token: str = Field(
+        default="", alias="AGG_PROFILER_TOKEN",
+    )
+
     # --- ingest window (storage + quota tuning) ---
     # Cron times are hardcoded next to each task in workers/tasks/ via
     # ``@app.periodic(cron=...)``. To change cadence, edit that decorator

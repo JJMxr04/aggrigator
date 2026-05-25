@@ -26,6 +26,7 @@ from aggrigator.api import selections as selections_router
 from aggrigator.config import get_settings
 from aggrigator.db import engine
 from aggrigator.observability.logging import configure_logging
+from aggrigator.observability.profiler import init_profilers
 from aggrigator.observability.prometheus import register_metrics
 from aggrigator.ops import api as ops_api_router
 from aggrigator.ops import routes as ops_routes_router
@@ -350,6 +351,12 @@ def create_app() -> FastAPI:
     # Part 2.1 ops module — replaces v0 api/admin_crons.py + api/ops_console.py.
     app.include_router(ops_api_router.router)
     app.include_router(ops_routes_router.router)
+
+    # In-process profilers (pyinstrument + sqltap). No-op unless
+    # AGG_PROFILER_ENABLED=True AND AGG_PROFILER_TOKEN is set — see
+    # aggrigator/observability/profiler.py for the full contract. Mounts
+    # both the request-wrapping middleware and the report endpoints.
+    init_profilers(app, settings, engine)
 
     register_metrics(app)
     mount_admin(app)
