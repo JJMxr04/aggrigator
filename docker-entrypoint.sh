@@ -22,8 +22,9 @@ case "$ROLE" in
     echo "[entrypoint] starting gunicorn (uvicorn workers)..."
     # 4 workers default, tunable via env. ``--access-logfile -`` sends
     # access logs to stdout for journald / docker logs.
-    # PORT defaults to 8001 (matches Dockerfile EXPOSE). Override via env
-    # if Coolify or docker-compose maps a different port.
+    # PORT defaults to 3000 (matches Dockerfile EXPOSE and Coolify's
+    # auto-injected PORT env var). Override via env if a different port
+    # is needed.
     #
     # ``--forwarded-allow-ips=*`` makes gunicorn trust X-Forwarded-* headers
     # from Coolify's Traefik. Without it the app sees the proxy IP as the
@@ -34,7 +35,7 @@ case "$ROLE" in
     exec gunicorn aggrigator.main:app \
         --worker-class uvicorn.workers.UvicornWorker \
         --workers "${AGG_WEB_WORKERS:-4}" \
-        --bind "0.0.0.0:${PORT:-8001}" \
+        --bind "0.0.0.0:${PORT:-3000}" \
         --timeout "${AGG_WEB_TIMEOUT:-30}" \
         --graceful-timeout 30 \
         --forwarded-allow-ips="*" \

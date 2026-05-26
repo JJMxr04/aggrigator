@@ -50,7 +50,9 @@ In Coolify → **Applications → New Application**:
 
 - **Source**: this repo (Git URL), branch `coolify`.
 - **Build pack**: `Dockerfile` (auto-detects the `Dockerfile` in repo root).
-- **Port**: `8001` (matches `EXPOSE` in the Dockerfile).
+- **Ports Exposes**: `3000` (matches `EXPOSE` in the Dockerfile and
+  Coolify's auto-injected `PORT=3000` env var — the app binds to
+  whatever `$PORT` is at runtime).
 - **Health check path**: `/healthz` (the Dockerfile already has a
   `HEALTHCHECK` directive; Coolify also probes this URL).
 - **Custom CMD**: **leave empty.** The Dockerfile's `CMD ["web"]` is what
@@ -138,8 +140,8 @@ AGG_PROFILER_TOKEN=
 Hit **Deploy.** The container will:
 
 1. Run `alembic upgrade head` (idempotent — safe on every boot).
-2. Start gunicorn on `0.0.0.0:8001`.
-3. Coolify's Traefik routes whichever domain you assigned to `agg-web:8001`.
+2. Start gunicorn on `0.0.0.0:$PORT` (Coolify injects `PORT=3000`).
+3. Coolify's Traefik routes whichever domain you assigned to `agg-web:3000`.
 
 ---
 

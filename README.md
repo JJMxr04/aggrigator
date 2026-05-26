@@ -40,8 +40,8 @@ alembic upgrade head
 ### Run the API
 
 ```bash
-uvicorn aggrigator.main:app --reload --port 8001
-# then GET http://localhost:8001/healthz
+uvicorn aggrigator.main:app --reload --port 3000
+# then GET http://localhost:3000/healthz
 ```
 
 ## Running the test suite
