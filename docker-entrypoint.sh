@@ -22,16 +22,15 @@ case "$ROLE" in
     echo "[entrypoint] starting gunicorn (uvicorn workers)..."
     # 4 workers default, tunable via env. ``--access-logfile -`` sends
     # access logs to stdout for journald / docker logs.
-    # PORT is injected by Railway / Render / etc. Falls back to 8001 for
-    # Coolify / docker-compose where we control the port mapping ourselves.
+    # PORT defaults to 8001 (matches Dockerfile EXPOSE). Override via env
+    # if Coolify or docker-compose maps a different port.
     #
     # ``--forwarded-allow-ips=*`` makes gunicorn trust X-Forwarded-* headers
-    # from the upstream proxy (Railway's edge / Coolify's Traefik). Without
-    # it the app sees the proxy IP as the client and ``request.url.scheme``
-    # as ``http`` — which breaks rate-limit keying on real client IP and
-    # session cookies' ``secure`` flag. Trusting "*" is safe here because
-    # Railway / Coolify are the only things that can reach the container;
-    # external clients never bypass the edge.
+    # from Coolify's Traefik. Without it the app sees the proxy IP as the
+    # client and ``request.url.scheme`` as ``http`` — which breaks
+    # rate-limit keying on real client IP and session cookies' ``secure``
+    # flag. Trusting "*" is safe because Coolify's edge is the only thing
+    # that can reach the container; external clients never bypass it.
     exec gunicorn aggrigator.main:app \
         --worker-class uvicorn.workers.UvicornWorker \
         --workers "${AGG_WEB_WORKERS:-4}" \

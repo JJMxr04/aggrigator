@@ -1,182 +1,213 @@
 # Deploying the Aggregator to Coolify
 
-This is a step-by-step guide for getting the aggregator running on Coolify
-(self-hosted, behind Traefik). It assumes you already have a Coolify
-server reachable from the public internet and a domain pointed at it.
+Step-by-step guide for getting the aggregator running on Coolify
+(self-hosted, behind Traefik). Assumes you already have a Coolify server
+reachable from the public internet and — when you're ready to go
+public — a domain pointed at it.
 
 ## What we're deploying
 
-| Service              | Type                        | Purpose                                        |
-| -------------------- | --------------------------- | ---------------------------------------------- |
-| `agg-postgres`       | Coolify resource (Postgres) | persistent DB + task queue (Procrastinate)     |
-| `agg-web`            | Application (Dockerfile)    | gunicorn + uvicorn workers (the FastAPI app)   |
-| `agg-worker`         | Application (Dockerfile)    | Procrastinate worker (background jobs + cron)  |
+| Service        | Type                        | Purpose                                       |
+| -------------- | --------------------------- | --------------------------------------------- |
+| `agg-postgres` | Coolify resource (Postgres) | persistent DB + task queue (Procrastinate)    |
+| `agg-web`      | Application (Dockerfile)    | gunicorn + uvicorn workers (the FastAPI app)  |
+| `agg-worker`   | Application (Dockerfile)    | Procrastinate worker (background jobs + cron) |
 
 `agg-web` and `agg-worker` are built from the **same Dockerfile in this
 repo** — they just override `CMD`. Coolify lets you do this by creating
 two Applications that point at the same Git source with different start
 commands.
 
----
-
-## 1. Create the resources
-
-In Coolify → **Resources**:
-
-1. Click **New Resource → Postgres** (version 18). Note the generated
-   connection URL — you'll paste it into the apps below.
-
-Procrastinate creates its task-queue tables inside this same Postgres
-on first `alembic upgrade head` — no separate broker / Redis service
-to provision.
+No Redis. The task queue, periodic scheduler, and per-cron debounce lock
+all live in Postgres (Procrastinate uses LISTEN/NOTIFY for push delivery
+and row-level locks for cooperation).
 
 ---
 
-## 2. Create the web Application
+## 1. Create the Postgres resource
+
+In Coolify → **Resources → New Resource → Postgres** (version 18).
+
+Note two things from the resource page once it's up:
+
+- The **internal** connection URL (something like
+  `postgres://USER:PASS@HOST:5432/DBNAME`). Use the internal hostname,
+  not the public one — both apps reach the DB over Coolify's internal
+  network.
+- That same URL gets pasted twice into the apps below with two different
+  driver prefixes:
+  - `postgresql+asyncpg://…` → `AGG_DATABASE_URL` (used by the app)
+  - `postgresql+psycopg2://…` → `AGG_DATABASE_URL_SYNC` (used by Alembic)
+
+Procrastinate creates its task-queue tables inside this same Postgres on
+first `alembic upgrade head` — no separate broker / Redis to provision.
+
+---
+
+## 2. Create the `agg-web` Application
 
 In Coolify → **Applications → New Application**:
 
-- **Source**: this repo (Git URL).
+- **Source**: this repo (Git URL), branch `coolify`.
 - **Build pack**: `Dockerfile` (auto-detects the `Dockerfile` in repo root).
 - **Port**: `8001` (matches `EXPOSE` in the Dockerfile).
-- **Health check path**: `/healthz` (already defined in the Dockerfile's
-  `HEALTHCHECK`, but Coolify also reads this for its own probe).
-- **Custom CMD**: leave empty (the entrypoint defaults to `web`).
+- **Health check path**: `/healthz` (the Dockerfile already has a
+  `HEALTHCHECK` directive; Coolify also probes this URL).
+- **Custom CMD**: **leave empty.** The Dockerfile's `CMD ["web"]` is what
+  triggers `docker-entrypoint.sh web` — Alembic-then-gunicorn.
 
-Click **Environment variables** and paste these (replace placeholders):
+### Environment variables for `agg-web`
+
+Paste the block below into the **Environment variables** tab. Generate
+fresh secrets first:
+
+```sh
+openssl rand -hex 32   # AGG_JWT_SECRET
+openssl rand -hex 32   # AGG_SESSION_SECRET
+openssl rand -hex 32   # AGG_WEBHOOK_SECRET   (will pair with MDProject later)
+openssl rand -hex 32   # AGG_PARADISE_SECRET  (will pair with MDProject later)
+```
 
 ```
+# --- core ---
 AGG_ENV=prod
 AGG_DEBUG=false
 AGG_LOG_LEVEL=INFO
-AGG_TEST_MODE=false                      # MUST be false in prod (gates data-reset)
+AGG_TEST_MODE=false                                  # MUST be false in prod (gates /ops/data-reset)
 
-AGG_DATABASE_URL=postgresql+asyncpg://<user>:<pass>@<coolify-pg-host>:5432/<db>
-AGG_DATABASE_URL_SYNC=postgresql+psycopg2://<user>:<pass>@<coolify-pg-host>:5432/<db>
+# --- database (use the INTERNAL Postgres host from Coolify) ---
+AGG_DATABASE_URL=postgresql+asyncpg://USER:PASS@PG_HOST:5432/DBNAME
+AGG_DATABASE_URL_SYNC=postgresql+psycopg2://USER:PASS@PG_HOST:5432/DBNAME
 
-# Generate with: openssl rand -hex 32
-AGG_JWT_SECRET=<64 hex chars>
+# --- odds provider (sole upstream) ---
+ODDSAPI_API_KEY=<your odds-api.io key>
+AGG_ODDSAPI_THROTTLE_PCT=80
+AGG_ODDSAPI_MAX_RETRIES=3
 
-# Generate with:
-#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-AGG_SECRET_ENCRYPTION_KEY=<44-char base64>
+# --- auth ---
+AGG_JWT_SECRET=<openssl rand -hex 32>
+AGG_SESSION_SECRET=<openssl rand -hex 32>
+AGG_JWT_ACCESS_TTL_SECONDS=900
+AGG_JWT_REFRESH_TTL_SECONDS=1209600
 
-# Real SGO (override the dev defaults that point at the simulator)
-SPORTSGAMEODDS_BASE_URL=https://api.sportsgameodds.com/v2
-SPORTSGAMEODDS_API_KEY=<your real SGO key>
+# --- outbound webhook to MDProject (DEFERRED until MDProject also on Coolify) ---
+AGG_WEBHOOK_TARGET_URL=                              # leave empty; dispatcher logs+skips
+AGG_WEBHOOK_SECRET=<openssl rand -hex 32>            # generate now, share with MDProject when wiring
+AGG_PARADISE_SECRET=<openssl rand -hex 32>           # same — generate now, share later
 
-# Comma-separated origins of MDProject (and any other portal that talks
-# to this aggregator). Wildcards are rejected.
-AGG_CORS_ORIGINS=https://app.example.com
+# --- CORS / host allowlist (DEFERRED for first private deploy) ---
+AGG_CORS_ORIGINS=                                    # set once MDProject domain is known; no wildcards
+AGG_ALLOWED_HOSTS=                                   # SET BEFORE PUBLIC EXPOSURE (see §6)
+AGG_DOCS_ENABLED=false
 
+# --- ingest window ---
+AGG_INGEST_WINDOW_DAYS_AHEAD=7
+AGG_INGEST_WINDOW_DAYS_BEHIND=2
+AGG_INGEST_INCLUDE_ALT_LINES=false
+AGG_INGEST_ODD_IDS=
+AGG_INGEST_BOOKMAKER_ID=
+AGG_INGEST_SKIP_NEW_TERMINAL=true
+
+# --- vacuum ---
+AGG_VACUUM_DAYS=3
+AGG_VACUUM_BATCH_SIZE=1000
+
+# --- lifecycle watchdog ---
+AGG_LIFECYCLE_STALE_GRACE_HOURS=12
+AGG_LIFECYCLE_AUTO_VOID_HOURS=0
+AGG_LIFECYCLE_DISAPPEARED_GRACE_HOURS=6
+AGG_LIFECYCLE_DISAPPEARED_VOID_HOURS=12
+
+# --- analytics gate (pair with MDProject's matching flag) ---
+ANALYTICS_FREE_FOR_ALL=1
+
+# --- gunicorn knobs ---
 AGG_WEB_WORKERS=4
 AGG_WEB_TIMEOUT=30
+
+# --- profiler (opt-in; leave off unless actively profiling) ---
+AGG_PROFILER_ENABLED=false
+AGG_PROFILER_TOKEN=
 ```
 
-Hit **Deploy**. The container will:
+> **Security caveat.** With `AGG_ALLOWED_HOSTS` empty, Starlette's
+> TrustedHostMiddleware is skipped — any `Host` header is accepted.
+> Fine while the URL is private; **must** be set before sharing the
+> domain. See §6 pre-flight.
 
-1. Run `alembic upgrade head` against the Postgres resource (idempotent).
+Hit **Deploy.** The container will:
+
+1. Run `alembic upgrade head` (idempotent — safe on every boot).
 2. Start gunicorn on `0.0.0.0:8001`.
-3. Coolify's Traefik routes the public domain you set on the app to
-   `agg-web:8001`.
-
-### After first deploy: create your admin user + API keys
-
-The DB starts empty. SSH into the running container (Coolify exposes a
-web shell under the app's **Terminal** tab) and run:
-
-```sh
-python -c "
-from aggrigator.db import session_scope
-from aggrigator.models.auth import User, UserRole
-from aggrigator.security.passwords import hash_password
-import asyncio, uuid
-async def main():
-    async with session_scope() as s:
-        s.add(User(
-            id=uuid.uuid4(),
-            email='admin@yourdomain.com',
-            password_hash=hash_password('CHANGE_ME'),
-            role=UserRole.ADMIN,
-            is_active=True,
-        ))
-asyncio.run(main())
-"
-```
-
-Then sign in at `https://<your-aggregator-domain>/admin` and rotate the
-password from `/admin/users/edit/<id>` — or wire your real auth flow.
+3. Coolify's Traefik routes whichever domain you assigned to `agg-web:8001`.
 
 ---
 
-## 3. Create the worker Application
+## 3. Create the `agg-worker` Application
 
 In Coolify → **Applications → New Application** (point at the **same**
-Git source, **same** Dockerfile):
+Git source / branch, **same** Dockerfile):
 
-- **Port**: leave empty (worker doesn't expose anything).
+- **Port**: leave empty (no ingress; worker doesn't serve HTTP).
 - **Custom CMD**: `worker`
-- **Health check**: disable, or use a custom command if you want one.
+- **Health check**: disable (no HTTP listener to probe).
+- **Public domain**: none.
 
-Same env vars as `agg-web` (it shares the DB + secrets). The
-Procrastinate worker loads the periodic schedule by importing every
-task module — the registrations live as `@app.periodic(cron=...)`
-decorators on each task function.
+### Environment variables for `agg-worker`
 
-Hit **Deploy**. The worker has no public ingress — it just consumes the
-queue.
+Paste **the same env-var block as `agg-web`** with two exceptions:
+
+- The web-only knobs (`AGG_WEB_WORKERS`, `AGG_WEB_TIMEOUT`,
+  `AGG_DOCS_ENABLED`, CORS / allowed-hosts) are no-ops here — pasting
+  them is harmless but you can omit.
+- Use the same `ANALYTICS_FREE_FOR_ALL=1`, the same secrets, the same
+  Postgres URLs.
+
+Hit **Deploy.** Worker logs should show:
+
+```
+[entrypoint] starting procrastinate worker...
+```
+
+followed by Procrastinate registering the periodic schedule
+(`@app.periodic(cron=...)` decorators on each task).
 
 ---
 
-## 4. Register the MDProject webhook endpoint
+## 4. Post-deploy: create the admin user
 
-Once both apps are up, register MDProject's webhook receiver from inside
-the running web container's terminal:
+The DB starts empty. SSH into the running `agg-web` container (Coolify →
+app → **Terminal**) and run the bundled script — it's idempotent:
 
 ```sh
-python -m aggrigator.scripts.register_webhook \
-    --url https://<mdproject-domain>/sportgameodds/webhook \
-    --events event.finalized,event.voided \
-    --owner admin@yourdomain.com \
-    --description "MDProject portal receiver"
+# Auto-generated password (printed once to stdout — copy it immediately):
+python scripts/make_admin.py admin@yourdomain.com
+
+# …or supply your own (must be ≥ 16 chars):
+python scripts/make_admin.py admin@yourdomain.com 'a-strong-password-16-or-more'
 ```
 
-The script prints a one-time secret. Copy it into MDProject's
-`AGGRIGATOR_WEBHOOK_SECRET` env var (Coolify env vars on the
-`mdproject-web` Application — see `MDProject/COOLIFY.md`).
+If the user already exists, the script promotes them to `role=admin` and
+reactivates them; passing no password leaves the existing password alone.
+
+Then sign in at `https://<agg-domain>/admin` and rotate via the user
+edit page if you used the auto-generated default.
 
 ---
 
 ## 5. Bootstrap the events catalog
 
-Trigger the seed + first ingest from `https://<your-aggregator-domain>/ops/crons`
-(SQLAdmin auth required). Click **full_refresh → Run**. This walks SGO,
-populates `core_event_event` + `core_market` + `core_selection`, and
-sets up the league refresh cadence.
+Trigger the seed + first ingest from
+`https://<agg-domain>/ops/crons` (SQLAdmin auth required). Click
+**full_refresh → Run**. This walks odds-api.io, populates
+`core_event_event` + `core_market` + `core_selection`, and sets up the
+league refresh cadence.
 
 ---
 
-## 6. Coolify-specific knobs
+## 6. Pre-flight checklist
 
-- **Persistent storage**: only Postgres needs a volume. Coolify's
-  Postgres resource handles this automatically.
-- **Build cache**: Coolify caches Docker layers per Application. If you
-  need a clean rebuild, hit **Force rebuild**.
-- **Logs**: Coolify aggregates stdout/stderr from both web + worker
-  under the app's **Logs** tab.
-- **Rolling deploys**: Coolify uses the Dockerfile's HEALTHCHECK — old
-  container stays up until the new one reports healthy on `/healthz`.
-- **Multi-region / horizontal scale**: bump replicas in the app's
-  **Resource limits**. Web is stateless; the worker can scale to
-  multiple replicas safely (Procrastinate's periodic scheduler uses
-  row-level locks on `procrastinate_periodic_defers` to cooperate)
-  but at this app's volume there's no reason to.
-
----
-
-## 7. Pre-flight checklist
-
-Before you mark a deploy "done", confirm:
+### First boot (private)
 
 - [ ] `https://<agg-domain>/healthz` returns `{"ok": true, "version": "..."}`.
 - [ ] `https://<agg-domain>/robots.txt` returns `User-agent: *\nDisallow: /`.
@@ -184,9 +215,44 @@ Before you mark a deploy "done", confirm:
 - [ ] `https://<agg-domain>/admin` requires login.
 - [ ] `https://<agg-domain>/ops/data-reset` returns **403**
       (`AGG_TEST_MODE=false` in prod).
-- [ ] `https://<agg-domain>/v1/sports` returns 401 without an API key.
+- [ ] `https://<agg-domain>/v1/sports` returns **401** without an API key.
 - [ ] Worker logs show `Starting worker for ...` and the cron schedule.
-- [ ] `full_refresh` cron run succeeds (check `/ops/crons/full_refresh/history`).
+- [ ] `full_refresh` cron run succeeds (check
+      `/ops/crons/full_refresh/history`).
+
+### Before exposing the domain publicly (required)
+
+- [ ] `AGG_ALLOWED_HOSTS` set to the exact public hostname(s) the service
+      answers on. Empty means Starlette accepts any Host header — fine
+      while private, not after.
+- [ ] `AGG_CORS_ORIGINS` set to the MDProject origin (and any other
+      portal). No wildcards.
+- [ ] Once MDProject is also migrated to Coolify: set
+      `AGG_WEBHOOK_TARGET_URL` to MDProject's `/sportgameodds/webhook`,
+      then run `scripts/register_webhook.py` from the `agg-web`
+      terminal and paste the resulting secret into MDProject's
+      `AGGRIGATOR_WEBHOOK_SECRET` env var.
+
+---
+
+## 7. Coolify-specific knobs
+
+- **Migrations**: run inside the web container's entrypoint on every
+  boot (`docker-entrypoint.sh web` → `alembic upgrade head`). Coolify
+  has no equivalent of Railway's `preDeployCommand`, so we rely on this
+  in-entrypoint step. Idempotent; multiple boots are safe.
+- **Persistent storage**: only Postgres needs a volume. Coolify's
+  Postgres resource handles that automatically.
+- **Build cache**: Coolify caches Docker layers per Application. Hit
+  **Force rebuild** if you need a clean image.
+- **Logs**: Coolify aggregates stdout/stderr under each app's **Logs**
+  tab.
+- **Rolling deploys**: Coolify uses the Dockerfile's HEALTHCHECK — old
+  container stays up until the new one reports healthy on `/healthz`.
+- **Horizontal scale**: web is stateless; the worker can scale to
+  multiple replicas safely (Procrastinate uses row-level locks on
+  `procrastinate_periodic_defers` to cooperate). At this app's volume
+  there's no reason to scale either above 1.
 
 ---
 
@@ -197,12 +263,16 @@ Postgres was ready. Coolify will restart it; check the worker's logs.
 
 **Webhook deliveries failing with 401:** MDProject's
 `AGGRIGATOR_WEBHOOK_SECRET` doesn't match what's stored on the endpoint.
-Re-run `register_webhook.py --rotate` and update MDProject's env.
+Re-run `scripts/register_webhook.py --rotate` and update MDProject's env.
 
 **`alembic` errors on deploy:** likely a migration race if you scaled
-web replicas above 1 before this section. Set replicas=1, redeploy,
-then scale back up. Migrations are idempotent — re-running is safe.
+web replicas above 1. Set replicas=1, redeploy, then scale back up.
+Migrations are idempotent — re-running is safe.
 
-**Coolify reports unhealthy after deploy:** check `docker logs`. Most
-common culprit is missing `AGG_DATABASE_URL` or a Fernet key mismatch on
-`AGG_SECRET_ENCRYPTION_KEY` (decryption of stored webhook secrets fails).
+**Coolify reports unhealthy after deploy:** check the **Logs** tab. Most
+common culprit is a missing or wrong `AGG_DATABASE_URL` (or asyncpg vs
+psycopg2 driver prefix swapped between the two URL vars).
+
+**`AGG_TEST_MODE=true` slipped into prod:** flip it back to `false` and
+redeploy. While it's on, `/ops/data-reset` is reachable — anyone who
+can authenticate to ops can wipe the database.
