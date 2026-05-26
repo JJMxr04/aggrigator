@@ -7,6 +7,7 @@ See ``.env.example`` for the full list.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
 from pydantic import Field
@@ -131,9 +132,15 @@ class Settings(BaseSettings):
 
     # Host-header allowlist. Comma-separated. Empty (default) skips the
     # TrustedHostMiddleware install — current behavior. Set in prod to
-    # e.g. "aggrigator-production.up.railway.app,api.example.com" to
-    # reject Host-spoofed requests. Wildcard prefixes ("*.example.com")
-    # are honored by Starlette.
+    # e.g. "agg.example.com,api.example.com" to reject Host-spoofed
+    # requests. Wildcard prefixes ("*.example.com") are honored by
+    # Starlette.
+    #
+    # Coolify auto-merge: when this is non-empty, ``allowed_hosts_list``
+    # also appends any hostnames Coolify injects via ``COOLIFY_FQDN`` so
+    # operators don't have to copy the platform-generated subdomain in
+    # by hand. Set this to your custom domain (or even a placeholder
+    # like the Coolify FQDN itself) to enable validation.
     allowed_hosts: str = Field(default="", alias="AGG_ALLOWED_HOSTS")
 
     # FastAPI's auto-generated /docs, /redoc, /openapi.json. OFF BY
@@ -278,7 +285,23 @@ class Settings(BaseSettings):
 
     @property
     def allowed_hosts_list(self) -> list[str]:
-        return [h.strip() for h in self.allowed_hosts.split(",") if h.strip()]
+        explicit = [h.strip() for h in self.allowed_hosts.split(",") if h.strip()]
+        # Auto-merge Coolify's injected FQDN(s) so operators don't have to
+        # copy the platform-generated hostname into AGG_ALLOWED_HOSTS. Only
+        # appended when the operator has already opted in to validation by
+        # setting AGG_ALLOWED_HOSTS — empty stays empty (middleware off in
+        # main.py) so first-boot deploys aren't surprise-locked.
+        if not explicit:
+            return []
+        coolify_fqdn = os.environ.get("COOLIFY_FQDN", "")
+        coolify = [h.strip() for h in coolify_fqdn.split(",") if h.strip()]
+        seen: set[str] = set()
+        out: list[str] = []
+        for h in (*explicit, *coolify):
+            if h not in seen:
+                seen.add(h)
+                out.append(h)
+        return out
 
 
 @lru_cache(maxsize=1)

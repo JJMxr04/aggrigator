@@ -124,8 +124,9 @@ def _warn_on_misconfig(settings) -> None:
     if not settings.allowed_hosts_list:
         logger.warning(
             "[startup] AGG_ALLOWED_HOSTS is empty in prod — Host-header "
-            "spoofing is not blocked. Set to your Railway domain + any "
-            "custom domains."
+            "spoofing is not blocked. Set to your custom domain(s); the "
+            "Coolify-injected COOLIFY_FQDN is merged in automatically "
+            "once this is non-empty."
         )
     if not settings.odds_api_key:
         logger.warning(
@@ -228,7 +229,9 @@ def create_app() -> FastAPI:
 
     # Host-header allowlist (DNS-rebinding / Host-header injection defense).
     # Skipped when the env var is unset so dev / first-time deploys aren't
-    # broken — operators opt in via AGG_ALLOWED_HOSTS in RAILWAY.md.
+    # broken — operators opt in via AGG_ALLOWED_HOSTS (see COOLIFY.md).
+    # When set, Settings.allowed_hosts_list also merges Coolify's
+    # injected COOLIFY_FQDN automatically.
     if settings.allowed_hosts_list:
         app.add_middleware(
             TrustedHostMiddleware,

@@ -97,7 +97,7 @@ AGG_PARADISE_SECRET=<openssl rand -hex 32>           # same — generate now, sh
 
 # --- CORS / host allowlist (DEFERRED for first private deploy) ---
 AGG_CORS_ORIGINS=                                    # set once MDProject domain is known; no wildcards
-AGG_ALLOWED_HOSTS=                                   # SET BEFORE PUBLIC EXPOSURE (see §6)
+AGG_ALLOWED_HOSTS=                                   # SET BEFORE PUBLIC EXPOSURE (see §6). Coolify's COOLIFY_FQDN is auto-merged when non-empty.
 AGG_DOCS_ENABLED=false
 
 # --- ingest window ---
@@ -224,7 +224,9 @@ league refresh cadence.
 
 - [ ] `AGG_ALLOWED_HOSTS` set to the exact public hostname(s) the service
       answers on. Empty means Starlette accepts any Host header — fine
-      while private, not after.
+      while private, not after. Coolify's auto-assigned `COOLIFY_FQDN`
+      is merged in automatically once this is non-empty, so the typical
+      prod value is just your custom domain (e.g. `agg.example.com`).
 - [ ] `AGG_CORS_ORIGINS` set to the MDProject origin (and any other
       portal). No wildcards.
 - [ ] Once MDProject is also migrated to Coolify: set
