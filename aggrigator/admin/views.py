@@ -3,11 +3,15 @@ edits. Mounted at /admin in main.py."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from markupsafe import Markup
 from sqladmin import Admin, BaseView, ModelView, action, expose
 from sqladmin.flash import Flash
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
+
+_TEMPLATES_DIR = str(Path(__file__).parent / "templates")
 
 from aggrigator.db import async_session_factory, engine
 from aggrigator.webhooks.enqueue import force_enqueue_for_event
@@ -488,6 +492,7 @@ def mount_admin(app, *, base_url: str = "/admin") -> Admin:
         base_url=base_url,
         title="Aggrigator Admin",
         authentication_backend=make_admin_auth(),
+        templates_dir=_TEMPLATES_DIR,
     )
     # Top of sidebar: operator action shortcuts.
     admin.add_base_view(CronsConsoleLink)
