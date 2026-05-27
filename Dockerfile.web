@@ -1,11 +1,10 @@
 # syntax=docker/dockerfile:1.6
 #
-# Aggregator container — used by Coolify (Application type: Dockerfile).
-# One image, two roles:
-#   - web:    gunicorn + uvicorn workers (the FastAPI app)
-#   - worker: arq (the background queue runner — webhook delivery, crons)
-# Coolify deploys each role as its own service, both pointing at this image
-# but overriding CMD. Same code, same deps, distinct processes.
+# Aggregator web container — gunicorn + uvicorn workers serving the
+# FastAPI app. Paired with Dockerfile.worker (procrastinate background
+# worker). Both share the same builder stage and runtime base; only the
+# final HEALTHCHECK + CMD differ. If you change shared steps (deps,
+# system pkgs), update both files in lockstep.
 
 # ---------- builder ----------
 FROM python:3.12-slim AS builder
@@ -73,5 +72,4 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
-# Default CMD = web. Worker service overrides via Coolify's "Custom CMD".
 CMD ["web"]

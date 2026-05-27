@@ -1,0 +1,71 @@
+# syntax=docker/dockerfile:1.6
+#
+# Aggregator worker container — runs `procrastinate -a aggrigator.workers.app.app
+# worker` (task execution + in-process periodic scheduler). Paired with
+# Dockerfile.web (gunicorn + uvicorn). Both share the same builder stage
+# and runtime base; only the final HEALTHCHECK + CMD differ. If you
+# change shared steps (deps, system pkgs), update both files in lockstep.
+#
+# The worker has no HTTP listener — no EXPOSE, no HEALTHCHECK. Liveness
+# is observable by reading recent rows from the procrastinate_jobs table
+# (or via the aggregator's own admin endpoints, if any).
+
+# ---------- builder ----------
+FROM python:3.12-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Build deps for asyncpg / cryptography wheels on slim base.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install dependencies first for better layer caching — only re-runs when
+# pyproject changes, not on every code edit.
+COPY pyproject.toml ./
+RUN pip install --upgrade pip \
+    && pip install --prefix=/install . \
+    && pip install --prefix=/install gunicorn
+
+# ---------- runtime ----------
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+# `curl` is intentionally NOT installed in the worker image — there's no
+# healthcheck and no HTTP traffic, so we save a few MB and one CVE-prone
+# package. ca-certificates stays (outbound HTTPS to SGO / Stripe / etc.).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 1000 app \
+    && useradd --system --uid 1000 --gid app --no-create-home --shell /bin/false app
+
+# Pull installed packages from builder stage.
+COPY --from=builder /install /usr/local
+
+WORKDIR /app
+
+# Copy code last so source edits don't bust the deps layer.
+COPY --chown=app:app . /app
+
+# Strip dev-only files at build time so the image stays small.
+RUN rm -rf tests/ .pytest_cache/ .git/ .vscode/ aggrigator-plan/ 2>/dev/null || true \
+    && chmod +x /app/docker-entrypoint.sh
+
+USER app
+
+# No EXPOSE / HEALTHCHECK — see file header.
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+CMD ["worker"]
