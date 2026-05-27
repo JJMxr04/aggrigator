@@ -4,6 +4,7 @@ edits. Mounted at /admin in main.py."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from markupsafe import Markup
 from sqladmin import Admin, BaseView, ModelView, action, expose
@@ -12,6 +13,26 @@ from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
 _TEMPLATES_DIR = str(Path(__file__).parent / "templates")
+
+
+class _RelativeRedirectAdmin(Admin):
+    """Admin subclass that returns path-only post-save redirect URLs.
+
+    Behind Cloudflare Tunnel the origin app runs over plain HTTP, so
+    ``request.url_for(...)`` can emit a redirect Location that the
+    browser sees as a different origin from the document — which trips
+    ``Content-Security-Policy: form-action 'self'`` enforced on the
+    redirect target. Returning a path drops scheme+host entirely so the
+    browser resolves the redirect against the request origin, keeping
+    the whole submit→302→GET chain inside ``'self'``."""
+
+    def get_save_redirect_url(
+        self, request: Request, form: dict, obj: Any, model_view: ModelView,
+    ) -> str:
+        url = super().get_save_redirect_url(
+            request=request, form=form, obj=obj, model_view=model_view,
+        )
+        return url.path if hasattr(url, "path") else str(url)
 
 from aggrigator.db import async_session_factory, engine
 from aggrigator.webhooks.enqueue import force_enqueue_for_event
@@ -487,7 +508,7 @@ class DataResetLink(BaseView):
 def mount_admin(app, *, base_url: str = "/admin") -> Admin:
     from aggrigator.admin.auth_backend import make_admin_auth
 
-    admin = Admin(
+    admin = _RelativeRedirectAdmin(
         app, engine,
         base_url=base_url,
         title="Aggrigator Admin",
