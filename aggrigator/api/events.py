@@ -77,12 +77,17 @@ async def list_events(
     ),
     include: Literal["markets"] | None = Query(default=None),
 ):
-    stmt = select(Event).options(
+    stmt = (
+    select(Event)
+    .where(Event.markets.any())
+    .options(
         selectinload(Event.home_team),
         selectinload(Event.away_team),
         selectinload(Event.sport),
         selectinload(Event.league),
     )
+)
+     
 
     if sport:
         stmt = stmt.where(Event.sport_id == sport)
@@ -92,6 +97,7 @@ async def list_events(
         stmt = stmt.where(Event.status_type == "inprogress")
     elif live is False:
         stmt = stmt.where(Event.status_type != "inprogress")
+    
 
     # Window resolution: `date` wins (single-day filter), else honor any
     # explicit starts_after / starts_before, else fall back to the
