@@ -3,6 +3,14 @@
   "sport_canonical_id": "HOCKEY",
   "leagues": [
     {
+      "canonical_id": "AIHL",
+      "canonical_name": "Australian Ice Hockey League",
+      "odds_api_io_key": "AIHL",
+      "thesportsdb_league_id": false,
+      "confirmed": false,
+      "active": true
+    },
+    {
       "canonical_id": "NHL",
       "canonical_name": "National Hockey League",
       "odds_api_io_key": "NHL",

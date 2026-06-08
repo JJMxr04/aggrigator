@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "SOCCER",
+  "league_canonical_id": "USL_CHAMPIONSHIP",
+  "teams": [
+    {
+      "canonical_name": "Birmingham Legion FC",
+      "odds_api_io_key": "538325",
+      "thesportsdb_team_id": "138893",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Brooklyn FC",
+      "odds_api_io_key": "1312976",
+      "thesportsdb_team_id": "154065",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Charleston Battery",
+      "odds_api_io_key": "22004",
+      "thesportsdb_team_id": "138875",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Colorado Springs Switchbacks FC",
+      "odds_api_io_key": "206017",
+      "thesportsdb_team_id": "138888",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Detroit City FC",
+      "odds_api_io_key": "437402",
+      "thesportsdb_team_id": "143565",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "El Paso Locomotive FC",
+      "odds_api_io_key": "545599",
+      "thesportsdb_team_id": "138885",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "FC Tulsa",
+      "odds_api_io_key": "206015",
+      "thesportsdb_team_id": "138878",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Hartford Athletic",
+      "odds_api_io_key": "538327",
+      "thesportsdb_team_id": "138877",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Indy Eleven",
+      "odds_api_io_key": "148992",
+      "thesportsdb_team_id": "135414",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Las Vegas Lights",
+      "odds_api_io_key": "412157",
+      "thesportsdb_team_id": "138891",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Lexington SC",
+      "odds_api_io_key": "980885",
+      "thesportsdb_team_id": "147061",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Loudoun United FC",
+      "odds_api_io_key": "538329",
+      "thesportsdb_team_id": "138881",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Louisville City FC",
+      "odds_api_io_key": "206011",
+      "thesportsdb_team_id": "139040",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Miami FC",
+      "odds_api_io_key": "253137",
+      "thesportsdb_team_id": "140072",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Monterey Bay FC",
+      "odds_api_io_key": "868669",
+      "thesportsdb_team_id": "144843",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "New Mexico United",
+      "odds_api_io_key": "545601",
+      "thesportsdb_team_id": "138883",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Oakland Roots SC",
+      "odds_api_io_key": "598758",
+      "thesportsdb_team_id": "141177",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Orange County SC",
+      "odds_api_io_key": "235850",
+      "thesportsdb_team_id": "138873",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Phoenix Rising FC",
+      "odds_api_io_key": "154018",
+      "thesportsdb_team_id": "138882",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Pittsburgh Riverhounds",
+      "odds_api_io_key": "23635",
+      "thesportsdb_team_id": "138896",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Rhode Island FC",
+      "odds_api_io_key": "1092285",
+      "thesportsdb_team_id": "147854",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Sacramento Republic FC",
+      "odds_api_io_key": "153498",
+      "thesportsdb_team_id": "138889",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "San Antonio FC",
+      "odds_api_io_key": "250005",
+      "thesportsdb_team_id": "135410",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Sporting Jax",
+      "odds_api_io_key": "1232493",
+      "thesportsdb_team_id": "151793",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Tampa Bay Rowdies",
+      "odds_api_io_key": "41617",
+      "thesportsdb_team_id": "135411",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    }
+  ]
+}

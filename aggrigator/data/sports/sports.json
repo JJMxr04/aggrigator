@@ -13,7 +13,7 @@
       "canonical_id": "BASKETBALL",
       "canonical_name": "Basketball",
       "odds_api_io_key": "BASKETBALL",
-      "thesportsdb_strSport": false,
+      "thesportsdb_strSport": "Basketball",
       "confirmed": false,
       "active": true
     },
@@ -26,10 +26,18 @@
       "active": true
     },
     {
+      "canonical_id": "GAELIC_FOOTBALL",
+      "canonical_name": "Gaelic Football",
+      "odds_api_io_key": "GAELIC_FOOTBALL",
+      "thesportsdb_strSport": "Gaelic",
+      "confirmed": false,
+      "active": true
+    },
+    {
       "canonical_id": "HOCKEY",
       "canonical_name": "Ice Hockey",
       "odds_api_io_key": "HOCKEY",
-      "thesportsdb_strSport": false,
+      "thesportsdb_strSport": "Ice Hockey",
       "confirmed": false,
       "active": true
     },
@@ -38,6 +46,14 @@
       "canonical_name": "Soccer",
       "odds_api_io_key": "SOCCER",
       "thesportsdb_strSport": "Soccer",
+      "confirmed": false,
+      "active": true
+    },
+    {
+      "canonical_id": "VOLLEYBALL",
+      "canonical_name": "Volleyball",
+      "odds_api_io_key": "VOLLEYBALL",
+      "thesportsdb_strSport": "Volleyball",
       "confirmed": false,
       "active": true
     }

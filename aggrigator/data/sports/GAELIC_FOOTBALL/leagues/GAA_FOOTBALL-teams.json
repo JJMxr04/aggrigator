@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "GAELIC_FOOTBALL",
+  "league_canonical_id": "GAA_FOOTBALL",
+  "teams": [
+    {
+      "canonical_name": "Armagh",
+      "odds_api_io_key": "566387",
+      "thesportsdb_team_id": "151022",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Cavan",
+      "odds_api_io_key": "566423",
+      "thesportsdb_team_id": "151024",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Cork",
+      "odds_api_io_key": "566411",
+      "thesportsdb_team_id": "151026",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Derry",
+      "odds_api_io_key": "566427",
+      "thesportsdb_team_id": "151027",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Donegal",
+      "odds_api_io_key": "566403",
+      "thesportsdb_team_id": "151028",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Dublin",
+      "odds_api_io_key": "566349",
+      "thesportsdb_team_id": "151030",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Galway",
+      "odds_api_io_key": "566399",
+      "thesportsdb_team_id": "151032",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Kerry",
+      "odds_api_io_key": "566391",
+      "thesportsdb_team_id": "151033",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Kildare",
+      "odds_api_io_key": "566405",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Louth",
+      "odds_api_io_key": "566377",
+      "thesportsdb_team_id": "151040",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Mayo",
+      "odds_api_io_key": "566397",
+      "thesportsdb_team_id": "151041",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Meath",
+      "odds_api_io_key": "566421",
+      "thesportsdb_team_id": "151042",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Monaghan",
+      "odds_api_io_key": "566409",
+      "thesportsdb_team_id": "151043",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Roscommon",
+      "odds_api_io_key": "566415",
+      "thesportsdb_team_id": "151046",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Tyrone",
+      "odds_api_io_key": "566393",
+      "thesportsdb_team_id": "151049",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Westmeath",
+      "odds_api_io_key": "566355",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    }
+  ]
+}

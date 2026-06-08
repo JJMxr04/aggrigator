@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "BASKETBALL",
+  "league_canonical_id": "WNBA",
+  "teams": [
+    {
+      "canonical_name": "Atlanta Dream",
+      "odds_api_io_key": "35545",
+      "thesportsdb_team_id": "136447",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Chicago Sky",
+      "odds_api_io_key": "35546",
+      "thesportsdb_team_id": "136440",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Connecticut Sun",
+      "odds_api_io_key": "35547",
+      "thesportsdb_team_id": "136445",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Dallas Wings",
+      "odds_api_io_key": "3450",
+      "thesportsdb_team_id": "136441",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Golden State Valkyries",
+      "odds_api_io_key": "1200059",
+      "thesportsdb_team_id": "150722",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Indiana Fever",
+      "odds_api_io_key": "3452",
+      "thesportsdb_team_id": "136439",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Las Vegas Aces",
+      "odds_api_io_key": "35550",
+      "thesportsdb_team_id": "136437",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Los Angeles Sparks",
+      "odds_api_io_key": "3447",
+      "thesportsdb_team_id": "136443",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Minnesota Lynx",
+      "odds_api_io_key": "3440",
+      "thesportsdb_team_id": "136442",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "New York Liberty",
+      "odds_api_io_key": "3446",
+      "thesportsdb_team_id": "136438",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Phoenix Mercury",
+      "odds_api_io_key": "3444",
+      "thesportsdb_team_id": "136444",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Portland Fire",
+      "odds_api_io_key": "3445",
+      "thesportsdb_team_id": "152565",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Seattle Storm",
+      "odds_api_io_key": "3448",
+      "thesportsdb_team_id": "136448",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Toronto Tempo",
+      "odds_api_io_key": "1216305",
+      "thesportsdb_team_id": "150744",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Washington Mystics",
+      "odds_api_io_key": "3454",
+      "thesportsdb_team_id": "136446",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    }
+  ]
+}

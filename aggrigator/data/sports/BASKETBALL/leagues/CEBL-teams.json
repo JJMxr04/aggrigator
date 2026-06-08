@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "BASKETBALL",
+  "league_canonical_id": "CEBL",
+  "teams": [
+    {
+      "canonical_name": "Calgary Surge",
+      "odds_api_io_key": "731903",
+      "thesportsdb_team_id": "145889",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Edmonton Stingers",
+      "odds_api_io_key": "731909",
+      "thesportsdb_team_id": "145887",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Fraser Valley Bandits",
+      "odds_api_io_key": "731911",
+      "thesportsdb_team_id": "145888",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Hamilton Honey Badgers",
+      "odds_api_io_key": "731897",
+      "thesportsdb_team_id": "145890",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Montreal Alliance",
+      "odds_api_io_key": "1106041",
+      "thesportsdb_team_id": "145891",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Niagara River Lions",
+      "odds_api_io_key": "731899",
+      "thesportsdb_team_id": "145893",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Ottawa Blackjacks",
+      "odds_api_io_key": "731901",
+      "thesportsdb_team_id": "145894",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Saskatoon Mamba",
+      "odds_api_io_key": "731905",
+      "thesportsdb_team_id": "145895",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Scarborough Shooting Stars",
+      "odds_api_io_key": "1106031",
+      "thesportsdb_team_id": "145896",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Winnipeg Sea Bears",
+      "odds_api_io_key": "1106021",
+      "thesportsdb_team_id": "147425",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    }
+  ]
+}

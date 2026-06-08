@@ -189,6 +189,52 @@ def test_pending_event_with_odds_translates_main_lines() -> None:
     assert not any("9_5" in k or "7_5" in k for k in odd_keys)
 
 
+def test_us_sport_spread_market_translates_as_handicap() -> None:
+    """US sports (MLB/NBA/NFL/NHL) ship the handicap market under the name
+    ``"Spread"``, not ``"Asian Handicap"``. The translator must treat both
+    identically — otherwise the run line / point spread is silently dropped
+    and MLB surfaces only ML + Totals. Regression for that drop.
+    """
+    ev = _mlb_event_pending()
+    odds = {
+        "id": 100,
+        "home": "Yankees", "away": "Red Sox",
+        "date": "2026-05-10T19:00:00Z", "status": "pending",
+        "sport": {"name": "Baseball", "slug": "baseball"},
+        "league": {"name": "USA - MLB", "slug": "usa-mlb"},
+        "urls": {"DraftKings": "https://dk.example/123"},
+        "bookmakers": {
+            "DraftKings": [
+                {"name": "ML", "updatedAt": "2026-05-10T17:00:00Z",
+                 "odds": [{"home": "1.85", "away": "2.10"}]},
+                # The provider's real US-sport name for the handicap market.
+                {"name": "Spread", "updatedAt": "2026-05-10T17:00:00Z",
+                 "odds": [{"hdp": 1.5, "home": "1.64", "away": "2.29"}]},
+                {"name": "Totals", "updatedAt": "2026-05-10T17:00:00Z",
+                 "odds": [{"hdp": 8.5, "over": "1.81", "under": "2.02"}]},
+            ],
+        },
+    }
+    payload = to_internal_event_payload(ev, odds)
+    assert payload is not None
+    odd_keys = set(payload["odds"].keys())
+    # The "Spread" market must produce the run-line oddIDs.
+    assert "runs-home-game-sp-home" in odd_keys
+    assert "runs-away-game-sp-away" in odd_keys
+
+    # And normalize must surface it as the MLB_RUN_LINE market (taxonomy
+    # override), alongside ML and Totals.
+    spec = event_spec_from_payload(payload)
+    assert spec is not None
+    market_types = {
+        getattr(m, "market_type", getattr(m, "type", None))
+        for m in spec.markets
+    }
+    assert "MLB_RUN_LINE" in market_types
+    assert "MLB_RUNS_ML" in market_types
+    assert "MLB_RUNS_OU" in market_types
+
+
 def test_pending_event_picks_main_totals_line_closest_to_canonical() -> None:
     ev = _mlb_event_pending()
     odds = _mlb_odds_payload()

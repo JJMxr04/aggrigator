@@ -3,10 +3,26 @@
   "sport_canonical_id": "BASKETBALL",
   "leagues": [
     {
+      "canonical_id": "CEBL",
+      "canonical_name": "Canadian Elite Basketball League",
+      "odds_api_io_key": "CEBL",
+      "thesportsdb_league_id": "5266",
+      "confirmed": false,
+      "active": true
+    },
+    {
       "canonical_id": "NBA",
       "canonical_name": "National Basketball Association",
       "odds_api_io_key": "NBA",
       "thesportsdb_league_id": false,
+      "confirmed": false,
+      "active": true
+    },
+    {
+      "canonical_id": "WNBA",
+      "canonical_name": "WNBA",
+      "odds_api_io_key": "WNBA",
+      "thesportsdb_league_id": "4516",
       "confirmed": false,
       "active": true
     }

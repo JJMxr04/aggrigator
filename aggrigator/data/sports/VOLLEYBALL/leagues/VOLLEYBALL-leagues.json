@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "VOLLEYBALL",
+  "leagues": [
+    {
+      "canonical_id": "VNL",
+      "canonical_name": "FIVB Volleyball Mens Nations League",
+      "odds_api_io_key": "VNL",
+      "thesportsdb_league_id": "5083",
+      "confirmed": false,
+      "active": true
+    },
+    {
+      "canonical_id": "VNL_WOMEN",
+      "canonical_name": "FIVB Volleyball Womens Nations League",
+      "odds_api_io_key": "VNL_WOMEN",
+      "thesportsdb_league_id": "5084",
+      "confirmed": false,
+      "active": true
+    }
+  ]
+}

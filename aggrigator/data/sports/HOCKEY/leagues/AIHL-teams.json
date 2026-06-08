@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "HOCKEY",
+  "league_canonical_id": "AIHL",
+  "teams": [
+    {
+      "canonical_name": "Adelaide Adrenaline",
+      "odds_api_io_key": "388684",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Brisbane Lightning",
+      "odds_api_io_key": "974501",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Canberra Brave",
+      "odds_api_io_key": "389676",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Central Coast Rhinos",
+      "odds_api_io_key": "974503",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Melbourne Ice",
+      "odds_api_io_key": "428297",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Melbourne Mustangs",
+      "odds_api_io_key": "428307",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Newcastle North Stars",
+      "odds_api_io_key": "428305",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Perth Thunder",
+      "odds_api_io_key": "428303",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Sydney Bears",
+      "odds_api_io_key": "428301",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Sydney Ice Dogs",
+      "odds_api_io_key": "428299",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    }
+  ]
+}

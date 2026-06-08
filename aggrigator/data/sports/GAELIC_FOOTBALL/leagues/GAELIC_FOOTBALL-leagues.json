@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "GAELIC_FOOTBALL",
+  "leagues": [
+    {
+      "canonical_id": "GAA_FOOTBALL",
+      "canonical_name": "All-Ireland Senior Football Championship",
+      "odds_api_io_key": "GAA_FOOTBALL",
+      "thesportsdb_league_id": "5564",
+      "confirmed": false,
+      "active": true
+    }
+  ]
+}

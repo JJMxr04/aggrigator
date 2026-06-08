@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "SOCCER",
+  "league_canonical_id": "BRASILEIRAO_SERIE_B",
+  "teams": [
+    {
+      "canonical_name": "AA Ponte Preta SP",
+      "odds_api_io_key": "1969",
+      "thesportsdb_team_id": "134290",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "AC Goianiense GO",
+      "odds_api_io_key": "7314",
+      "thesportsdb_team_id": "134737",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "America FC MG",
+      "odds_api_io_key": "1973",
+      "thesportsdb_team_id": "134742",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Athletic Club Sjdr MG",
+      "odds_api_io_key": "547561",
+      "thesportsdb_team_id": "147142",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Avai FC SC",
+      "odds_api_io_key": "7315",
+      "thesportsdb_team_id": "134738",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Botafogo FC SP",
+      "odds_api_io_key": "1979",
+      "thesportsdb_team_id": "136830",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "CR Brasil AL",
+      "odds_api_io_key": "22032",
+      "thesportsdb_team_id": "135680",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Ceara SC CE",
+      "odds_api_io_key": "2001",
+      "thesportsdb_team_id": "134744",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Criciuma EC SC",
+      "odds_api_io_key": "1984",
+      "thesportsdb_team_id": "134292",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Cuiaba EC MT",
+      "odds_api_io_key": "49202",
+      "thesportsdb_team_id": "136831",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "EC Juventude RS",
+      "odds_api_io_key": "1980",
+      "thesportsdb_team_id": "135887",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Fortaleza EC CE",
+      "odds_api_io_key": "2020",
+      "thesportsdb_team_id": "136186",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Goias EC GO",
+      "odds_api_io_key": "1960",
+      "thesportsdb_team_id": "134295",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Gremio Novorizontino SP",
+      "odds_api_io_key": "135514",
+      "thesportsdb_team_id": "141182",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Londrina EC PR",
+      "odds_api_io_key": "2022",
+      "thesportsdb_team_id": "135664",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Nautico PE",
+      "odds_api_io_key": "2011",
+      "thesportsdb_team_id": "134289",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Operario Ferroviario EC PR",
+      "odds_api_io_key": "39634",
+      "thesportsdb_team_id": "136829",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "SC Recife PE",
+      "odds_api_io_key": "1959",
+      "thesportsdb_team_id": "136250",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Sao Bernardo FC",
+      "odds_api_io_key": "47504",
+      "thesportsdb_team_id": "145389",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Vila Nova FC GO",
+      "odds_api_io_key": "2021",
+      "thesportsdb_team_id": "134734",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    }
+  ]
+}

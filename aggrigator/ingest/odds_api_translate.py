@@ -7,9 +7,11 @@ INTO the upstream shape so normalize.py works unchanged.
 
 Per the migration plan (aggrigator-plan/odds-api/odds-api.md §Scope):
 
-- Only ``ML`` / ``Asian Handicap`` (main line) / ``Totals`` (main line) are
-  translated. Everything else returned by ``/odds`` is dropped at the
-  translator boundary.
+- Only ``ML`` / ``Asian Handicap`` or ``Spread`` (main line) / ``Totals``
+  (main line) are translated. ``Asian Handicap`` (soccer/tennis) and
+  ``Spread`` (US sports — MLB run line, NBA/NFL/NHL spread) are the same
+  handicap shape under two provider names. Everything else returned by
+  ``/odds`` is dropped at the translator boundary.
 - ``live`` events: dropped (yield no payload at all).
 - ``settled`` events: translated to a internal-shape event WITHOUT odds (event
   scores carry settlement; no per-bookmaker price snapshot needed).
@@ -48,9 +50,11 @@ INTERNAL_TO_ODDSAPI_SPORT: dict[str, str] = {
     "BASEBALL": "baseball",
     "BASKETBALL": "basketball",
     "FOOTBALL": "american-football",
+    "GAELIC_FOOTBALL": "gaelic-football",
     "HOCKEY": "ice-hockey",
     "SOCCER": "football",
     "TENNIS": "tennis",
+    "VOLLEYBALL": "volleyball",
 }
 ODDSAPI_TO_INTERNAL_SPORT: dict[str, str] = {v: k for k, v in INTERNAL_TO_ODDSAPI_SPORT.items()}
 
@@ -64,6 +68,20 @@ INTERNAL_TO_ODDSAPI_LEAGUE: dict[str, str] = {
     "NHL": "usa-nhl",
     "UEFA_CHAMPIONS_LEAGUE": "europe-uefa-champions-league",
     "EPL": "england-premier-league",
+    # Added 2026-06-07 after full-roster coverage check — every team in
+    # each league below has pending games on the provider (verified by
+    # sports-scores-sim/scripts/check-league-team-coverage.py against
+    # official 2026 season rosters). Don't add a league here without
+    # running that check: a league deep into playoffs only surfaces a
+    # handful of teams and lazy team-upsert would seed it incomplete.
+    "WNBA": "usa-wnba",
+    "CEBL": "canada-cebl",
+    "USL_CHAMPIONSHIP": "usa-usl-championship",
+    "BRASILEIRAO_SERIE_B": "brazil-brasileiro-serie-b",
+    "GAA_FOOTBALL": "ireland-gaa-all-ireland-football-championship",
+    "AIHL": "australia-australian-ice-hockey-league",
+    "VNL": "international-nations-league",
+    "VNL_WOMEN": "international-nations-league-women",
 }
 ODDSAPI_TO_INTERNAL_LEAGUE: dict[str, str] = {v: k for k, v in INTERNAL_TO_ODDSAPI_LEAGUE.items()}
 
@@ -78,9 +96,11 @@ _SPORT_TO_STAT_ID: dict[str, str] = {
     "BASEBALL": "runs",
     "BASKETBALL": "points",
     "FOOTBALL": "points",  # American football
+    "GAELIC_FOOTBALL": "points",  # GAA total score (goals fold into points)
     "HOCKEY": "goals",
     "SOCCER": "goals",
     "TENNIS": "points",
+    "VOLLEYBALL": "points",
 }
 
 
@@ -323,7 +343,10 @@ def _translate_odds(
                     odds_by_id, row, stat_id, sport_id, book_id,
                     deeplink, updated_at,
                 )
-            elif mname == "Asian Handicap":
+            elif mname in ("Asian Handicap", "Spread"):
+                # "Asian Handicap" is the soccer/tennis name; US sports
+                # (MLB run line, NBA/NFL/NHL spread) ship the same shape under
+                # "Spread". Both carry a per-row ``hdp`` and home/away prices.
                 row = _pick_main_line_handicap(entries)
                 if row is None:
                     continue

@@ -397,6 +397,14 @@ class OddsApiHttpClient:
             "NHL": "HOCKEY",
             "UEFA_CHAMPIONS_LEAGUE": "SOCCER",
             "EPL": "SOCCER",
+            "WNBA": "BASKETBALL",
+            "CEBL": "BASKETBALL",
+            "USL_CHAMPIONSHIP": "SOCCER",
+            "BRASILEIRAO_SERIE_B": "SOCCER",
+            "GAA_FOOTBALL": "GAELIC_FOOTBALL",
+            "AIHL": "HOCKEY",
+            "VNL": "VOLLEYBALL",
+            "VNL_WOMEN": "VOLLEYBALL",
         }
         return per_league.get(league_id)
 

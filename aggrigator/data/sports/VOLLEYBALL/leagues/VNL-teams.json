@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "VOLLEYBALL",
+  "league_canonical_id": "VNL",
+  "teams": [
+    {
+      "canonical_name": "Argentina",
+      "odds_api_io_key": "6811",
+      "thesportsdb_team_id": "141818",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Belgium",
+      "odds_api_io_key": "7509",
+      "thesportsdb_team_id": "141956",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Brazil",
+      "odds_api_io_key": "6813",
+      "thesportsdb_team_id": "141819",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Bulgaria",
+      "odds_api_io_key": "6814",
+      "thesportsdb_team_id": "141957",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Canada",
+      "odds_api_io_key": "6815",
+      "thesportsdb_team_id": "141820",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "China",
+      "odds_api_io_key": "6816",
+      "thesportsdb_team_id": "141960",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Cuba",
+      "odds_api_io_key": "6817",
+      "thesportsdb_team_id": "141963",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "France",
+      "odds_api_io_key": "6820",
+      "thesportsdb_team_id": "141821",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Germany",
+      "odds_api_io_key": "6821",
+      "thesportsdb_team_id": "141967",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Iran",
+      "odds_api_io_key": "6823",
+      "thesportsdb_team_id": "141822",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Italy",
+      "odds_api_io_key": "6824",
+      "thesportsdb_team_id": "141823",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Japan",
+      "odds_api_io_key": "6825",
+      "thesportsdb_team_id": "141824",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Poland",
+      "odds_api_io_key": "6827",
+      "thesportsdb_team_id": "141825",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Serbia",
+      "odds_api_io_key": "6830",
+      "thesportsdb_team_id": "141976",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Slovenia",
+      "odds_api_io_key": "7513",
+      "thesportsdb_team_id": "141977",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Turkiye",
+      "odds_api_io_key": "7515",
+      "thesportsdb_team_id": "141993",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "USA",
+      "odds_api_io_key": "6833",
+      "thesportsdb_team_id": "141828",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Ukraine",
+      "odds_api_io_key": "23408",
+      "thesportsdb_team_id": "141994",
+      "confirmed": true,
+      "source": "fuzzy_match"
+    }
+  ]
+}
