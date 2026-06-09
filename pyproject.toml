@@ -19,7 +19,11 @@ dependencies = [
   "cryptography>=43.0",
   "procrastinate>=3.6",
   "psycopg[binary,pool]>=3.2",
-  "sqladmin>=0.18",
+  # Pinned: sqladmin releases after 0.25.0 ship a BooleanInputWidget that no
+  # longer carries `validation_attrs`, crashing wtforms 3.x's Input.__call__
+  # when the admin renders a boolean field. 0.25.0 requires wtforms>=3.1,<3.2
+  # (-> 3.1.2); this is the tested combo and matches requirements.txt.
+  "sqladmin==0.25.0",
   "itsdangerous>=2.2",
   "structlog>=24.4",
 ]

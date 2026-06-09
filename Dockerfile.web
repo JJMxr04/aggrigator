@@ -22,12 +22,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install dependencies first for better layer caching — only re-runs when
-# pyproject changes, not on every code edit.
-COPY pyproject.toml ./
+# Install pinned dependencies from the lockfile for reproducible builds.
+# requirements.txt is the single source of truth — pyproject.toml carries
+# only loose lower-bounds for local/dev resolution and is NOT used here.
+# This layer re-runs only when requirements.txt changes, not on every code
+# edit. The app package itself isn't pip-installed; it runs from
+# PYTHONPATH=/app (code is COPY'd into the runtime stage below). gunicorn is
+# server-only (not a project dep) so it's pinned here rather than in the lock.
+COPY requirements.txt ./
 RUN pip install --upgrade pip \
-    && pip install --prefix=/install . \
-    && pip install --prefix=/install gunicorn
+    && pip install --prefix=/install -r requirements.txt \
+    && pip install --prefix=/install gunicorn==23.0.0
 
 # ---------- runtime ----------
 FROM python:3.12-slim AS runtime
