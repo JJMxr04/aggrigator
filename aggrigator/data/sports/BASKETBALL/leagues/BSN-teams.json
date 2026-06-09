@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "sport_canonical_id": "BASKETBALL",
+  "league_canonical_id": "BSN",
+  "teams": [
+    {
+      "canonical_name": "Aguada Santeros",
+      "odds_api_io_key": "245849",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Atleticos de San German",
+      "odds_api_io_key": "327085",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Cangrejeros de Santurce",
+      "odds_api_io_key": "176000",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Capitanes de Arecibo",
+      "odds_api_io_key": "89926",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Criollos de Caguas",
+      "odds_api_io_key": "295786",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Gigantes de Carolina",
+      "odds_api_io_key": "814744",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Indios de Mayaguez",
+      "odds_api_io_key": "295788",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Leones de Ponce",
+      "odds_api_io_key": "134396",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Mets de Guaynabo",
+      "odds_api_io_key": "680357",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Osos de Manati",
+      "odds_api_io_key": "991455",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Piratas Quebradillas",
+      "odds_api_io_key": "391550",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    },
+    {
+      "canonical_name": "Vaqueros de Bayamon",
+      "odds_api_io_key": "388854",
+      "thesportsdb_team_id": false,
+      "confirmed": false,
+      "source": "fuzzy_match"
+    }
+  ]
+}

@@ -75,7 +75,10 @@ INTERNAL_TO_ODDSAPI_LEAGUE: dict[str, str] = {
     # running that check: a league deep into playoffs only surfaces a
     # handful of teams and lazy team-upsert would seed it incomplete.
     "WNBA": "usa-wnba",
-    "CEBL": "canada-cebl",
+    # BSN (Puerto Rico) added 2026-06-09 — replaces CEBL, which neither
+    # DraftKings nor bet365 price. Full-roster coverage verified 12/12
+    # against the official 2026 season (check-league-team-coverage.py).
+    "BSN": "puerto-rico-bsn",
     "USL_CHAMPIONSHIP": "usa-usl-championship",
     "BRASILEIRAO_SERIE_B": "brazil-brasileiro-serie-b",
     "GAA_FOOTBALL": "ireland-gaa-all-ireland-football-championship",
@@ -323,6 +326,12 @@ def _translate_odds(
 
     for book_display_name, markets in bookmakers.items():
         if not isinstance(markets, list):
+            continue
+        # Requesting "Bet365" returns both the standard feed and a premium
+        # "Bet365 (no latency)" feed. Consume only the standard one — the
+        # low-latency variant would otherwise create a phantom
+        # ``bet365 (no latency)`` bookmaker row alongside ``bet365``.
+        if "(no latency)" in book_display_name.lower():
             continue
         book_id = _normalize_book_id(book_display_name)
         deeplink = urls.get(book_display_name) or ""

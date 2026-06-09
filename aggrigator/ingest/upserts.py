@@ -73,7 +73,7 @@ async def upsert_league_from_spec(session: AsyncSession, payload: dict) -> Leagu
             sport_id=sport.id,
             name=payload.get("name") or league_id,
             short_name=(payload.get("shortName") or "")[:48],
-            active=True,
+            active=False,
         )
         session.add(row)
     else:
@@ -81,9 +81,10 @@ async def upsert_league_from_spec(session: AsyncSession, payload: dict) -> Leagu
         row.name = payload.get("name") or league_id
         row.short_name = (payload.get("shortName") or "")[:48]
         # Re-seed preserves operator choices: a league an operator flipped
-        # off stays off across daily seeds. New leagues land active=True
-        # but are still gated by their parent Sport's ``active`` flag —
-        # ``ingest_due_leagues`` requires both.
+        # on stays on across daily seeds. New leagues land active=False —
+        # the operator must enable them, and even then they're gated by
+        # their parent Sport's ``active`` flag (``ingest_due_leagues``
+        # requires both).
         # Registry-managed columns are NOT touched here:
         #   odds_api_io_key, thesportsdb_id, can_pull_historical_scores
         # — those are owned by the registry loader.

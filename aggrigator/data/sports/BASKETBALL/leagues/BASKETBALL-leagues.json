@@ -8,6 +8,14 @@
       "odds_api_io_key": "CEBL",
       "thesportsdb_league_id": "5266",
       "confirmed": false,
+      "active": false
+    },
+    {
+      "canonical_id": "BSN",
+      "canonical_name": "Baloncesto Superior Nacional",
+      "odds_api_io_key": "BSN",
+      "thesportsdb_league_id": false,
+      "confirmed": false,
       "active": true
     },
     {

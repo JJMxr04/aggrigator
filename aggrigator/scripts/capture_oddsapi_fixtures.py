@@ -116,7 +116,7 @@ def capture(api_key: str) -> int:
                     {
                         **params,
                         "eventIds": ",".join(batch),
-                        "bookmakers": "DraftKings,FanDuel",
+                        "bookmakers": "DraftKings,Bet365",
                     },
                 )
                 _save(f"odds_multi__{league_id}.json", multi)

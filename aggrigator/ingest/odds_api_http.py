@@ -55,12 +55,12 @@ logger = logging.getLogger(__name__)
 # rationale. The two slots are matched to the books selected on the
 # odds-api.io account: changing this constant without changing the account
 # selection produces HTTP 400 on /odds/multi.
-ODDSAPI_BOOKMAKERS: tuple[str, ...] = ("draftkings", "fanduel")
+ODDSAPI_BOOKMAKERS: tuple[str, ...] = ("draftkings", "bet365")
 # The /odds query param expects display-cased names (e.g. "DraftKings"); our
 # internal IDs are lowercase. Map at the API boundary.
 _BOOKMAKER_ID_TO_DISPLAY: dict[str, str] = {
     "draftkings": "DraftKings",
-    "fanduel": "FanDuel",
+    "bet365": "Bet365",
 }
 
 
@@ -399,6 +399,7 @@ class OddsApiHttpClient:
             "EPL": "SOCCER",
             "WNBA": "BASKETBALL",
             "CEBL": "BASKETBALL",
+            "BSN": "BASKETBALL",
             "USL_CHAMPIONSHIP": "SOCCER",
             "BRASILEIRAO_SERIE_B": "SOCCER",
             "GAA_FOOTBALL": "GAELIC_FOOTBALL",

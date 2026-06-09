@@ -6,9 +6,10 @@ what this module is for. Run it once per deploy and again whenever the
 provider adds a sport / league.
 
 Sport-gating: ``seed_leagues`` only persists leagues whose parent Sport
-already exists in our DB AND is ``active=True``. Sports default to
-inactive — an operator flips a sport on in SQLAdmin, re-runs seed, and
-that sport's leagues come along already active by default.
+already exists in our DB AND is ``active=True``. Both sports and leagues
+default to inactive — an operator flips a sport on in SQLAdmin, re-runs
+seed to pull in that sport's leagues (which land inactive), then flips
+on the individual leagues to ingest.
 """
 
 from __future__ import annotations
@@ -58,8 +59,9 @@ async def seed_leagues(
     sport is unknown / inactive are skipped silently — re-run seed
     after flipping a sport on to bring its leagues in.
 
-    New leagues land ``active=True`` by default (gated upstream by their
-    Sport's active flag); operator-flipped leagues stick across re-seeds.
+    New leagues land ``active=False`` by default — an operator must
+    enable them (and even then they're gated by their Sport's active
+    flag); operator-flipped leagues stick across re-seeds.
     """
     payloads = _payloads if _payloads is not None else list(client.get_leagues())
 
