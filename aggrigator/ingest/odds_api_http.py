@@ -41,6 +41,7 @@ from aggrigator.ingest.odds_api_translate import (
     INTERNAL_TO_ODDSAPI_LEAGUE,
     INTERNAL_TO_ODDSAPI_SPORT,
     ODDSAPI_TO_INTERNAL_SPORT,
+    match_league_slug,
     to_internal_event_payload,
 )
 
@@ -119,6 +120,15 @@ class OddsApiHttpClient:
         )
         self.max_retries = max(0, max_retries)
         self.bookmakers = bookmakers
+        # Per-cycle cache of /leagues?sport=<slug> responses. odds-api slugs
+        # carry the current season phase (usa-nba -> usa-nba-playoffs), so we
+        # resolve league slugs LIVE rather than from a static map — see
+        # odds_api_translate.match_league_slug. seed / activity-probe /
+        # event-walk all funnel through _leagues_for_sport, so within one task
+        # run each sport's league list is fetched at most once. The client is
+        # rebuilt per task run (workers/tasks/ingest._build_client), so the
+        # cache never outlives a single cycle and can't go stale mid-season.
+        self._leagues_cache: dict[str, list[dict]] = {}
         # Header state, refreshed on every response.
         self.last_ratelimit_limit: int | None = None
         self.last_ratelimit_remaining: int | None = None
@@ -188,18 +198,50 @@ class OddsApiHttpClient:
             })
         return out
 
+    def _leagues_for_sport(self, sport_slug: str) -> list[dict]:
+        """Cached ``/leagues?sport=<slug>`` for the current task run.
+
+        odds-api's league slugs carry the season phase, so seed, the activity
+        probe, and the event walk all need the LIVE league list — this caches
+        it so they share one HTTP call per sport per cycle. Any HTTP failure
+        caches an empty list (callers degrade gracefully: seed/activity skip,
+        the walk falls back to the static base slug)."""
+        cached = self._leagues_cache.get(sport_slug)
+        if cached is None:
+            try:
+                body = self._send("/leagues", {"sport": sport_slug})
+            except OddsApiError as exc:
+                logger.warning(
+                    "oddsapi _leagues_for_sport(%s) failed (%s) — caching empty",
+                    sport_slug, redact_api_key(str(exc)),
+                )
+                body = []
+            cached = body if isinstance(body, list) else []
+            self._leagues_cache[sport_slug] = cached
+        return cached
+
+    def _resolve_live_league_slug(
+        self, league_id: str, sport_slug: str,
+    ) -> str | None:
+        """Find the CURRENT odds-api slug for an internal league by matching
+        the live ``/leagues`` list against its phase-aware pattern. Returns
+        ``None`` when the league isn't currently offered (offseason / not
+        carried) so the caller can skip the walk."""
+        for ln in self._leagues_for_sport(sport_slug):
+            if match_league_slug(ln.get("slug") or "") == league_id:
+                return ln.get("slug")
+        return None
+
     def get_leagues(self, sport_id: str | None = None) -> list[dict]:
         """Walk one sport's leagues OR every active sport's leagues.
 
-        Only emits leagues that have an entry in
-        ``ODDSAPI_TO_INTERNAL_LEAGUE``. Unmapped leagues are logged + dropped
-        because the orchestrator walks events keyed on internal league IDs —
-        emitting a synthetic ID we don't know how to map back is just
-        future-broken data. To add a league: edit
-        ``odds_api_translate.INTERNAL_TO_ODDSAPI_LEAGUE``.
+        Only emits leagues that ``match_league_slug`` resolves to an internal
+        id (exact base slug OR a phase-suffixed variant — see
+        odds_api_translate). Unmapped leagues are logged + dropped because the
+        orchestrator walks events keyed on internal league IDs — emitting a
+        synthetic ID we don't know how to map back is just future-broken data.
+        To add a league: edit ``odds_api_translate.INTERNAL_LEAGUE_PATTERNS``.
         """
-        from aggrigator.ingest.odds_api_translate import ODDSAPI_TO_INTERNAL_LEAGUE
-
         sport_slugs: list[str]
         if sport_id:
             slug = INTERNAL_TO_ODDSAPI_SPORT.get(sport_id)
@@ -216,15 +258,14 @@ class OddsApiHttpClient:
         out: list[dict] = []
         dropped: list[str] = []
         for slug in sport_slugs:
-            body = self._send("/leagues", {"sport": slug})
-            leagues = body if isinstance(body, list) else []
+            leagues = self._leagues_for_sport(slug)
             internal_sport_id = ODDSAPI_TO_INTERNAL_SPORT.get(slug)
             if internal_sport_id is None:
                 dropped.append(f"<sport {slug}>")
                 continue
             for ln in leagues:
                 lslug = ln.get("slug") or ""
-                internal_league_id = ODDSAPI_TO_INTERNAL_LEAGUE.get(lslug)
+                internal_league_id = match_league_slug(lslug)
                 if internal_league_id is None:
                     dropped.append(lslug)
                     continue
@@ -241,8 +282,8 @@ class OddsApiHttpClient:
         if dropped:
             logger.info(
                 "oddsapi get_leagues: dropped %d unmapped league slug(s) — "
-                "extend INTERNAL_TO_ODDSAPI_LEAGUE in odds_api_translate.py to "
-                "include them. First 20: %s",
+                "add a pattern to INTERNAL_LEAGUE_PATTERNS in "
+                "odds_api_translate.py to include them. First 20: %s",
                 len(dropped), dropped[:20],
             )
         return out
@@ -262,22 +303,13 @@ class OddsApiHttpClient:
             back to walking every active league (no false negatives — we
             only skip when upstream explicitly says zero).
         """
-        from aggrigator.ingest.odds_api_translate import ODDSAPI_TO_INTERNAL_LEAGUE
-
         out: dict[str, int] = {}
         for slug in INTERNAL_TO_ODDSAPI_SPORT.values():
-            try:
-                body = self._send("/leagues", {"sport": slug})
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "get_league_activity: /leagues?sport=%s failed (%s) — "
-                    "skipping activity probe for this sport.", slug, exc,
-                )
-                continue
-            leagues = body if isinstance(body, list) else []
-            for ln in leagues:
-                lslug = ln.get("slug") or ""
-                internal_league_id = ODDSAPI_TO_INTERNAL_LEAGUE.get(lslug)
+            # _leagues_for_sport caches + swallows HTTP errors (empty list →
+            # no entries for that sport, so the orchestrator falls back to
+            # walking it rather than false-skipping).
+            for ln in self._leagues_for_sport(slug):
+                internal_league_id = match_league_slug(ln.get("slug") or "")
                 if internal_league_id is None:
                     continue
                 count = ln.get("eventsCount")
@@ -338,13 +370,22 @@ class OddsApiHttpClient:
 
         sport_id = self._league_to_sport(league_id)
         sport_slug = INTERNAL_TO_ODDSAPI_SPORT.get(sport_id) if sport_id else None
-        from aggrigator.ingest.odds_api_translate import INTERNAL_TO_ODDSAPI_LEAGUE
-        league_slug = INTERNAL_TO_ODDSAPI_LEAGUE.get(league_id)
+        # Resolve the CURRENT slug from the live /leagues list — odds-api's
+        # slug carries the season phase, so the static base slug can be wrong
+        # (e.g. usa-nba vs usa-nba-playoffs). Fall back to the base slug when
+        # the live probe is empty (HTTP failure) so a transient outage doesn't
+        # silently stop walking a league that's really there.
+        league_slug = (
+            self._resolve_live_league_slug(league_id, sport_slug)
+            if sport_slug else None
+        )
+        if league_slug is None and sport_slug is not None:
+            league_slug = INTERNAL_TO_ODDSAPI_LEAGUE.get(league_id)
         if sport_slug is None or league_slug is None:
             logger.warning(
-                "oddsapi get_events: no slug mapping for league %s "
-                "(sport_id=%s) — skipping. Update INTERNAL_TO_ODDSAPI_LEAGUE "
-                "in odds_api_translate.py.", league_id, sport_id,
+                "oddsapi get_events: no live slug for league %s "
+                "(sport_id=%s) — not currently offered by the provider "
+                "(offseason / not carried), skipping.", league_id, sport_id,
             )
             return
 

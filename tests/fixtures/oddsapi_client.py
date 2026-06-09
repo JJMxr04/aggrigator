@@ -15,10 +15,9 @@ from typing import Iterator
 
 from aggrigator.ingest.client import OddsClient, OddsClientError
 from aggrigator.ingest.odds_api_translate import (
-    INTERNAL_TO_ODDSAPI_LEAGUE,
     INTERNAL_TO_ODDSAPI_SPORT,
-    ODDSAPI_TO_INTERNAL_LEAGUE,
     ODDSAPI_TO_INTERNAL_SPORT,
+    match_league_slug,
     to_internal_event_payload,
 )
 
@@ -92,7 +91,7 @@ class FixtureOddsClient:
                 if not isinstance(ln, dict):
                     continue
                 lslug = ln.get("slug") or ""
-                internal_league = ODDSAPI_TO_INTERNAL_LEAGUE.get(lslug)
+                internal_league = match_league_slug(lslug)
                 if internal_league is None:
                     continue
                 out.append({

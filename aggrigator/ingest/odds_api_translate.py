@@ -31,6 +31,7 @@ about them. They start hardcoded; Phase 0 probe
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -82,11 +83,73 @@ INTERNAL_TO_ODDSAPI_LEAGUE: dict[str, str] = {
     "USL_CHAMPIONSHIP": "usa-usl-championship",
     "BRASILEIRAO_SERIE_B": "brazil-brasileiro-serie-b",
     "GAA_FOOTBALL": "ireland-gaa-all-ireland-football-championship",
-    "AIHL": "australia-australian-ice-hockey-league",
+    # Corrected 2026-06-09: odds-api lists this as ``australia-aihl`` (verified
+    # against /leagues?sport=ice-hockey), not the long descriptive slug.
+    "AIHL": "australia-aihl",
     "VNL": "international-nations-league",
     "VNL_WOMEN": "international-nations-league-women",
 }
 ODDSAPI_TO_INTERNAL_LEAGUE: dict[str, str] = {v: k for k, v in INTERNAL_TO_ODDSAPI_LEAGUE.items()}
+
+
+# Live odds-api slugs carry the current SEASON PHASE: ``usa-nba`` in the
+# regular season becomes ``usa-nba-playoffs`` in the postseason, ``usa-nfl``
+# becomes ``usa-nfl-preseason``, etc. The /leagues and /events endpoints ONLY
+# return the in-season slug, and the payload has NO stable league id (just
+# ``name``/``slug``/``eventsCount``). So exact-slug matching silently drops a
+# league the moment its phase changes — which is why a static dict only ever
+# caught the handful of leagues whose phase happened to match.
+#
+# We match by ANCHORED pattern instead. ``_PHASE`` is an optional suffix
+# alternation of the phases we have observed; the ``^...$`` anchors keep
+# ``usa-mls`` from swallowing ``usa-mls-next-pro`` and ``serie-b`` from
+# matching ``serie-d``. A league entering a phase whose suffix isn't listed
+# here still drops (and is logged by the caller) until the suffix is added —
+# so EXTEND THE ALTERNATION when a new phase shows up, don't widen the prefix.
+_PHASE = (
+    r"(?:-(?:playoffs|postseason|preseason|finals|knockout-stage|group-stage|"
+    r"qualification|championship-round|relegation-round|main-round))?"
+)
+
+INTERNAL_LEAGUE_PATTERNS: dict[str, re.Pattern[str]] = {
+    "MLB": re.compile(rf"^usa-mlb{_PHASE}$"),
+    "MLS": re.compile(rf"^usa-mls{_PHASE}$"),
+    "NBA": re.compile(rf"^usa-nba{_PHASE}$"),
+    "NFL": re.compile(rf"^usa-nfl{_PHASE}$"),
+    "NHL": re.compile(rf"^usa-nhl{_PHASE}$"),
+    "WNBA": re.compile(rf"^usa-wnba{_PHASE}$"),
+    "BSN": re.compile(rf"^puerto-rico-bsn{_PHASE}$"),
+    "USL_CHAMPIONSHIP": re.compile(rf"^usa-usl-championship{_PHASE}$"),
+    "BRASILEIRAO_SERIE_B": re.compile(rf"^brazil-brasileiro-serie-b{_PHASE}$"),
+    "EPL": re.compile(rf"^england-premier-league{_PHASE}$"),
+    "UEFA_CHAMPIONS_LEAGUE": re.compile(rf"^europe-uefa-champions-league{_PHASE}$"),
+    # Unverified: odds-api currently returns 0 leagues for gaelic-football, so
+    # this pattern has never matched live. Best-guess slug retained.
+    "GAA_FOOTBALL": re.compile(rf"^ireland-gaa-all-ireland-football-championship{_PHASE}$"),
+    "AIHL": re.compile(rf"^australia-aihl{_PHASE}$"),
+    # Exact (no phase suffix) so VNL never swallows the ``-women`` variant.
+    "VNL": re.compile(r"^international-nations-league$"),
+    "VNL_WOMEN": re.compile(r"^international-nations-league-women$"),
+}
+
+
+def match_league_slug(slug: str) -> str | None:
+    """Resolve an odds-api league slug to our internal league id.
+
+    Tries the exact base-slug map first (fast path + guarantees the canonical
+    slug always resolves), then the anchored phase-aware patterns above so a
+    season-suffixed slug (``usa-nba-playoffs``) still maps. Returns ``None``
+    for leagues we don't track — callers log + drop those.
+    """
+    if not slug:
+        return None
+    direct = ODDSAPI_TO_INTERNAL_LEAGUE.get(slug)
+    if direct is not None:
+        return direct
+    for internal_id, pattern in INTERNAL_LEAGUE_PATTERNS.items():
+        if pattern.match(slug):
+            return internal_id
+    return None
 
 
 # ---- statID per sport (what the provider oddIDs encode) -----------------------------
@@ -142,7 +205,7 @@ def to_internal_event_payload(
     sport_slug = (event_dict.get("sport") or {}).get("slug") or ""
     league_slug = (event_dict.get("league") or {}).get("slug") or ""
     sport_id = ODDSAPI_TO_INTERNAL_SPORT.get(sport_slug)
-    league_id = ODDSAPI_TO_INTERNAL_LEAGUE.get(league_slug)
+    league_id = match_league_slug(league_slug)
     if sport_id is None:
         logger.warning(
             "odds-api translate: unknown sport slug %r — skipping event %s",
