@@ -209,14 +209,30 @@ def _cost_estimate_context(leagues) -> dict:
     # TheSportsDB league round upper bounds. EPL is 38; MLS has ~50
     # including playoffs. Anything else is best-guess 38.
     LEAGUE_ROUND_UPPER = {"EPL": 38, "MLS": 55}
-    estimates: dict[str, dict[str, int]] = {}
+    estimates: dict[str, dict] = {}
     for lg in leagues:
         rounds = LEAGUE_ROUND_UPPER.get(lg.id, 38)
         estimates[lg.id] = {
             "rounds": rounds,
             "approx_seconds": int(rounds * 1.5),
+            "season_format": _season_format(lg.id),
         }
     return {"estimates": estimates}
+
+
+# Leagues whose TheSportsDB ``strSeason`` spans two calendar years (a
+# fall→spring season, e.g. "2024-2025"). Everything else runs inside a single
+# calendar year, so its season label is a bare year (e.g. "2024").
+_TWO_YEAR_SEASON_LEAGUES = {"EPL", "NBA", "NHL", "NFL", "UEFA_CHAMPIONS_LEAGUE"}
+
+
+def _season_format(league_id: str) -> dict[str, str]:
+    """Season-label (TheSportsDB ``strSeason``) format hint for one league,
+    surfaced in the historical-ingest reference table so operators type the
+    right thing into the free-text Season label box."""
+    if league_id in _TWO_YEAR_SEASON_LEAGUES:
+        return {"pattern": "YYYY-YYYY", "example": "2024-2025"}
+    return {"pattern": "YYYY", "example": "2024"}
 
 
 # ---- historical ingest (TheSportsDB) ---------------------------------------

@@ -102,6 +102,13 @@
       "source": "fuzzy_match"
     },
     {
+      "canonical_name": "South Korea",
+      "odds_api_io_key": "6726",
+      "thesportsdb_team_id": "142122",
+      "confirmed": true,
+      "source": "manual_override"
+    },
+    {
       "canonical_name": "Thailand",
       "odds_api_io_key": "6729",
       "thesportsdb_team_id": "142123",

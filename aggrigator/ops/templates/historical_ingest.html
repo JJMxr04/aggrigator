@@ -50,6 +50,19 @@
     border-radius: 4px; padding: .5rem .75rem;
   }
   .hi-issues p { margin: .15rem 0; }
+  .hi-ref { margin-top: 1.5rem; }
+  .hi-ref__title { font-size: .95rem; margin: 0 0 .5rem; }
+  .hi-ref__table {
+    width: 100%; max-width: 520px; border-collapse: collapse;
+    font-size: .85rem;
+  }
+  .hi-ref__table th, .hi-ref__table td {
+    text-align: left; padding: .4rem .6rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .hi-ref__table th { color: var(--text-soft); font-weight: 600; }
+  .hi-ref__table td { font-variant-numeric: tabular-nums; }
+  .hi-ref__eg { color: var(--text-soft); margin-left: .4rem; font-size: .78rem; }
 </style>
 
 <header style="margin-bottom: 1.25rem">
@@ -91,7 +104,9 @@
           {% for lg in leagues %}
             <option value="{{ lg.id }}"
                     data-rounds="{{ estimates[lg.id]['rounds'] }}"
-                    data-seconds="{{ estimates[lg.id]['approx_seconds'] }}">
+                    data-seconds="{{ estimates[lg.id]['approx_seconds'] }}"
+                    data-season-pattern="{{ estimates[lg.id]['season_format']['pattern'] }}"
+                    data-season-example="{{ estimates[lg.id]['season_format']['example'] }}">
               {{ lg.id }} — {{ lg.name }} (~{{ estimates[lg.id]['rounds'] }} rounds)
             </option>
           {% endfor %}
@@ -105,9 +120,11 @@
                value="{{ default_season_label }}" required
                placeholder="e.g. 2024-2025 (EPL) or 2024 (MLS)">
         <small>
-          TheSportsDB <code>strSeason</code> format. EPL uses
-          two-year labels (<code>2024-2025</code>); MLS uses single-year
-          (<code>2024</code>).
+          Format for <strong id="season-league">—</strong>:
+          <code id="season-format-pattern">—</code>
+          <span id="season-format-eg"></span>.
+          TheSportsDB <code>strSeason</code> — two-year leagues (EPL/NBA/NHL)
+          use <code>YYYY-YYYY</code>, single-year leagues use <code>YYYY</code>.
         </small>
       </div>
 
@@ -128,9 +145,22 @@
       (function () {
         const sel = document.getElementById('league_id');
         const out = document.getElementById('hi-runtime');
+        const seasonInput = document.getElementById('season_label');
+        const fmtLeague = document.getElementById('season-league');
+        const fmtPattern = document.getElementById('season-format-pattern');
+        const fmtEg = document.getElementById('season-format-eg');
         function refresh() {
-          if (!sel || !sel.selectedOptions[0]) return;
-          out.textContent = sel.selectedOptions[0].getAttribute('data-seconds');
+          const opt = sel && sel.selectedOptions[0];
+          if (!opt) return;
+          out.textContent = opt.getAttribute('data-seconds');
+          const pattern = opt.getAttribute('data-season-pattern');
+          const example = opt.getAttribute('data-season-example');
+          // Drive the Season label box off the chosen league so the operator
+          // sees the exact format to type (YYYY vs YYYY-YYYY).
+          if (seasonInput) seasonInput.placeholder = 'e.g. ' + example;
+          if (fmtLeague) fmtLeague.textContent = sel.value;
+          if (fmtPattern) fmtPattern.textContent = pattern;
+          if (fmtEg) fmtEg.textContent = '(e.g. ' + example + ')';
         }
         sel.addEventListener('change', refresh);
         refresh();
@@ -147,6 +177,26 @@
         };
       })();
     </script>
+
+    <div class="hi-ref">
+      <h3 class="hi-ref__title">Season-label format by league</h3>
+      <table class="hi-ref__table">
+        <thead>
+          <tr><th>League</th><th>Season label format</th></tr>
+        </thead>
+        <tbody>
+          {% for lg in leagues %}
+            <tr>
+              <td>{{ lg.id }} — {{ lg.name }}</td>
+              <td>
+                <code>{{ estimates[lg.id]['season_format']['pattern'] }}</code>
+                <span class="hi-ref__eg">e.g. {{ estimates[lg.id]['season_format']['example'] }}</span>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   {% endif %}
 </div>
 

@@ -88,6 +88,13 @@
       "source": "fuzzy_match"
     },
     {
+      "canonical_name": "Netherlands",
+      "odds_api_io_key": "7511",
+      "thesportsdb_team_id": "141971",
+      "confirmed": true,
+      "source": "manual_override"
+    },
+    {
       "canonical_name": "Poland",
       "odds_api_io_key": "6827",
       "thesportsdb_team_id": "141825",
