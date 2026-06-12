@@ -23,9 +23,15 @@ idna==3.13
 itsdangerous==2.2.0
 Jinja2==3.1.6
 limits[async-redis]==5.8.0
+# limits[async-redis] transitives, pinned like everything else here.
+# NB: coredis caps packaging<26 — that's why packaging is pinned 25.x below.
+async-timeout==5.0.1
+beartype==0.22.9
+coredis==5.7.0
+Pympler==1.1
 Mako==1.3.12
 MarkupSafe==3.0.3
-packaging==26.2
+packaging==25.0  # capped <26 by coredis (limits[async-redis]); pytest needs >=22, limits >=21 — all satisfied
 passlib==1.7.4
 procrastinate==3.6.0
 psycopg[binary,pool]==3.3.4
