@@ -57,11 +57,22 @@ The parity test (`tests/parity/test_normalize_parity.py`) imports MDProject's `c
 **Integration tests** — auto-skip when no DB is configured. With the Homebrew setup above already running:
 
 ```bash
-AGG_TEST_DATABASE_URL=postgresql+asyncpg://aggrigator:aggrigator@localhost:5434/aggrigator \
+AGG_TEST_DATABASE_URL=postgresql+asyncpg://aggrigator:aggrigator@localhost:5434/aggrigator_test \
   pytest tests/integration
 ```
 
-Each integration test wipes the aggregator-owned tables, then runs through an `httpx.AsyncClient` against the real ASGI app.
+⚠️ Each integration test **TRUNCATEs the aggregator-owned tables** in whatever
+database this URL points at — always use the dedicated ``aggrigator_test``
+database, never the dev ``aggrigator`` one (pointing it there wipes your local
+ingested data; only the registry loader + crons bring it back). One-time setup:
+
+```bash
+psql -p 5434 -U aggrigator -d postgres -c 'CREATE DATABASE aggrigator_test OWNER aggrigator'
+AGG_DATABASE_URL_SYNC=postgresql+psycopg2://aggrigator:aggrigator@localhost:5434/aggrigator_test \
+  alembic upgrade head
+```
+
+Tests run through an `httpx.AsyncClient` against the real ASGI app.
 
 ## Alternative: Docker
 

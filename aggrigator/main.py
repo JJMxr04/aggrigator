@@ -32,6 +32,7 @@ from aggrigator.observability.sentry import init_sentry
 from aggrigator.ops import api as ops_api_router
 from aggrigator.ops import routes as ops_routes_router
 from aggrigator.security.body_limit import BodySizeLimitMiddleware
+from aggrigator.security.proxy_scheme import ForceHttpsSchemeMiddleware
 from aggrigator.security.rate_limit import init_rate_limiter, rate_limit_dispatch
 from aggrigator.workers.app import app as procrastinate_app
 
@@ -370,6 +371,12 @@ def create_app() -> FastAPI:
     # Content-Length before any other layer buffers it. 1 MB limit —
     # see security/body_limit.py.
     app.add_middleware(BodySizeLimitMiddleware)
+
+    # Outermost: scheme override for the Cloudflare-tunnel topology
+    # (added last = runs first, so every layer below sees https).
+    # See security/proxy_scheme.py for the full story.
+    if settings.force_https:
+        app.add_middleware(ForceHttpsSchemeMiddleware)
 
     app.include_router(auth_router.router)
     app.include_router(references_router.router)

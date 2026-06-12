@@ -147,6 +147,18 @@ class Settings(BaseSettings):
     # warning.
     metrics_token: str = Field(default="", alias="AGG_METRICS_TOKEN")
 
+    # The aggrigator's SECURE_PROXY_SSL_HEADER equivalent (MDProject's
+    # Django fix for the same problem, CoreRoot/settings.py). Behind the
+    # Cloudflare-tunnel topology, TLS terminates at Cloudflare and Traefik
+    # receives plain http — it then OVERWRITES X-Forwarded-Proto to "http"
+    # because cloudflared isn't a trusted proxy IP. The app then builds
+    # http:// absolute URLs (sqladmin url_for redirects), which Chrome
+    # blocks under CSP form-action when a form submission gets redirected
+    # to them. True = force scope["scheme"]="https" on every request:
+    # correct whenever the ONLY public ingress is https (it is — Cloudflare
+    # redirects all http at the edge).
+    force_https: bool = Field(default=False, alias="AGG_FORCE_HTTPS")
+
     # --- rate limiting (security/rate_limit.py) ---
     # Master switch — leave True everywhere; False exists for debugging only.
     ratelimit_enabled: bool = Field(default=True, alias="AGG_RATELIMIT_ENABLED")
