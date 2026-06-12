@@ -1,9 +1,59 @@
 {% extends "_base.html" %}
 
 {% block body %}
+
+<style>
+  .section-title {
+    margin: 1.75rem 0 .65rem;
+    font-size: .8rem; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--text-mute); font-weight: 700;
+  }
+  .error-test-row {
+    display: flex; align-items: center; gap: 1rem;
+    padding: .75rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .error-test-row__name {
+    font-family: var(--mono); font-size: .92rem; font-weight: 600;
+  }
+  .error-test-row__hint {
+    font-size: .75rem; color: var(--text-mute); margin-top: .15rem;
+  }
+  .error-test-row__hint code {
+    font-family: var(--mono);
+    background: var(--surface-2); padding: .1rem .4rem; border-radius: 4px;
+  }
+  .error-test-row form { margin-left: auto; flex-shrink: 0; }
+  .btn--danger {
+    background: var(--danger); color: white; border: 1px solid var(--danger);
+  }
+  .btn--danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 88%, black);
+  }
+</style>
+
 <div class="cron-grid">
   {% for item in items %}
     {% include "_cron_row.html" %}
   {% endfor %}
+</div>
+
+<h2 class="section-title">Error tracking</h2>
+<div class="error-test-row">
+  <div>
+    <div class="error-test-row__name">GlitchTip test event</div>
+    <div class="error-test-row__hint">
+      Raises a deliberate unhandled exception (<code>GlitchTipTestError</code>)
+      through the real 500 path. Opens in a new tab — seeing
+      "Internal Server Error" there means it worked; the event should
+      appear in GlitchTip within seconds, tagged with your email.
+    </div>
+  </div>
+  <form method="post" action="/ops/sentry-test" target="_blank">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn btn--danger btn--small">Throw test error</button>
+  </form>
 </div>
 {% endblock %}

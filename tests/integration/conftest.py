@@ -78,6 +78,9 @@ async def _wipe(session) -> None:
         "webhook_delivery",
         "auth_refresh_token",
         "auth_user",
+        "core_bet",
+        "tenant_api_key",
+        "tenant_user",
         "core_odds_quote",
         "core_bookmaker_selection",
         "core_selection",
@@ -92,6 +95,17 @@ async def _wipe(session) -> None:
     for t in tables:
         await session.execute(text(f"TRUNCATE TABLE {t} CASCADE"))
     await session.commit()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_rate_limits():
+    """The ASGI client presents one IP for the whole suite — without a
+    per-test reset, earlier tests' requests would trip later tests into
+    spurious 429s."""
+    from aggrigator.security import rate_limit
+
+    await rate_limit.reset_for_tests()
+    yield
 
 
 @pytest_asyncio.fixture

@@ -1,6 +1,7 @@
-# Secrets
+# Secrets — the glob (not just `.env.*`) also catches strays like
+# ".env copy" that a dotted pattern misses.
 .env
-.env.*
+.env*
 !.env.example
 
 # Virtual environments

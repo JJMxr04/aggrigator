@@ -1,0 +1,25 @@
+# Dependency CVE scanning (plan §6.3 P1-11). Versions are current as of
+# 2026-06; this keeps them that way automatically. Runs on every push/PR
+# and weekly (new CVEs land against unchanged requirements).
+name: security
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit requirements
+        # Audits the pinned requirements file directly — no project
+        # install needed, so the job stays fast and side-effect-free.
+        run: pip-audit -r requirements.txt --strict

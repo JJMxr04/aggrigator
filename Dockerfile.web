@@ -7,7 +7,7 @@
 # system pkgs), update both files in lockstep.
 
 # ---------- builder ----------
-FROM python:3.12-slim AS builder
+FROM python:3.12.13-slim AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -35,7 +35,7 @@ RUN pip install --upgrade pip \
     && pip install --prefix=/install gunicorn==23.0.0
 
 # ---------- runtime ----------
-FROM python:3.12-slim AS runtime
+FROM python:3.12.13-slim AS runtime
 
 # Coolify passes the deployed git SHA as a build arg; baking it into the
 # env lets sentry tag every GlitchTip event with `release=<commit>`.

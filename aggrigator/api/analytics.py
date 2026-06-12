@@ -25,7 +25,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from aggrigator.analytics import soccer_model
-from aggrigator.deps import SessionDep, require_pro_user
+from aggrigator.deps import SessionDep, require_tenant_user
 from aggrigator.models import (
     BookmakerSelection,
     Event,
@@ -37,13 +37,16 @@ from aggrigator.models import (
     Team,
 )
 
-# Every route on this router requires a valid PRO tenant API key. Applying
+# Every route on this router requires a valid tenant API key. Applying
 # at the router level means a future contributor adding an endpoint can't
-# forget the gate. See subscription-plan/05-access-control.md §2.
+# forget the gate. The PRO-tier check moved to MDProject's Stripe layer
+# (plan §6.4, 2026-06-10) — the aggregator authenticates the *service*,
+# not the subscriber; ``require_pro_user`` survives in deps.py for the
+# API-platform future only.
 router = APIRouter(
     prefix="/v1/analytics",
     tags=["analytics"],
-    dependencies=[Depends(require_pro_user)],
+    dependencies=[Depends(require_tenant_user)],
 )
 
 

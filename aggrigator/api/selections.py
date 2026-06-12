@@ -2,7 +2,8 @@
 
 Movement returns the OddsQuote time-series for a selection. Slips is a
 stateless parlay combiner — combine N selection prices into one decimal.
-Public — no auth on the aggrigator's data plane.
+Keyed reads (plan §6.2 P0-5): nothing in the aggregator is anonymous —
+enforcement is flag-staged via ``keyed_reads_gate``.
 """
 
 from __future__ import annotations
@@ -11,15 +12,19 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from aggrigator.deps import SessionDep
-from aggrigator.models import OddsQuote, Selection
+from aggrigator.deps import SessionDep, keyed_reads_gate
+from aggrigator.queries.selections import SelectionQueries
 from aggrigator.schemas.selection import QuoteOut, SelectionMovementOut
 from aggrigator.schemas.slip import SlipLegOut, SlipsIn, SlipsOut
 
-router = APIRouter(prefix="/v1", tags=["selections"])
+# Router-level so a future endpoint can't be added keyless by accident.
+router = APIRouter(
+    prefix="/v1", tags=["selections"], dependencies=[Depends(keyed_reads_gate)],
+)
+
+_queries = SelectionQueries()
 
 
 @router.get("/selections/{selection_id}/movement", response_model=SelectionMovementOut)
@@ -28,16 +33,12 @@ async def selection_movement(
     selection_id: str,
     since: datetime | None = Query(default=None),
 ) -> SelectionMovementOut:
-    sel = await session.get(Selection, selection_id)
+    sel = await _queries.get(session, selection_id)
     if sel is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "selection not found")
 
     cutoff = since or (datetime.now(tz=timezone.utc) - timedelta(hours=24))
-    rows = list(await session.scalars(
-        select(OddsQuote)
-        .where(OddsQuote.selection_id == sel.id, OddsQuote.captured_at >= cutoff)
-        .order_by(OddsQuote.captured_at)
-    ))
+    rows = await _queries.quotes_since(session, sel.id, cutoff)
     return SelectionMovementOut(
         selection_id=sel.id,
         quotes=[QuoteOut(decimal_odds=q.decimal_odds, captured_at=q.captured_at) for q in rows],
@@ -50,10 +51,7 @@ async def combine_slip(
     session: SessionDep,
 ) -> SlipsOut:
     ids = [leg.selection_id for leg in payload.legs]
-    rows = list(await session.scalars(
-        select(Selection).where(Selection.id.in_(ids))
-    ))
-    by_id = {s.id: s for s in rows}
+    by_id = await _queries.by_ids(session, ids)
 
     missing = [sid for sid in ids if sid not in by_id]
     if missing:

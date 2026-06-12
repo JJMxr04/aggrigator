@@ -2,24 +2,27 @@
 
 These are the dropdowns / filter-lookup calls the upload portal uses to
 populate event-pick UI before any specific event is chosen. Cheap queries on
-small tables. Public — no auth on the aggrigator's data plane.
+small tables. Keyed reads (plan §6.2 P0-5): nothing in the aggregator is
+anonymous — enforcement is flag-staged via ``keyed_reads_gate``.
 """
 
 from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query, Response
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Header, Query, Response
 
 from aggrigator.api._http_cache import cached_json
-from aggrigator.deps import SessionDep
-from aggrigator.models import Bookmaker, League, Market, Sport
+from aggrigator.deps import SessionDep, keyed_reads_gate
+from aggrigator.queries.references import ReferenceQueries
 from aggrigator.schemas.bookmaker import BookmakerOut
 from aggrigator.schemas.league import LeagueOut
 from aggrigator.schemas.sport import SportOut
 
-router = APIRouter(prefix="/v1", tags=["reference"])
+# Router-level so a future endpoint can't be added keyless by accident.
+router = APIRouter(
+    prefix="/v1", tags=["reference"], dependencies=[Depends(keyed_reads_gate)],
+)
 
 # These tables change rarely (new sport added: maybe once a quarter; new
 # league: similarly low frequency). A 10-minute TTL is conservative — the
@@ -27,6 +30,8 @@ router = APIRouter(prefix="/v1", tags=["reference"])
 # clients seeing it. Still revalidates via ETag on every request inside
 # the window.
 REFERENCE_MAX_AGE = 600
+
+_queries = ReferenceQueries()
 
 
 @router.get("/sports")
@@ -36,10 +41,7 @@ async def list_sports(
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
     active: bool | None = Query(default=None),
 ):
-    stmt = select(Sport).order_by(Sport.name)
-    if active is not None:
-        stmt = stmt.where(Sport.active == active)
-    rows = list(await session.scalars(stmt))
+    rows = await _queries.list_sports(session, active=active)
     payload = [SportOut.model_validate(r) for r in rows]
     return cached_json(payload, response, if_none_match, max_age=REFERENCE_MAX_AGE)
 
@@ -52,12 +54,7 @@ async def list_leagues(
     sport_id: str | None = Query(default=None),
     active: bool | None = Query(default=None),
 ):
-    stmt = select(League).order_by(League.sport_id, League.name)
-    if sport_id is not None:
-        stmt = stmt.where(League.sport_id == sport_id)
-    if active is not None:
-        stmt = stmt.where(League.active == active)
-    rows = list(await session.scalars(stmt))
+    rows = await _queries.list_leagues(session, sport_id=sport_id, active=active)
     payload = [LeagueOut.model_validate(r) for r in rows]
     return cached_json(payload, response, if_none_match, max_age=REFERENCE_MAX_AGE)
 
@@ -69,10 +66,7 @@ async def list_bookmakers(
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
     active: bool | None = Query(default=None),
 ):
-    stmt = select(Bookmaker).order_by(Bookmaker.name)
-    if active is not None:
-        stmt = stmt.where(Bookmaker.active == active)
-    rows = list(await session.scalars(stmt))
+    rows = await _queries.list_bookmakers(session, active=active)
     payload = [BookmakerOut.model_validate(r) for r in rows]
     return cached_json(payload, response, if_none_match, max_age=REFERENCE_MAX_AGE)
 
@@ -93,9 +87,5 @@ async def list_market_types(
     Filter by ``sport_id`` to scope to one sport's markets. Cheap query —
     one ``SELECT DISTINCT`` over an indexed column.
     """
-    stmt = select(Market.type).distinct().order_by(Market.type)
-    if sport_id is not None:
-        stmt = stmt.where(Market.sport_id == sport_id)
-    rows = await session.scalars(stmt)
-    payload = [t for t in rows if t]
+    payload = await _queries.list_market_types(session, sport_id=sport_id)
     return cached_json(payload, response, if_none_match, max_age=REFERENCE_MAX_AGE)

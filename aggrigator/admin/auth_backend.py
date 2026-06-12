@@ -54,4 +54,7 @@ class AdminAuth(AuthenticationBackend):
 
 
 def make_admin_auth() -> AdminAuth:
-    return AdminAuth(secret_key=get_settings().jwt_secret)
+    # Same resolved key as the app's SessionMiddleware (main.py) — the
+    # admin session must never be signed with the JWT secret in prod;
+    # resolved_session_secret only falls back to it in dev.
+    return AdminAuth(secret_key=get_settings().resolved_session_secret)

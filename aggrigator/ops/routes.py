@@ -19,6 +19,7 @@ from __future__ import annotations
 import hmac
 import logging
 import uuid
+from enum import Enum
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -398,8 +399,15 @@ async def data_reset_page(request: Request):
     )
 
 
+# Allowlist in the SIGNATURE (plan §6.8): the path param is typed as an
+# Enum built from SQLAlchemy metadata, so FastAPI 422s anything outside
+# ``known_tables()`` before the handler runs. The body re-check below is
+# retained as belt-and-suspenders.
+KnownTable = Enum("KnownTable", {name: name for name in known_tables()})
+
+
 @router.post("/data-reset/{table}", response_class=HTMLResponse)
-async def data_reset_truncate(request: Request, table: str):
+async def data_reset_truncate(request: Request, table: KnownTable):
     """Truncate one table CASCADE.
 
     Three confirmation gates:
@@ -414,6 +422,7 @@ async def data_reset_truncate(request: Request, table: str):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED)
     await _require_csrf(request)
 
+    table = table.value
     if table not in known_tables():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown table")
 
@@ -461,11 +470,10 @@ async def sentry_test_throw(request: Request):
     a genuine 500.
 
     Admin + CSRF gated, but deliberately NOT test-mode gated: verifying
-    error tracking right after a production deploy is legitimate. (The
-    button lives on /ops/data-reset, which IS test-mode-only, so in prod
-    this is reachable only by hand-crafted request from an authed admin.)
-    With ``AGG_SENTRY_DSN`` unset the exception still raises — it just
-    isn't reported anywhere.
+    error tracking right after a production deploy is legitimate. The
+    button lives on /ops/crons, so authed admins can trigger it in prod
+    too. With ``AGG_SENTRY_DSN`` unset the exception still raises — it
+    just isn't reported anywhere.
     """
     user = await _admin_from_session(request)
     if user is None:

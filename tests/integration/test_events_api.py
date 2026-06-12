@@ -19,7 +19,7 @@ from tests.integration.factories import (
 pytestmark = pytest.mark.asyncio
 
 
-async def _seed_basic_event(session, **event_kwargs):
+async def _seed_basic_event(session, *, with_market: bool = False, **event_kwargs):
     sport = await make_sport(session, id="FOOTBALL", name="Football")
     league = await make_league(session, sport=sport, id="NFL", name="NFL")
     home = await make_team(session, league=league, team_id="DAL", name_long="Dallas")
@@ -27,6 +27,10 @@ async def _seed_basic_event(session, **event_kwargs):
     event = await make_event(
         session, league=league, home_team=home, away_team=away, **event_kwargs
     )
+    if with_market:
+        # /v1/events lists only events with markets (Event.markets.any());
+        # distinct id so tests that count their own markets aren't polluted.
+        await make_market(session, event=event, id=f"{event.id}-seed-ml")
     return sport, league, home, away, event
 
 
@@ -36,7 +40,7 @@ async def test_list_events_is_public(client) -> None:
 
 
 async def test_list_events_returns_seeded_in_default_window(client, session) -> None:
-    _, _, _, _, event = await _seed_basic_event(session)
+    _, _, _, _, event = await _seed_basic_event(session, with_market=True)
     r = await client.get("/v1/events")
     assert r.status_code == 200
     body = r.json()
@@ -48,6 +52,7 @@ async def test_list_events_returns_seeded_in_default_window(client, session) -> 
 async def test_list_events_default_window_excludes_far_future(client, session) -> None:
     _, _, _, _, _ = await _seed_basic_event(
         session,
+        with_market=True,
         start_time=datetime.now(tz=timezone.utc) + timedelta(days=10),
     )
     r = await client.get("/v1/events")
@@ -63,8 +68,10 @@ async def test_list_events_filter_by_sport_and_league(client, session) -> None:
     nfl_a = await make_team(session, league=nfl, team_id="PHI", name_long="Philly")
     nba_h = await make_team(session, league=nba, team_id="LAL", name_long="Lakers")
     nba_a = await make_team(session, league=nba, team_id="BOS", name_long="Celtics")
-    await make_event(session, league=nfl, home_team=nfl_h, away_team=nfl_a)
-    await make_event(session, league=nba, home_team=nba_h, away_team=nba_a)
+    e1 = await make_event(session, league=nfl, home_team=nfl_h, away_team=nfl_a)
+    e2 = await make_event(session, league=nba, home_team=nba_h, away_team=nba_a)
+    await make_market(session, event=e1, id=f"{e1.id}-seed-ml")
+    await make_market(session, event=e2, id=f"{e2.id}-seed-ml")
 
     r = await client.get("/v1/events?sport=FOOTBALL")
     assert r.json()["total"] == 1
@@ -80,15 +87,17 @@ async def test_list_events_filter_live(client, session) -> None:
     league = await make_league(session, sport=sport, id="NFL", name="NFL")
     home = await make_team(session, league=league, team_id="DAL")
     away = await make_team(session, league=league, team_id="PHI", name_long="Philly")
-    await make_event(
+    live_evt = await make_event(
         session, league=league, home_team=home, away_team=away,
         id="evt-live", status_type="inprogress", is_live=True,
     )
     away2 = await make_team(session, league=league, team_id="NYG", name_long="Giants")
-    await make_event(
+    pre_evt = await make_event(
         session, league=league, home_team=home, away_team=away2,
         id="evt-pre", status_type="notstarted",
     )
+    await make_market(session, event=live_evt, id="evt-live-seed-ml")
+    await make_market(session, event=pre_evt, id="evt-pre-seed-ml")
 
     r = await client.get("/v1/events?live=true")
     ids = [it["id"] for it in r.json()["items"]]
@@ -104,11 +113,12 @@ async def test_list_events_pagination(client, session) -> None:
             session, league=league, team_id=f"TEAM{i}",
             name_long=f"Team {i}",
         )
-        await make_event(
+        evt = await make_event(
             session, league=league, home_team=home, away_team=away,
             id=f"evt-{i}",
             start_time=datetime.now(tz=timezone.utc) + timedelta(hours=i + 1),
         )
+        await make_market(session, event=evt, id=f"evt-{i}-seed-ml")
     r = await client.get("/v1/events?page_size=2&page=2")
     body = r.json()
     assert body["total"] == 5

@@ -23,7 +23,7 @@ from aggrigator.schemas.auth import (
     TokenPair,
     UserOut,
 )
-from aggrigator.security import audit
+from aggrigator.security import audit, rate_limit
 from aggrigator.security.jwt import (
     InvalidToken,
     issue_access_token,
@@ -50,10 +50,23 @@ def _hash_refresh(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-@router.post("/login", response_model=TokenPair)
+@router.post(
+    "/login",
+    response_model=TokenPair,
+    dependencies=[Depends(rate_limit.per_ip(rate_limit.AUTH_RULE, "auth-login"))],
+)
 async def login(
     request: Request, payload: LoginIn, session: SessionDep, settings: SettingsDep,
 ) -> TokenPair:
+    # Per-account backoff (cross-IP): keyed off the submitted email whether
+    # or not the account exists — the 429 is identical either way, so it
+    # leaks nothing the per-IP 429 doesn't.
+    backoff = await rate_limit.login_backoff_retry_after(session, payload.email)
+    if backoff is not None:
+        raise HTTPException(
+            429, "rate limited", headers={"Retry-After": str(backoff)},
+        )
+
     user = await session.scalar(select(User).where(User.email == payload.email))
     if user is None or not user.is_active or not verify_password(
         payload.password, user.password_hash
@@ -97,7 +110,11 @@ async def login(
     )
 
 
-@router.post("/refresh", response_model=AccessOnly)
+@router.post(
+    "/refresh",
+    response_model=AccessOnly,
+    dependencies=[Depends(rate_limit.per_ip(rate_limit.AUTH_RULE, "auth-refresh"))],
+)
 async def refresh(
     request: Request,
     payload: RefreshIn,

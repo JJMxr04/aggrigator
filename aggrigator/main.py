@@ -31,6 +31,8 @@ from aggrigator.observability.prometheus import register_metrics
 from aggrigator.observability.sentry import init_sentry
 from aggrigator.ops import api as ops_api_router
 from aggrigator.ops import routes as ops_routes_router
+from aggrigator.security.body_limit import BodySizeLimitMiddleware
+from aggrigator.security.rate_limit import init_rate_limiter, rate_limit_dispatch
 from aggrigator.workers.app import app as procrastinate_app
 
 logger = logging.getLogger(__name__)
@@ -79,7 +81,8 @@ class InsecureProductionConfig(RuntimeError):
 
 
 def _enforce_prod_secrets(settings) -> None:
-    """Hard-fail boot if prod is using the dev default for any secret.
+    """Hard-fail boot if prod is running a known-insecure configuration —
+    default/missing/duplicated secrets, test mode, no host allowlist.
     Called from create_app() — must run BEFORE the app starts serving."""
     if settings.env not in ("prod", "production"):
         return
@@ -88,6 +91,18 @@ def _enforce_prod_secrets(settings) -> None:
     if settings.jwt_secret == _DEFAULT_JWT_SECRET:
         failures.append(
             "AGG_JWT_SECRET is the dev default. Generate: "
+            "openssl rand -hex 32"
+        )
+    if not settings.session_secret:
+        failures.append(
+            "AGG_SESSION_SECRET is unset. Generate: openssl rand -hex 32 — "
+            "a dedicated value, so a leaked JWT secret doesn't also forge "
+            "admin session cookies (and vice versa)."
+        )
+    elif settings.session_secret == settings.jwt_secret:
+        failures.append(
+            "AGG_SESSION_SECRET equals AGG_JWT_SECRET — that defeats the "
+            "point of a separate key. Generate a distinct value: "
             "openssl rand -hex 32"
         )
     if not settings.webhook_secret:
@@ -101,10 +116,30 @@ def _enforce_prod_secrets(settings) -> None:
             "e.g. https://mdproject.example.com — the receiver path "
             "(/sportgameodds/webhook) is appended automatically."
         )
+    if not settings.paradise_secret:
+        failures.append(
+            "AGG_PARADISE_SECRET is unset — every /v1/internal/* call from "
+            "MDProject would 503 at request time. Set the same value as "
+            "MDProject's PARADISE_SECRET. (Fail at boot, not at the first "
+            "user-provisioning call.)"
+        )
+    if settings.test_mode:
+        failures.append(
+            "AGG_TEST_MODE=true — destructive endpoints (/ops/data-reset, "
+            "/ops/ingest-event) must never be reachable in prod. There is "
+            "no escape hatch by design: a real prod data reset means a "
+            "deliberate maintenance redeploy with a non-prod env."
+        )
+    if not settings.allowed_hosts_list:
+        failures.append(
+            "AGG_ALLOWED_HOSTS is empty — Host-header spoofing is not "
+            "blocked. Set your custom domain(s); the Coolify-injected "
+            "COOLIFY_FQDN is merged in automatically once this is non-empty."
+        )
     if not failures:
         return
     msg = (
-        "[startup] refusing to start in prod with default secrets:\n  - "
+        "[startup] refusing to start in prod with insecure configuration:\n  - "
         + "\n  - ".join(failures)
     )
     logger.error(msg)
@@ -112,33 +147,21 @@ def _enforce_prod_secrets(settings) -> None:
 
 
 def _warn_on_misconfig(settings) -> None:
-    """One-shot log audit at startup: surface the most expensive-if-missed
-    misconfigs (default secrets in prod, missing host allowlist, etc.).
+    """One-shot log audit at startup for misconfigs that are survivable.
 
-    Note: AGG_JWT_SECRET / AGG_WEBHOOK_SECRET / AGG_MDPROJECT_URL are
-    NOT checked here because they're already fatal in prod — see
-    ``_enforce_prod_secrets``.
+    Deliberately short: everything security-relevant (secrets, session key,
+    test mode, host allowlist, paradise secret) is FATAL in prod via
+    ``_enforce_prod_secrets`` — only degraded-functionality cases belong
+    here. ODDSAPI_API_KEY stays warn-only because the app is still useful
+    for historical data without it.
     """
     is_prod = settings.env in ("prod", "production")
     if not is_prod:
         return
-    if not settings.allowed_hosts_list:
-        logger.warning(
-            "[startup] AGG_ALLOWED_HOSTS is empty in prod — Host-header "
-            "spoofing is not blocked. Set to your custom domain(s); the "
-            "Coolify-injected COOLIFY_FQDN is merged in automatically "
-            "once this is non-empty."
-        )
     if not settings.odds_api_key:
         logger.warning(
             "[startup] ODDSAPI_API_KEY is unset in prod — every odds-api "
             "call will fail. Set the real key from your odds-api.io account."
-        )
-    if settings.test_mode:
-        logger.warning(
-            "[startup] AGG_TEST_MODE=true in prod — destructive endpoints "
-            "(/ops/data-reset, /ops/ingest-event) are reachable. Disable "
-            "before going public."
         )
 
 
@@ -247,22 +270,13 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
-    # Session signing key. Prefer the dedicated AGG_SESSION_SECRET; fall
-    # back to jwt_secret with a WARNING so existing prod deploys don't
-    # break, but operators are nudged to split the keys.
-    if settings.session_secret:
-        session_signing_key = settings.session_secret
-    else:
-        session_signing_key = settings.jwt_secret
-        if is_prod:
-            logger.warning(
-                "[startup] AGG_SESSION_SECRET unset — reusing AGG_JWT_SECRET "
-                "for session cookies. Set a separate value so JWT and "
-                "session can be rotated independently."
-            )
+    # Session signing key — resolved_session_secret is the single source
+    # for this middleware AND the SQLAdmin auth backend. The jwt_secret
+    # fallback inside it is dev-only: prod boots only with a dedicated,
+    # distinct AGG_SESSION_SECRET (enforced fatal above).
     app.add_middleware(
         SessionMiddleware,
-        secret_key=session_signing_key,
+        secret_key=settings.resolved_session_secret,
         session_cookie="aggrigator_session",
         same_site="lax",
         https_only=is_prod,
@@ -345,6 +359,17 @@ def create_app() -> FastAPI:
         )
 
     app.add_middleware(BaseHTTPMiddleware, dispatch=_analytics_cache_dispatch)
+
+    # Rate limiting — added LAST so it runs FIRST (outermost): a 429 is
+    # decided before session/CORS/headers work happens. Route-level tiers
+    # (auth) live as dependencies in their routers; this is the global net.
+    init_rate_limiter(settings)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=rate_limit_dispatch)
+
+    # Body-size cap outermost-but-one: a 10 MB POST is rejected on its
+    # Content-Length before any other layer buffers it. 1 MB limit —
+    # see security/body_limit.py.
+    app.add_middleware(BodySizeLimitMiddleware)
 
     app.include_router(auth_router.router)
     app.include_router(references_router.router)

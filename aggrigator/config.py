@@ -80,10 +80,21 @@ class Settings(BaseSettings):
     # auth
     jwt_secret: str = Field(default="dev-only-change-me", alias="AGG_JWT_SECRET")
     # Independent secret for Starlette's SessionMiddleware (signs the
-    # admin/ops session cookie). Empty → falls back to jwt_secret with a
-    # WARNING. Set in prod so JWT and session can be rotated independently
-    # and a leak of one doesn't compromise the other.
+    # admin/ops session cookie). Empty → dev-only fallback to jwt_secret
+    # via ``resolved_session_secret``. In prod an empty value (or one equal
+    # to AGG_JWT_SECRET) is a fatal boot error — see _enforce_prod_secrets
+    # in main.py — so JWT forgery and admin-session forgery never share a
+    # single leaked key.
     session_secret: str = Field(default="", alias="AGG_SESSION_SECRET")
+
+    @property
+    def resolved_session_secret(self) -> str:
+        """Session-cookie signing key: AGG_SESSION_SECRET when set, else a
+        dev-only fallback to jwt_secret. Prod can't reach the fallback —
+        boot enforcement requires a distinct dedicated value. Single source
+        for BOTH the app SessionMiddleware and the SQLAdmin auth backend,
+        so the two can never drift onto different keys again."""
+        return self.session_secret or self.jwt_secret
     jwt_access_ttl_seconds: int = Field(default=900, alias="AGG_JWT_ACCESS_TTL_SECONDS")
     jwt_refresh_ttl_seconds: int = Field(
         default=14 * 24 * 3600, alias="AGG_JWT_REFRESH_TTL_SECONDS"
@@ -106,6 +117,46 @@ class Settings(BaseSettings):
         if not self.mdproject_url:
             return ""
         return f"{self.mdproject_url.rstrip('/')}{MDPROJECT_WEBHOOK_PATH}"
+
+    # Identifies THE service tenant (plan §6.4: one key for all MDProject
+    # traffic). When a request's key belongs to the tenant user whose
+    # external_user_id equals this UUID, it may assert X-Acting-User to
+    # act for any tenant user on per-user-data routes (bets). Empty
+    # (default) = no tenant may assert — per-user keys keep working
+    # unchanged. Set in Coolify when the service tenant is provisioned
+    # (Phase 2 of the roadmap).
+    service_tenant_external_id: str = Field(
+        default="", alias="AGG_SERVICE_TENANT_EXTERNAL_ID",
+    )
+
+    # P0-5 transitional flag (plan §6.2): when False (default), keyless
+    # requests to the read surface (references/events/selections) are
+    # allowed but WARN-logged — visibility into what would break. Flip to
+    # True in prod ONLY after MDProject attaches the service key and the
+    # warnings hit zero; later the flag dies and keyed reads become
+    # unconditional. A key that IS present gets validated either way —
+    # fail closed during the transition, or flipping the flag would break
+    # a silently-misconfigured client.
+    require_key_for_reads: bool = Field(
+        default=False, alias="AGG_REQUIRE_KEY_FOR_READS",
+    )
+
+    # Bearer token for /metrics (plan §6.2 P0-4). Set in Coolify + the
+    # Prometheus scraper config; mismatch returns 404 (hide-existence,
+    # same pattern as the profiler). Empty = open endpoint + prod boot
+    # warning.
+    metrics_token: str = Field(default="", alias="AGG_METRICS_TOKEN")
+
+    # --- rate limiting (security/rate_limit.py) ---
+    # Master switch — leave True everywhere; False exists for debugging only.
+    ratelimit_enabled: bool = Field(default=True, alias="AGG_RATELIMIT_ENABLED")
+    # limits-style storage URL. Empty → in-process memory (dev/tests).
+    # Prod MUST point at the shared Redis resource (redis://...) — with 4
+    # uvicorn workers, memory counters allow 4× every limit. Loud boot
+    # warning when memory is used in prod.
+    ratelimit_storage_url: str = Field(
+        default="", alias="AGG_RATELIMIT_STORAGE_URL",
+    )
 
     # Inbound "Paradise" channel: HMAC secret for /v1/internal/* signed by
     # MDProject. Same value as MDProject's PARADISE_SECRET. NEVER reuse

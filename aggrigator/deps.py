@@ -119,13 +119,13 @@ _ENTITLED_STATUSES = (
 )
 
 
-async def require_pro_user(
+async def require_tenant_user(
     session: SessionDep,
-    settings: SettingsDep,
     x_aggrigator_tenant_key: Annotated[str | None, Header()] = None,
 ) -> TenantUser:
-    """Read ``X-Aggrigator-Tenant-Key`` → ``TenantApiKey`` → ``TenantUser``,
-    return the user iff their tier+status grants analytics access.
+    """Read ``X-Aggrigator-Tenant-Key`` → ``TenantApiKey`` → ``TenantUser``.
+    Authentication only — NO tier check (plan §6.2 P0-5 / §6.4: tier
+    enforcement lives in MDProject's Stripe layer now).
 
     Layered checks:
     1. Header present + parsable (``agg_{env}_{head5}{tail}``).
@@ -133,14 +133,8 @@ async def require_pro_user(
     3. argon2 verify of the secret tail.
     4. Key not revoked.
     5. User not revoked.
-    6. Tier == PRO and status in (trialing | active | past_due).
 
-    Step 6 is skipped when ``settings.analytics_free_for_all`` is true —
-    paired with MDProject's matching kill-switch, this opens analytics
-    to every authenticated tenant regardless of tier. The auth steps
-    (1-5) still run, so per-user attribution + logging are preserved.
-
-    Failures collapse to 401/403 without leaking which step failed — a
+    Failures collapse to 401 without leaking which step failed — a
     timing oracle on which-error-message would let an attacker enumerate
     valid prefixes.
     """
@@ -184,6 +178,52 @@ async def require_pro_user(
             detail="invalid tenant key",
         )
 
+    return tenant_user
+
+
+async def keyed_reads_gate(
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    x_aggrigator_tenant_key: Annotated[str | None, Header()] = None,
+) -> None:
+    """P0-5 (plan §6.2): the read surface (references / events /
+    selections) requires a tenant key once ``AGG_REQUIRE_KEY_FOR_READS``
+    is true. Until then keyless requests pass with a WARNING each — the
+    rollout signal for when MDProject's proxy has fully switched over.
+
+    A key that IS present is always validated (401 on bad/revoked) —
+    fail closed during the transition, so a misconfigured client
+    surfaces now rather than at flag-flip time.
+    """
+    if x_aggrigator_tenant_key:
+        await require_tenant_user(session, x_aggrigator_tenant_key)
+        return
+    if settings.require_key_for_reads:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing tenant key",
+        )
+    logger.warning(
+        "[keyed-reads] keyless %s %s from %s — will be rejected once "
+        "AGG_REQUIRE_KEY_FOR_READS=true",
+        request.method,
+        request.url.path,
+        request.client.host if request.client else "unknown",
+    )
+
+
+async def require_pro_user(
+    settings: SettingsDep,
+    tenant_user: Annotated[TenantUser, Depends(require_tenant_user)],
+) -> TenantUser:
+    """``require_tenant_user`` + the PRO tier/status gate.
+
+    DEPRECATED as a routing dependency (plan §6.4, 2026-06-10): the
+    FREE/PRO paywall moved to MDProject's Stripe layer, so no router
+    relies on this anymore. Kept compiling for the external-API-platform
+    future (§6.5 P2-12) — do not delete without revisiting that plan.
+    """
     if not settings.analytics_free_for_all and (
         tenant_user.tier != TenantTier.PRO
         or tenant_user.status not in _ENTITLED_STATUSES
@@ -192,5 +232,53 @@ async def require_pro_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="PRO subscription required",
         )
-
     return tenant_user
+
+
+async def require_acting_tenant_user(
+    session: SessionDep,
+    settings: SettingsDep,
+    tenant_user: Annotated[TenantUser, Depends(require_tenant_user)],
+    x_acting_user: Annotated[str | None, Header()] = None,
+) -> TenantUser:
+    """The tenant user a per-user-data request acts FOR (plan §6.4).
+
+    Two callers:
+    - A per-user key with no ``X-Acting-User`` header → the key's owner
+      (today's behavior, unchanged).
+    - The single MDProject service key asserting ``X-Acting-User:
+      <external_user_id UUID>`` → that user. Only the tenant whose
+      ``external_user_id`` equals ``AGG_SERVICE_TENANT_EXTERNAL_ID`` may
+      assert; anyone else gets 403. This is the "explicit tenant_user_id
+      on service-key routes" trusted channel (decision D-1) — MDProject
+      authenticates its end users and we trust its assertion, exactly as
+      the HMAC internal channel already does for provisioning.
+    """
+    if x_acting_user is None:
+        return tenant_user
+    try:
+        acting_external_id = uuid.UUID(x_acting_user)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="X-Acting-User must be a UUID",
+        )
+    if acting_external_id == tenant_user.external_user_id:
+        return tenant_user
+
+    service_id = settings.service_tenant_external_id
+    if not service_id or str(tenant_user.external_user_id) != service_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="not allowed to act for another user",
+        )
+
+    acting = await session.scalar(
+        select(TenantUser).where(TenantUser.external_user_id == acting_external_id)
+    )
+    if acting is None or acting.revoked_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="unknown acting user",
+        )
+    return acting

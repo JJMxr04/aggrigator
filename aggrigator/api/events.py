@@ -8,19 +8,18 @@ refresh job is enqueued instead — wired in Phase 3.
 
 from __future__ import annotations
 
-from datetime import date as Date, datetime, time, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from datetime import date as Date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
-from sqlalchemy import func, select
-from sqlalchemy.orm import selectinload
 
 from aggrigator.api._http_cache import cached_json
 from aggrigator.config import get_settings
-from aggrigator.deps import SessionDep
+from aggrigator.deps import SessionDep, keyed_reads_gate
 from aggrigator.ingest.lifecycle import compute_stale
-from aggrigator.models import BookmakerSelection, Event, Market, Selection
+from aggrigator.models import Event, Market
+from aggrigator.queries.events import EventQueries
+from aggrigator.queries.filters import EventListFilters, MarketFilters
 from aggrigator.schemas.event import (
     EventDetailOut,
     EventOut,
@@ -30,7 +29,11 @@ from aggrigator.schemas.event import (
 from aggrigator.schemas.market import MarketOut
 from aggrigator.schemas.pagination import Page, PageParams
 
-router = APIRouter(prefix="/v1/events", tags=["events"])
+# Keyed reads (plan §6.2 P0-5) — router-level so a future endpoint can't
+# be added keyless by accident; enforcement flag-staged via keyed_reads_gate.
+router = APIRouter(
+    prefix="/v1/events", tags=["events"], dependencies=[Depends(keyed_reads_gate)],
+)
 
 # Short TTLs — odds change frequently; we cache only long enough to
 # absorb thundering-herd page renders and let HTTP intermediaries collapse
@@ -40,19 +43,7 @@ DETAIL_MAX_AGE = 30    # seconds — single event w/ odds
 MARKETS_MAX_AGE = 30   # seconds — markets list
 
 
-# Mirrors MDProject's `markets.py` SCOPE_SUBJECT_SHORTCUT — keep in sync.
-SCOPE_SUBJECT_SHORTCUT = {
-    "game": ["MONEYLINE", "SPREAD", "TOTAL", "PROPS_GAME"],
-    "team": ["PROPS_TEAM"],
-}
-
-
-def _csv(raw: str | None) -> list[str]:
-    return [v for v in (raw.split(",") if raw else []) if v]
-
-
-def _bod(d: Date) -> datetime:
-    return datetime.combine(d, time.min, tzinfo=timezone.utc)
+_queries = EventQueries()
 
 
 @router.get("")
@@ -77,59 +68,21 @@ async def list_events(
     ),
     include: Literal["markets"] | None = Query(default=None),
 ):
-    stmt = (
-    select(Event)
-    .where(Event.markets.any())
-    .options(
-        selectinload(Event.home_team),
-        selectinload(Event.away_team),
-        selectinload(Event.sport),
-        selectinload(Event.league),
+    # Window semantics (date wins → explicit bounds → 3h-ago/3-days-out
+    # default) live in EventQueries._list_stmt. MDProject's pick popup
+    # passes starts_after/starts_before to widen past the default.
+    filters = EventListFilters(
+        sport=sport,
+        league=league,
+        live=live,
+        date=date,
+        starts_after=starts_after,
+        starts_before=starts_before,
     )
-)
-     
-
-    if sport:
-        stmt = stmt.where(Event.sport_id == sport)
-    if league:
-        stmt = stmt.where(Event.league_id == league)
-    if live is True:
-        stmt = stmt.where(Event.status_type == "inprogress")
-    elif live is False:
-        stmt = stmt.where(Event.status_type != "inprogress")
-    
-
-    # Window resolution: `date` wins (single-day filter), else honor any
-    # explicit starts_after / starts_before, else fall back to the
-    # 3h-ago → 3-days-out default. MDProject's pick popup passes
-    # starts_after/starts_before to widen the window past the default;
-    # without those params being recognized, the popup was silently
-    # truncated to the 3-day default.
-    if date is not None:
-        start = _bod(date)
-        end = start + timedelta(days=1)
-        stmt = stmt.where(Event.start_time >= start, Event.start_time < end)
-    elif starts_after is not None or starts_before is not None:
-        if starts_after is not None:
-            stmt = stmt.where(Event.start_time >= starts_after)
-        if starts_before is not None:
-            stmt = stmt.where(Event.start_time < starts_before)
-    else:
-        now = datetime.now(tz=timezone.utc)
-        stmt = stmt.where(
-            Event.start_time >= now - timedelta(hours=3),
-            Event.start_time < now + timedelta(days=3),
-        )
-
-    stmt = stmt.order_by(Event.start_time)
-
-    total = await session.scalar(
-        select(func.count()).select_from(stmt.order_by(None).subquery())
-    ) or 0
-
-    rows = list(await session.scalars(
-        stmt.offset(page_params.offset).limit(page_params.page_size)
-    ))
+    total, rows = await _queries.list_window(
+        session, filters,
+        offset=page_params.offset, limit=page_params.page_size,
+    )
 
     if include == "markets":
         items: list[EventWithMarketsOut] = await _attach_markets(session, rows)
@@ -158,16 +111,7 @@ async def get_event(
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
     include: Literal["markets"] | None = Query(default=None),
 ):
-    event = await session.scalar(
-        select(Event)
-        .where(Event.id == event_id)
-        .options(
-            selectinload(Event.home_team),
-            selectinload(Event.away_team),
-            selectinload(Event.sport),
-            selectinload(Event.league),
-        )
-    )
+    event = await _queries.get_detail(session, event_id)
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
 
@@ -206,56 +150,25 @@ async def get_event_markets(
     min_decimal: str | None = Query(default=None),
     max_decimal: str | None = Query(default=None),
 ) -> dict:
-    event = await session.get(Event, event_id)
+    event = await _queries.get(session, event_id)
     if event is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
 
-    stmt = (
-        select(Market)
-        .where(Market.event_id == event_id)
-        .options(
-            selectinload(Market.selections)
-                .selectinload(Selection.by_book)
-                .selectinload(BookmakerSelection.bookmaker),
-            selectinload(Market.subject_team),
-        )
+    filters = MarketFilters(
+        category=category,
+        scope=scope,
+        scope_subject=scope_subject,
+        type=type,
+        live=live,
+        team_id=team_id,
+        settled=settled,
+        min_decimal=min_decimal,
+        max_decimal=max_decimal,
     )
-
-    if category:
-        stmt = stmt.where(Market.category.in_(_csv(category)))
-    if scope_subject:
-        stmt = stmt.where(Market.category.in_(SCOPE_SUBJECT_SHORTCUT[scope_subject]))
-    if scope:
-        stmt = stmt.where(Market.scope.in_(_csv(scope)))
-    if type:
-        stmt = stmt.where(Market.type == type)
-    if live is not None:
-        stmt = stmt.where(Market.is_live == live)
-    if team_id is not None:
-        stmt = stmt.where(Market.subject_team_id == team_id)
-
-    if settled is not None or min_decimal is not None or max_decimal is not None:
-        sel_stmt = select(Selection.market_id)
-        if settled is True:
-            sel_stmt = sel_stmt.where(
-                Selection.settlement_status.in_(["WON", "LOST", "PUSH", "VOID"])
-            )
-        elif settled is False:
-            sel_stmt = sel_stmt.where(Selection.settlement_status == "PENDING")
-        try:
-            if min_decimal is not None:
-                sel_stmt = sel_stmt.where(Selection.decimal_odds >= Decimal(min_decimal))
-            if max_decimal is not None:
-                sel_stmt = sel_stmt.where(Selection.decimal_odds <= Decimal(max_decimal))
-        except InvalidOperation:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "min_decimal/max_decimal must be numeric",
-            )
-        stmt = stmt.where(Market.id.in_(sel_stmt))
-
-    stmt = stmt.order_by(Market.category, Market.scope, Market.line)
-    rows = list(await session.scalars(stmt))
+    try:
+        rows = await _queries.markets_for_event(session, event_id, filters)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     return {
         "markets": [MarketOut.model_validate(m) for m in rows],
         "odds_meta": {
@@ -276,19 +189,7 @@ async def _attach_markets(session, events: list[Event]) -> list[EventWithMarkets
     """Bulk-load markets+selections for a list of events, return enriched dtos."""
     if not events:
         return []
-    event_ids = [e.id for e in events]
-    stmt = (
-        select(Market)
-        .where(Market.event_id.in_(event_ids))
-        .options(
-            selectinload(Market.selections)
-                .selectinload(Selection.by_book)
-                .selectinload(BookmakerSelection.bookmaker),
-            selectinload(Market.subject_team),
-        )
-        .order_by(Market.event_id, Market.category, Market.scope, Market.line)
-    )
-    markets = list(await session.scalars(stmt))
+    markets = await _queries.markets_for_events(session, [e.id for e in events])
     by_event: dict[str, list[Market]] = {}
     for m in markets:
         by_event.setdefault(m.event_id, []).append(m)

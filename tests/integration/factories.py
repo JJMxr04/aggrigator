@@ -69,6 +69,7 @@ async def make_team(
     name_long: str = "Dallas Cowboys",
     name_medium: str = "Cowboys",
     name_short: str = "DAL",
+    canonical_name: str | None = None,
 ) -> Team:
     row = Team(
         id=Team.synth_pk(league.id, team_id),
@@ -78,6 +79,10 @@ async def make_team(
         name_long=name_long,
         name_medium=name_medium,
         name_short=name_short,
+        # NOT NULL since the registry work; (league_id, canonical_name) is
+        # the authoritative identity, so default it to something unique
+        # per league+team for tests that don't care.
+        canonical_name=canonical_name or name_long,
     )
     session.add(row)
     await session.commit()
@@ -278,3 +283,36 @@ async def login_and_get_token(
         "/v1/auth/login", json={"email": email, "password": password}
     )
     return r.json()["access_token"]
+
+
+async def make_tenant_user(
+    session: AsyncSession,
+    *,
+    email: str = "tenant@example.com",
+    external_user_id: uuid.UUID | None = None,
+    tier: str | None = None,
+    status: str | None = None,
+) -> tuple["TenantUser", str]:
+    """Seed a TenantUser + one live API key. Returns ``(user, raw_key)`` —
+    the raw key exists only here, exactly like the internal provisioning
+    endpoint's one-time return."""
+    from aggrigator.models.tenant import TenantStatus, TenantTier, TenantUser, TenantApiKey
+    from aggrigator.security.api_keys import generate_key
+
+    generated = generate_key(env="test")
+    user = TenantUser(
+        external_user_id=external_user_id or uuid.uuid4(),
+        email=email,
+        tier=tier or TenantTier.FREE,
+        status=status or TenantStatus.ACTIVE,
+    )
+    session.add(user)
+    await session.flush()
+    session.add(TenantApiKey(
+        tenant_user_id=user.id,
+        prefix=generated.prefix,
+        key_hash=generated.key_hash,
+        last_four=generated.last_four,
+    ))
+    await session.commit()
+    return user, generated.raw

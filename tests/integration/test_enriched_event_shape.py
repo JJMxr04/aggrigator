@@ -20,17 +20,21 @@ from tests.integration.factories import (
 pytestmark = pytest.mark.asyncio
 
 
-async def _seed_full_chain(session):
+async def _seed_full_chain(session, *, with_market: bool = False):
     sport = await make_sport(session, id="FOOTBALL", name="Football", short_name="FB")
     league = await make_league(session, sport=sport, id="NFL", name="NFL", short_name="NFL")
     home = await make_team(session, league=league, team_id="DAL", name_long="Dallas Cowboys")
     away = await make_team(session, league=league, team_id="PHI", name_long="Philadelphia Eagles")
     event = await make_event(session, league=league, home_team=home, away_team=away)
+    if with_market:
+        # /v1/events lists only events with markets (Event.markets.any());
+        # distinct id so tests that count their own markets aren't polluted.
+        await make_market(session, event=event, id=f"{event.id}-seed-ml")
     return sport, league, home, away, event
 
 
 async def test_event_list_includes_nested_sport_and_league(client, session) -> None:
-    sport, league, *_ = await _seed_full_chain(session)
+    sport, league, *_ = await _seed_full_chain(session, with_market=True)
     r = await client.get("/v1/events")
     assert r.status_code == 200
     item = r.json()["items"][0]
@@ -45,7 +49,7 @@ async def test_event_list_includes_nested_sport_and_league(client, session) -> N
 
 
 async def test_team_includes_name_alias(client, session) -> None:
-    await _seed_full_chain(session)
+    await _seed_full_chain(session, with_market=True)
     r = await client.get("/v1/events")
     item = r.json()["items"][0]
     # ``name`` is the legacy-template-friendly alias of ``name_long``.
