@@ -79,9 +79,23 @@ def init_rate_limiter(settings) -> None:
     # The async storage registry namespaces schemes with "async+".
     if not url.startswith("async+"):
         url = f"async+{url}"
-    _storage = storage_from_string(url)
+    try:
+        _storage = storage_from_string(url)
+    except Exception:  # noqa: BLE001
+        # Bad URL / missing driver must not take the whole service down —
+        # degrade to per-process memory counters and scream. The ERROR
+        # makes it to GlitchTip via the logging integration, so a
+        # misconfigured deploy is visible, not silent.
+        logger.exception(
+            "[startup] rate-limit storage %r unusable — falling back to "
+            "in-process memory (limits advisory ×N workers). Fix "
+            "AGG_RATELIMIT_STORAGE_URL or the missing driver "
+            "(requirements: limits[async-redis]).",
+            url,
+        )
+        _storage = storage_from_string("async+memory://")
     _limiter = MovingWindowRateLimiter(_storage)
-    if settings.env in ("prod", "production") and url == "async+memory://":
+    if settings.env in ("prod", "production") and type(_storage).__name__ == "MemoryStorage":
         logger.warning(
             "[startup] rate-limit storage is in-process memory in prod — "
             "limits are advisory ×N across uvicorn workers. Set "
@@ -99,15 +113,36 @@ async def reset_for_tests() -> None:
         await _storage.reset()
 
 
+_last_backend_error_log = 0.0
+
+
 async def check(item: RateLimitItem, *identifiers: str) -> int | None:
     """Hit the limiter. Returns ``None`` when allowed, else the number of
-    seconds until the moving window frees up (for ``Retry-After``)."""
+    seconds until the moving window frees up (for ``Retry-After``).
+
+    Fails OPEN on storage-backend errors (Redis outage): rate limiting
+    is protection, not function — 500ing every login because the
+    counter store is down would be a self-inflicted denial of service.
+    The error is logged (throttled to one per minute so an outage
+    doesn't flood GlitchTip).
+    """
+    global _last_backend_error_log
     if _limiter is None:  # disabled or uninitialized (pure unit tests)
         return None
-    if await _limiter.hit(item, *identifiers):
+    try:
+        if await _limiter.hit(item, *identifiers):
+            return None
+        stats = await _limiter.get_window_stats(item, *identifiers)
+        return max(1, int(stats.reset_time - time.time()) + 1)
+    except Exception:  # noqa: BLE001 — backend outage must not 500 traffic
+        now = time.time()
+        if now - _last_backend_error_log > 60:
+            _last_backend_error_log = now
+            logger.exception(
+                "[rate-limit] storage backend error — failing OPEN "
+                "(no limiting) until it recovers",
+            )
         return None
-    stats = await _limiter.get_window_stats(item, *identifiers)
-    return max(1, int(stats.reset_time - time.time()) + 1)
 
 
 def _client_ip(request: Request) -> str:
