@@ -366,9 +366,16 @@ class Settings(BaseSettings):
             return []
         coolify_fqdn = os.environ.get("COOLIFY_FQDN", "")
         coolify = [h.strip() for h in coolify_fqdn.split(",") if h.strip()]
+        # Loopback is always allowed once validation is on: the Docker
+        # HEALTHCHECK curls http://127.0.0.1:$PORT/healthz from inside
+        # the container, and TrustedHostMiddleware would otherwise 400 it
+        # → Coolify marks the deploy unhealthy and rolls back (bitten
+        # 2026-06-12). No spoofing value: an attacker-supplied Host of
+        # 127.0.0.1 can't poison links toward an attacker domain.
+        loopback = ["127.0.0.1", "localhost"]
         seen: set[str] = set()
         out: list[str] = []
-        for h in (*explicit, *coolify):
+        for h in (*explicit, *coolify, *loopback):
             if h not in seen:
                 seen.add(h)
                 out.append(h)
