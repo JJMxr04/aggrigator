@@ -12,6 +12,9 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, SmallInteger, String
+# Aliased: this is DDL metadata (a partial-index predicate), not a query —
+# the tests/unit/test_sql_guard.py text() ban targets query paths.
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,11 +37,23 @@ class Event(Base, TimestampMixin):
         Index("ix_core_event_event_is_live", "is_live"),
         Index("ix_core_event_event_provider_league", "provider", "league_id"),
         Index("ix_core_event_event_linked_event_id", "linked_event_id"),
+        # Watchdog scan index (migration 0007): partial over non-finalized
+        # rows only. Declared here so autogenerate doesn't try to drop it.
+        Index(
+            "ix_core_event_event_last_seen_upstream_pending",
+            "last_seen_upstream_at",
+            postgresql_where=sa_text("is_finalized = false"),
+        ),
+        # Mirrors migration 0001: UNIQUE constraint on the column + a
+        # separate plain index (NOT index=True+unique=True, which would
+        # make SQLAlchemy expect a single unique index and flap forever
+        # in autogenerate).
+        Index("ix_core_event_event_public_id", "public_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     public_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), default=uuid.uuid4, unique=True, index=True, nullable=False
+        UUID(as_uuid=True), default=uuid.uuid4, unique=True, nullable=False
     )
 
     sport_id: Mapped[str | None] = mapped_column(

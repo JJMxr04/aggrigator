@@ -21,6 +21,25 @@ config.set_main_option("sqlalchemy.url", settings.database_url_sync)
 target_metadata = Base.metadata
 
 
+def include_object(obj, name, type_, reflected, compare_to) -> bool:
+    """Keep autogenerate's hands off tables alembic doesn't own.
+
+    Procrastinate manages its own schema (procrastinate.schema_manager) —
+    without this filter, ``alembic revision --autogenerate`` emits
+    drop_table for the ENTIRE job queue, and ``alembic check`` is too
+    noisy to be useful.
+    """
+    if type_ == "table" and name.startswith("procrastinate_"):
+        return False
+    # Indexes/constraints attached to those tables arrive as their own
+    # objects with a table backref.
+    if type_ in ("index", "unique_constraint", "foreign_key_constraint"):
+        table = getattr(obj, "table", None)
+        if table is not None and table.name.startswith("procrastinate_"):
+            return False
+    return True
+
+
 def run_migrations_offline() -> None:
     context.configure(
         url=settings.database_url_sync,
@@ -28,6 +47,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -44,6 +64,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            include_object=include_object,
         )
         with context.begin_transaction():
             context.run_migrations()

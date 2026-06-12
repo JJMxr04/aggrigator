@@ -50,8 +50,11 @@ class TenantUser(Base, TimestampMixin):
     )
     # The MDProject User.public_id — the join key for every internal-API
     # call. Unique so we can upsert idempotently on provisioning.
+    # unique=True only — migration 0009 created just the constraint (its
+    # implicit index covers lookups); index=True here would make
+    # autogenerate demand a second, redundant index forever.
     external_user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), unique=True, nullable=False, index=True,
+        UUID(as_uuid=True), unique=True, nullable=False,
     )
     # Denormalized from MDProject for audit-log readability. CITEXT so
     # case-insensitive lookups match MDProject's email field semantics.

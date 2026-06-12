@@ -25,11 +25,15 @@ class Team(Base, TimestampMixin):
         Index("ix_core_team_league_id_team_id", "league_id", "team_id"),
         Index("ix_core_team_league_thesportsdb_team_id", "league_id", "thesportsdb_team_id"),
         Index("ix_core_team_league_canonical_name", "league_id", "canonical_name"),
+        # Mirrors migration 0001 (plain index; the UNIQUE lives on the
+        # column as a constraint) — index=True+unique=True would make
+        # autogenerate flap between constraint and unique-index forever.
+        Index("ix_core_team_public_id", "public_id"),
     )
 
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     public_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), default=uuid.uuid4, unique=True, index=True, nullable=False
+        UUID(as_uuid=True), default=uuid.uuid4, unique=True, nullable=False
     )
 
     league_id: Mapped[str] = mapped_column(
