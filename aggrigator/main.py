@@ -28,6 +28,7 @@ from aggrigator.db import engine
 from aggrigator.observability.logging import configure_logging
 from aggrigator.observability.profiler import init_profilers
 from aggrigator.observability.prometheus import register_metrics
+from aggrigator.observability.sentry import init_sentry
 from aggrigator.ops import api as ops_api_router
 from aggrigator.ops import routes as ops_routes_router
 from aggrigator.workers.app import app as procrastinate_app
@@ -191,6 +192,7 @@ def create_app() -> FastAPI:
     is_prod = settings.env in ("prod", "production")
 
     configure_logging(settings.log_level)
+    init_sentry(settings)
 
     # Fail-closed on default secrets in prod — raises before the app
     # starts serving. Better an immediate boot-loop than a quietly

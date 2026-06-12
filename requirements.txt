@@ -43,6 +43,7 @@ python-jose==3.5.0
 python-multipart==0.0.27
 PyYAML==6.0.3
 rsa==4.9.1
+sentry-sdk[fastapi]==2.62.0
 six==1.17.0
 sqladmin==0.25.0
 SQLAlchemy==2.0.49

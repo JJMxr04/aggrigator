@@ -28,8 +28,15 @@ import logging
 from procrastinate import App, PsycopgConnector
 
 from aggrigator.config import get_settings
+from aggrigator.observability.sentry import init_sentry
 
 logger = logging.getLogger(__name__)
+
+# The worker process boots via ``procrastinate -a aggrigator.workers.app.app
+# worker`` and never imports ``main`` — this module IS its entrypoint, so
+# sentry is initialized here. The web process imports this module too;
+# init_sentry guards against the double call.
+init_sentry(get_settings())
 
 
 def _conninfo_from_settings() -> str:

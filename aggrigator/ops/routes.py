@@ -441,6 +441,44 @@ async def data_reset_truncate(request: Request, table: str):
     )
 
 
+# ---- error-tracking test (GlitchTip) ---------------------------------------
+
+
+class GlitchTipTestError(RuntimeError):
+    """Deliberately raised by ``POST /ops/sentry-test`` — never a real failure.
+
+    Distinct class so the event is unmistakable in the GlitchTip issue list
+    and groups separately from genuine errors."""
+
+
+@router.post("/sentry-test")
+async def sentry_test_throw(request: Request):
+    """Raise an unhandled exception on purpose to verify error tracking.
+
+    Exercises the *real* path — route → Starlette → sentry-sdk →
+    GlitchTip — rather than a hand-rolled ``capture_message``, so it also
+    proves the integration's middleware hooks are wired. The browser gets
+    a genuine 500.
+
+    Admin + CSRF gated, but deliberately NOT test-mode gated: verifying
+    error tracking right after a production deploy is legitimate. (The
+    button lives on /ops/data-reset, which IS test-mode-only, so in prod
+    this is reachable only by hand-crafted request from an authed admin.)
+    With ``AGG_SENTRY_DSN`` unset the exception still raises — it just
+    isn't reported anywhere.
+    """
+    user = await _admin_from_session(request)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+    await _require_csrf(request)
+
+    logger.warning("[sentry-test] deliberate test error triggered by %s", user.email)
+    raise GlitchTipTestError(
+        f"GlitchTip test event — deliberately triggered by {user.email}"
+        " via POST /ops/sentry-test"
+    )
+
+
 # ---- helpers ---------------------------------------------------------------
 
 

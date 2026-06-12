@@ -9,10 +9,16 @@
 # Redis was removed in the Procrastinate cutover — task queue, periodic
 # schedule, and per-cron debounce lock all live in Postgres now (the
 # advisory-lock primitive replaces the old SET NX EX).
+#
+# Redis is back (pre-provisioned only, nothing reads it yet): the planned
+# `limits`-based rate limiter (plan §7.4 / P0-1) needs Redis-backed storage
+# because the web entrypoint runs 4 uvicorn workers — in-process counters
+# would give each worker its own quota.
 
 services:
   postgres:
     image: postgres:18
+    restart: unless-stopped
     environment:
       POSTGRES_USER: aggrigator
       POSTGRES_PASSWORD: aggrigator
@@ -27,8 +33,20 @@ services:
       timeout: 3s
       retries: 10
 
+  # Pre-provisioned for the upcoming rate limiter (see header comment).
+  # No auth — local only; Coolify provisions its own Redis with auth.
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   web:
-    build: .
+    build: { context: ., dockerfile: Dockerfile.web }
+    restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
     environment:
@@ -38,14 +56,14 @@ services:
       AGG_DATABASE_URL: postgresql+asyncpg://aggrigator:aggrigator@postgres:5432/aggrigator
       AGG_DATABASE_URL_SYNC: postgresql+psycopg2://aggrigator:aggrigator@postgres:5432/aggrigator
       AGG_JWT_SECRET: dev-only-change-me
-      AGG_SECRET_ENCRYPTION_KEY: dXuPg8VG-pEz3w6mF1gAo0FVXa5Y9xqNxGgfZ7jEz0o=
       AGG_CORS_ORIGINS: http://localhost:3000,http://localhost:8000
       AGG_WEB_WORKERS: "4"
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
 
   worker:
-    build: .
+    build: { context: ., dockerfile: Dockerfile.worker }
+    restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
       web:      { condition: service_healthy }
@@ -54,7 +72,6 @@ services:
       AGG_ENV: dev
       AGG_DATABASE_URL: postgresql+asyncpg://aggrigator:aggrigator@postgres:5432/aggrigator
       AGG_DATABASE_URL_SYNC: postgresql+psycopg2://aggrigator:aggrigator@postgres:5432/aggrigator
-      AGG_SECRET_ENCRYPTION_KEY: dXuPg8VG-pEz3w6mF1gAo0FVXa5Y9xqNxGgfZ7jEz0o=
 
 volumes:
   aggrigator_pg:

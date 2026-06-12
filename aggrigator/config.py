@@ -168,6 +168,14 @@ class Settings(BaseSettings):
         default="", alias="AGG_PROFILER_TOKEN",
     )
 
+    # --- error tracking (GlitchTip via sentry-sdk) ---
+    # DSN from the GlitchTip ``aggrigator`` project. Empty (default) =
+    # sentry stays inert — local dev needs nothing. Web and worker share
+    # the same DSN; ``environment`` comes from ``env`` above and
+    # ``release`` from the Coolify-injected SOURCE_COMMIT build arg.
+    # See aggrigator/observability/sentry.py.
+    sentry_dsn: str = Field(default="", alias="AGG_SENTRY_DSN")
+
     # --- ingest window (storage + quota tuning) ---
     # Cron times are hardcoded next to each task in workers/tasks/ via
     # ``@app.periodic(cron=...)``. To change cadence, edit that decorator
