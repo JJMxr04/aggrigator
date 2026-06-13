@@ -108,3 +108,38 @@ def test_selection_ids_are_unique_within_market(all_event_payloads: list[dict]) 
             assert len(sids) == len(set(sids)), (
                 f"duplicate selection_id in market={m.market_id}: {sorted(sids)}"
             )
+
+
+def test_soccer_three_way_moneyline_keeps_draw_selection() -> None:
+    """Regression: the prop filter treated statEntityID='draw' as a player
+    prop and dropped it — every soccer ML mirrored as a 2-way and the draw
+    was unpickable product-wide (PotD card, Golden Game, regular picks)."""
+    payload = {
+        "type": "match",
+        "eventID": "EV3WAY",
+        "leagueID": "BRASILEIRAO_SERIE_B",
+        "sportID": "SOCCER",
+        "status": {"startsAt": "2026-06-12T22:00:00Z"},
+        "teams": {
+            "home": {"teamID": "HOME_T", "names": {"long": "AC Goianiense"}},
+            "away": {"teamID": "AWAY_T", "names": {"long": "CR Brasil"}},
+        },
+        "odds": {
+            "goals-home-game-ml3way-home": {
+                "oddID": "goals-home-game-ml3way-home", "fairOdds": "+120",
+            },
+            "goals-away-game-ml3way-away": {
+                "oddID": "goals-away-game-ml3way-away", "fairOdds": "+250",
+            },
+            "goals-draw-game-ml3way-draw": {
+                "oddID": "goals-draw-game-ml3way-draw", "fairOdds": "+240",
+            },
+        },
+    }
+
+    spec = event_spec_from_payload(payload)
+    assert spec is not None
+    ml = [m for m in spec.markets if m.category == "MONEYLINE"]
+    assert len(ml) == 1, "home/away/draw must group into ONE 3-way market"
+    types = sorted(sel.selection_type for sel in ml[0].selections)
+    assert types == ["AWAY", "DRAW", "HOME"]

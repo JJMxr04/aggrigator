@@ -251,7 +251,11 @@ def _market_specs(
             continue
         if parts.betTypeID not in BET_TYPE_TO_CATEGORY:
             continue
-        if parts.statEntityID not in ("home", "away", "all"):
+        # "draw" is the third side of a soccer 3-way moneyline
+        # ({stat}-draw-game-ml3way-draw) — a market side, not a player
+        # prop. Without it every soccer ML mirrors as a 2-way and the
+        # draw is unpickable product-wide (PotD, Golden Game, picks).
+        if parts.statEntityID not in ("home", "away", "all", "draw"):
             continue  # player prop — out of scope
         if parts.periodID not in PERIOD_TO_SCOPE:
             logger.debug("skipping unknown periodID=%s on %s", parts.periodID, odd_id)
