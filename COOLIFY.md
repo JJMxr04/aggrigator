@@ -24,6 +24,39 @@ and row-level locks for cooperation).
 
 ---
 
+## Worker sizing
+
+Worker counts are **hardcoded in `docker-entrypoint.sh`** — intentionally
+NOT Coolify env vars, so they can't be changed by accident. To change one,
+edit the entrypoint and redeploy. (The old `AGG_WEB_WORKERS` /
+`AGG_WORKER_CONCURRENCY` env vars are no longer read — setting them in
+Coolify does nothing.)
+
+The four app services (MDProject web + worker, aggregator web + worker)
+share a **~16 vCPU envelope** on the 64 GB / 21 vCPU host; the remaining
+~5 vCPU is for Coolify, Matomo, GlitchTip, and the two Postgres resources.
+The aggregator's split of that envelope:
+
+| Role   | Setting                | Value | Why                                                          |
+| ------ | ---------------------- | ----- | ------------------------------------------------------------ |
+| web    | gunicorn `--workers`   | **4** | uvicorn **async** → high per-worker concurrency; mostly machine-to-machine |
+| worker | procrastinate concurr. | **2** | ingestion/backfill is heavy but bursty; borrows idle host CPU |
+
+(MDProject takes the other ~10 of the 16: web 8 sync + worker 2 — see its
+own COOLIFY.md. Its web tier is the user-facing portal, so it gets the
+bigger share.)
+
+The binding constraint is host vCPU, not RAM and not connections (web 4 +
+worker 2 ≈ 6 to aggrigator-pg, far under the default `max_connections=100`).
+
+**Implement the 16/5 split as CPU _reservations_ (soft floors), not hard
+caps** — in each Application → Configuration → Resource Limits. Reservations
+guarantee each service its floor while letting it borrow idle host CPU
+during the others' quiet periods. Add **memory limits** too so a runaway
+can't OOM a co-tenant.
+
+---
+
 ## 1. Create the Postgres resource
 
 In Coolify → **Resources → New Resource → Postgres** (version 18).

@@ -32,9 +32,18 @@ case "$ROLE" in
     # rate-limit keying on real client IP and session cookies' ``secure``
     # flag. Trusting "*" is safe because Coolify's edge is the only thing
     # that can reach the container; external clients never bypass it.
+    #
+    # --workers is INTENTIONALLY hardcoded (was AGG_WEB_WORKERS). Part of
+    # the four app services' ~16 vCPU envelope on the 64 GB / 21 vCPU
+    # Coolify host (the rest goes to MDProject's share, Matomo, GlitchTip,
+    # Coolify, and the Postgres resources) — see COOLIFY.md §"Worker
+    # sizing". These are uvicorn ASYNC workers, so 4 already gives high
+    # per-worker concurrency, and this tier is mostly machine-to-machine
+    # (MDProject calls it). Setting AGG_WEB_WORKERS in Coolify now has NO
+    # effect; change the number here + redeploy.
     exec gunicorn aggrigator.main:app \
         --worker-class uvicorn.workers.UvicornWorker \
-        --workers "${AGG_WEB_WORKERS:-4}" \
+        --workers 4 \
         --bind "0.0.0.0:${PORT:-3000}" \
         --timeout "${AGG_WEB_TIMEOUT:-30}" \
         --graceful-timeout 30 \
@@ -52,10 +61,14 @@ case "$ROLE" in
     #
     # --concurrency tunes how many jobs run in parallel within this
     # process. Procrastinate uses Postgres LISTEN/NOTIFY for push-based
-    # job delivery (no polling), so small concurrency is plenty for this
-    # app's volume.
+    # job delivery (no polling). INTENTIONALLY hardcoded (was
+    # AGG_WORKER_CONCURRENCY) — part of the apps' ~16 vCPU envelope, see
+    # COOLIFY.md §"Worker sizing". Ingestion/settlement-backfill is heavy
+    # but bursty, so 2 steady slots borrow idle host CPU when a burst hits.
+    # Setting that env var in Coolify now has NO effect; change here +
+    # redeploy.
     exec procrastinate -a aggrigator.workers.app.app worker \
-        --concurrency "${AGG_WORKER_CONCURRENCY:-2}"
+        --concurrency 2
     ;;
 
   migrate-only)
