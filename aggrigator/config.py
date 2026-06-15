@@ -68,14 +68,8 @@ class Settings(BaseSettings):
     odds_api_max_retries: int = Field(
         default=3, alias="AGG_ODDSAPI_MAX_RETRIES",
     )
-
-    # ---- TheSportsDB (historical scores) ---------------------------------
-    # API key for TheSportsDB v1. ``"3"`` is the free public key (no
-    # signup); paid keys unlock v2 + higher rate limits / Patreon
-    # endpoints. The free key tolerates ~30 req/min before 429s, which
-    # the client backs off through automatically. See
-    # plans/analytics/TheSportsDB/ for the full design.
-    thesportsdb_api_key: str = Field(default="3", alias="THESPORTSDB_API_KEY")
+    # (TheSportsDB was retired in Phase 16 — odds-api is the sole source. The
+    # THESPORTSDB_API_KEY setting was removed along with the historical ingest.)
 
     # auth
     jwt_secret: str = Field(default="dev-only-change-me", alias="AGG_JWT_SECRET")
@@ -176,16 +170,6 @@ class Settings(BaseSettings):
     # default → /v1/internal/* deps reject every request with 503 until
     # the operator sets the env var.
     paradise_secret: str = Field(default="", alias="AGG_PARADISE_SECRET")
-
-    # ANALYTICS_FREE_FOR_ALL — paired with MDProject's setting of the
-    # same name. When True, ``require_pro_user`` still authenticates
-    # the tenant key (steps 1-5 in deps.py) but skips the PRO-tier +
-    # status check. Lets FREE-tier users reach /v1/analytics/* during
-    # a platform-wide free window. Flipping back to False instantly
-    # restores the paywall.
-    analytics_free_for_all: bool = Field(
-        default=False, alias="ANALYTICS_FREE_FOR_ALL",
-    )
 
     # CORS
     cors_origins: str = Field(

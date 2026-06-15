@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from aggrigator.config import Settings, get_settings
 from aggrigator.db import get_session
 from aggrigator.models.auth import User
-from aggrigator.models.tenant import TenantApiKey, TenantStatus, TenantTier, TenantUser
+from aggrigator.models.tenant import TenantApiKey, TenantUser
 from aggrigator.security.api_keys import split_raw, verify_key
 from aggrigator.security.jwt import InvalidToken, verify_access_token
 from aggrigator.security.webhook_signing import InvalidSignature, verify
@@ -110,13 +110,6 @@ async def require_paradise_signed(
 
 
 # --- Tenant gate: caller is a paid (PRO) user with a live API key ----------
-
-
-_ENTITLED_STATUSES = (
-    TenantStatus.TRIALING,
-    TenantStatus.ACTIVE,
-    TenantStatus.PAST_DUE,  # grace window — keep access while Stripe retries
-)
 
 
 async def require_tenant_user(
@@ -211,28 +204,6 @@ async def keyed_reads_gate(
         request.url.path,
         request.client.host if request.client else "unknown",
     )
-
-
-async def require_pro_user(
-    settings: SettingsDep,
-    tenant_user: Annotated[TenantUser, Depends(require_tenant_user)],
-) -> TenantUser:
-    """``require_tenant_user`` + the PRO tier/status gate.
-
-    DEPRECATED as a routing dependency (plan §6.4, 2026-06-10): the
-    FREE/PRO paywall moved to MDProject's Stripe layer, so no router
-    relies on this anymore. Kept compiling for the external-API-platform
-    future (§6.5 P2-12) — do not delete without revisiting that plan.
-    """
-    if not settings.analytics_free_for_all and (
-        tenant_user.tier != TenantTier.PRO
-        or tenant_user.status not in _ENTITLED_STATUSES
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="PRO subscription required",
-        )
-    return tenant_user
 
 
 async def require_acting_tenant_user(

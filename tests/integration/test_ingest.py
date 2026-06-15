@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from aggrigator.ingest.client import OddsClient
 from aggrigator.ingest.lifecycle import Transition
@@ -15,6 +15,7 @@ from aggrigator.models import (
     Market,
     OddsQuote,
     Selection,
+    Team,
 )
 from tests.integration.factories import make_league, make_sport
 
@@ -74,6 +75,27 @@ async def test_ingest_skips_event_when_league_not_seeded(
         select(Event).where(Event.id == payload["eventID"])
     )
     assert count is None
+
+
+async def test_ingest_auto_creates_teams_for_unrostered_league(
+    session, fixture_odds_client: OddsClient,
+) -> None:
+    """Phase 16 onboarding: with the league seeded but NO team roster, ingesting
+    an event auto-creates its home/away Team rows via ``upsert_team_from_spec``
+    — no registry/roster step needed (that was the TheSportsDB hassle we retired).
+    """
+    await _seed_league(session, "FOOTBALL", "NFL")
+    assert await session.scalar(select(func.count()).select_from(Team)) == 0
+
+    payload = _first_match_event(fixture_odds_client, "NFL")
+    result = await ingest_event(session, payload)
+    assert result is not None
+    await session.commit()
+
+    teams = list(await session.scalars(select(Team).where(Team.league_id == "NFL")))
+    assert len(teams) == 2  # home + away auto-created on first sight
+    ev = await session.get(Event, result.event.id)
+    assert ev.home_team_id and ev.away_team_id
 
 
 async def test_re_ingest_is_idempotent(session, fixture_odds_client: OddsClient) -> None:

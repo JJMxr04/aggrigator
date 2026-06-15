@@ -41,8 +41,7 @@ from aggrigator.models import (
 # at the router level means a future contributor adding an endpoint can't
 # forget the gate. The PRO-tier check moved to MDProject's Stripe layer
 # (plan §6.4, 2026-06-10) — the aggregator authenticates the *service*,
-# not the subscriber; ``require_pro_user`` survives in deps.py for the
-# API-platform future only.
+# not the subscriber. (The aggregator-side PRO gate was removed in Phase 16.)
 router = APIRouter(
     prefix="/v1/analytics",
     tags=["analytics"],

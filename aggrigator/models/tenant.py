@@ -106,7 +106,7 @@ class TenantApiKey(Base, TimestampMixin):
     )
     # Plaintext lookup key, format ``agg_{env}_{head5}`` from
     # ``aggrigator/security/api_keys.py``. Indexed + unique so the
-    # require_pro_user dep can do an O(1) lookup before the argon2 hash
+    # tenant-key auth dep can do an O(1) lookup before the argon2 hash
     # compare. TEXT (not VARCHAR(N)) so env-name changes don't force a
     # column widening.
     prefix: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
