@@ -34,7 +34,9 @@ class _RelativeRedirectAdmin(Admin):
         )
         return url.path if hasattr(url, "path") else str(url)
 
+from aggrigator.config import get_settings
 from aggrigator.db import async_session_factory, engine
+from aggrigator.schemas.team import team_logo_url
 from aggrigator.webhooks.enqueue import force_enqueue_for_event
 from aggrigator.webhooks.notify import notify_webhook_worker
 
@@ -233,13 +235,29 @@ class LeagueView(ModelView, model=League):
     ]
 
 
+def _team_logo_thumb(model, _attr) -> Markup:
+    """Render a 24px logo thumbnail pointing at the keyless logo endpoint.
+
+    ``public_base_url`` empty -> a relative ``/v1/teams/{id}/logo`` URL,
+    which still resolves because the admin is same-origin with the
+    aggregator. ``team_logo_url`` is the same builder the /v1/events
+    serializer uses, so the admin preview matches the API payload."""
+    src = team_logo_url(model.id, public_base=get_settings().public_base_url)
+    return Markup('<img src="{}" height="24" alt="{} logo">').format(src, model.id)
+
+
 class TeamView(ModelView, model=Team):
     column_list = [
+        "logo",
         "league_id", "canonical_name",
         "odds_api_io_key", "thesportsdb_team_id",
         "match_confirmed", "match_source",
         "team_id",
     ]
+    column_formatters = {
+        "logo": _team_logo_thumb,
+    }
+    column_formatters_detail = column_formatters
     column_searchable_list = [
         "canonical_name", "name_long", "team_id",
         "odds_api_io_key", "thesportsdb_team_id",

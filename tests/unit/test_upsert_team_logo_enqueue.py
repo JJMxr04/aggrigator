@@ -50,3 +50,45 @@ async def test_existing_team_does_not_enqueue():
         await upserts.upsert_team_from_spec(session, spec)
 
     enq.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_existing_team_enqueues_when_key_first_set():
+    # A roster-filler row already exists but has never carried a provider
+    # key. The live feed surfaces its odds-api.io id for the first time —
+    # that NULL -> real transition must enqueue a logo fetch, keyed on the
+    # row's stable PK (the filler PK, not synth_pk).
+    spec = TeamSpec(
+        team_id="38", league_id="usa-nba", name_long="Lakers",
+        name_medium="Lakers", name_short="LAL",
+    )
+    existing = mock.Mock(id="usa-nba:_canon:lakers", odds_api_io_key=None)
+    session = mock.AsyncMock()
+    session.add = mock.Mock()
+    session.get = mock.AsyncMock(
+        side_effect=[mock.Mock(sport_id="basketball"), existing]
+    )
+    with mock.patch.object(
+        upserts, "enqueue_logo_fetch", new_callable=mock.AsyncMock
+    ) as enq:
+        await upserts.upsert_team_from_spec(session, spec)
+    enq.assert_awaited_once_with("usa-nba:_canon:lakers")
+
+
+@pytest.mark.asyncio
+async def test_existing_team_with_empty_string_key_enqueues():
+    spec = TeamSpec(
+        team_id="38", league_id="usa-nba", name_long="Lakers",
+        name_medium="Lakers", name_short="LAL",
+    )
+    existing = mock.Mock(id="usa-nba:38", odds_api_io_key="")
+    session = mock.AsyncMock()
+    session.add = mock.Mock()
+    session.get = mock.AsyncMock(
+        side_effect=[mock.Mock(sport_id="basketball"), existing]
+    )
+    with mock.patch.object(
+        upserts, "enqueue_logo_fetch", new_callable=mock.AsyncMock
+    ) as enq:
+        await upserts.upsert_team_from_spec(session, spec)
+    enq.assert_awaited_once_with("usa-nba:38")

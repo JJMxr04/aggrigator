@@ -159,8 +159,13 @@ async def upsert_team_from_spec(
         # If this is the first time the live feed has surfaced an
         # odds-api.io id for this canonical team, fill it in. Don't
         # overwrite an existing key — registry is authoritative.
-        if row.odds_api_io_key is None:
+        # A NULL/empty -> real transition also means we've never had a
+        # provider key to fetch a crest with, so enqueue the logo fetch
+        # now (keyed on the row's stable PK, which for a roster-filler
+        # row differs from synth_pk).
+        if not row.odds_api_io_key:
             row.odds_api_io_key = spec.team_id
+            await enqueue_logo_fetch(row.id)
     return row
 
 
