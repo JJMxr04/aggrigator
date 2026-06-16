@@ -21,6 +21,7 @@ from aggrigator.api import auth as auth_router
 from aggrigator.api import bets as bets_router
 from aggrigator.api import events as events_router
 from aggrigator.api import internal as internal_router
+from aggrigator.api import logos as logos_router
 from aggrigator.api import references as references_router
 from aggrigator.api import selections as selections_router
 from aggrigator.config import get_settings
@@ -379,6 +380,7 @@ def create_app() -> FastAPI:
         app.add_middleware(ForceHttpsSchemeMiddleware)
 
     app.include_router(auth_router.router)
+    app.include_router(logos_router.router)
     app.include_router(references_router.router)
     app.include_router(events_router.router)
     app.include_router(selections_router.router)

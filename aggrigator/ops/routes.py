@@ -26,7 +26,10 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from sqlalchemy import select
+
 from aggrigator.db import async_session_factory
+from aggrigator.models import League
 from aggrigator.models.auth import User, UserRole
 from aggrigator.ops.data_reset import (
     known_tables,
@@ -67,6 +70,60 @@ async def crons_page(request: Request):
             "actor_email": user.email,
             "csrf_token": _csrf_token(request),
         },
+    )
+
+
+# ---- logo backfill ---------------------------------------------------------
+
+
+@router.get("/logo-backfill", response_class=HTMLResponse)
+async def logo_backfill_page(request: Request):
+    user = await _admin_from_session(request)
+    if user is None:
+        return RedirectResponse(
+            url=f"/admin/login?next={request.url.path}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    async with async_session_factory() as session:
+        leagues = list(
+            await session.scalars(
+                select(League).where(League.active.is_(True)).order_by(League.name)
+            )
+        )
+    return templates.TemplateResponse(
+        request,
+        "logo_backfill.html",
+        {
+            "leagues": leagues,
+            "actor_email": user.email,
+            "csrf_token": _csrf_token(request),
+        },
+    )
+
+
+@router.post("/logo-backfill/run", response_class=HTMLResponse)
+async def logo_backfill_run(request: Request) -> HTMLResponse:
+    """Manual crest fetch. Runs inline (same as a manual cron trigger) and
+    returns the result partial that HTMX swaps into ``#lb-result``."""
+    user = await _admin_from_session(request)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+    await _require_csrf(request)
+
+    form = await request.form()
+    league_id = (form.get("league_id") or "").strip() or None
+    retry_missing = (form.get("retry_missing") or "").strip().lower() == "true"
+    force = (form.get("force") or "").strip().lower() == "true"
+
+    # Lazy import — the workers package pulls in the Procrastinate app; importing
+    # it at module load would couple the web process boot to the worker wiring.
+    from aggrigator.workers.tasks.logos import run_backfill_team_logos
+
+    summary = await run_backfill_team_logos(
+        league_id=league_id, retry_missing=retry_missing, force=force
+    )
+    return templates.TemplateResponse(
+        request, "_logo_backfill_result.html", {"summary": summary},
     )
 
 

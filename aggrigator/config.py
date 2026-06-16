@@ -94,6 +94,11 @@ class Settings(BaseSettings):
         default=14 * 24 * 3600, alias="AGG_JWT_REFRESH_TTL_SECONDS"
     )
 
+    # Browser-reachable base URL of THIS service, used to build absolute
+    # logo URLs in API payloads (e.g. https://agg.example.com). Empty in
+    # dev -> relative URLs are emitted.
+    public_base_url: str = Field(default="", alias="AGG_PUBLIC_BASE_URL")
+
     # Base URL of the MDProject receiver, e.g.
     # ``https://mdproject-production.up.railway.app``. The actual webhook
     # path (``MDPROJECT_WEBHOOK_PATH``) is hardcoded — operator only configures

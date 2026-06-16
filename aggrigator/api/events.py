@@ -28,6 +28,7 @@ from aggrigator.schemas.event import (
 )
 from aggrigator.schemas.market import MarketOut
 from aggrigator.schemas.pagination import Page, PageParams
+from aggrigator.schemas.team import team_logo_url
 
 # Keyed reads (plan §6.2 P0-5) — router-level so a future endpoint can't
 # be added keyless by accident; enforcement flag-staged via keyed_reads_gate.
@@ -44,6 +45,25 @@ MARKETS_MAX_AGE = 30   # seconds — markets list
 
 
 _queries = EventQueries()
+
+
+def _event_out(event: Event, public_base: str) -> EventOut:
+    """Return EventOut for event with team logo_url overridden to the aggregator's keyless endpoint."""
+    out = EventOut.model_validate(event)
+    if out.home_team is not None:
+        out.home_team.logo_url = team_logo_url(out.home_team.id, public_base=public_base)
+    if out.away_team is not None:
+        out.away_team.logo_url = team_logo_url(out.away_team.id, public_base=public_base)
+    return out
+
+
+def _market_out(market: Market, public_base: str) -> MarketOut:
+    out = MarketOut.model_validate(market)
+    if out.subject_team is not None:
+        out.subject_team.logo_url = team_logo_url(
+            out.subject_team.id, public_base=public_base
+        )
+    return out
 
 
 @router.get("")
@@ -84,13 +104,14 @@ async def list_events(
         offset=page_params.offset, limit=page_params.page_size,
     )
 
+    public_base = get_settings().public_base_url
     if include == "markets":
-        items: list[EventWithMarketsOut] = await _attach_markets(session, rows)
+        items: list[EventWithMarketsOut] = await _attach_markets(session, rows, public_base=public_base)
     else:
         # Don't validate-from-attribute — Event.markets is lazy="raise" and
         # would blow up. Build via the markets-less view, then wrap.
         items = [
-            EventWithMarketsOut(**EventOut.model_validate(r).model_dump(), markets=[])
+            EventWithMarketsOut(**_event_out(r, public_base).model_dump(), markets=[])
             for r in rows
         ]
 
@@ -116,11 +137,12 @@ async def get_event(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "event not found")
 
     markets: list[MarketOut] = []
+    public_base = get_settings().public_base_url
     if include == "markets":
-        enriched = await _attach_markets(session, [event])
+        enriched = await _attach_markets(session, [event], public_base=public_base)
         markets = enriched[0].markets
 
-    base = EventOut.model_validate(event)
+    base = _event_out(event, public_base)
     payload = EventDetailOut(
         **base.model_dump(),
         markets=markets,
@@ -165,12 +187,13 @@ async def get_event_markets(
         min_decimal=min_decimal,
         max_decimal=max_decimal,
     )
+    public_base = get_settings().public_base_url
     try:
         rows = await _queries.markets_for_event(session, event_id, filters)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     return {
-        "markets": [MarketOut.model_validate(m) for m in rows],
+        "markets": [_market_out(m, public_base) for m in rows],
         "odds_meta": {
             "stale": compute_stale(
                 status_type=event.status_type,
@@ -185,7 +208,9 @@ async def get_event_markets(
 # ---- helpers ---------------------------------------------------------------
 
 
-async def _attach_markets(session, events: list[Event]) -> list[EventWithMarketsOut]:
+async def _attach_markets(
+    session, events: list[Event], *, public_base: str,
+) -> list[EventWithMarketsOut]:
     """Bulk-load markets+selections for a list of events, return enriched dtos."""
     if not events:
         return []
@@ -196,9 +221,9 @@ async def _attach_markets(session, events: list[Event]) -> list[EventWithMarkets
 
     out: list[EventWithMarketsOut] = []
     for e in events:
-        body = EventOut.model_validate(e).model_dump()
+        body = _event_out(e, public_base).model_dump()
         out.append(EventWithMarketsOut(
             **body,
-            markets=[MarketOut.model_validate(m) for m in by_event.get(e.id, [])],
+            markets=[_market_out(m, public_base) for m in by_event.get(e.id, [])],
         ))
     return out

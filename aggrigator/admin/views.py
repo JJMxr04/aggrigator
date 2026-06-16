@@ -479,6 +479,17 @@ class HistoricalIngestLink(BaseView):
         return RedirectResponse(url="/ops/historical-ingest", status_code=302)
 
 
+class LogoBackfillLink(BaseView):
+    """Sidebar entry → /ops/logo-backfill (per-league crest fetch)."""
+
+    name = "Logo backfill"
+    icon = "fa-solid fa-image"
+
+    @expose("/logo-backfill", methods=["GET"], identity="logo-backfill")
+    async def logo_backfill(self, request):
+        return RedirectResponse(url="/ops/logo-backfill", status_code=302)
+
+
 class DataResetLink(BaseView):
     """Sidebar entry → /ops/data-reset (truncate-with-cascade UI).
 
@@ -518,6 +529,7 @@ def mount_admin(app, *, base_url: str = "/admin") -> Admin:
     # Top of sidebar: operator action shortcuts.
     admin.add_base_view(CronsConsoleLink)
     admin.add_base_view(HistoricalIngestLink)
+    admin.add_base_view(LogoBackfillLink)
     admin.add_base_view(DataResetLink)
     for view in [
         TenantUserView, TenantApiKeyView,

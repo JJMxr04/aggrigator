@@ -1,0 +1,11 @@
+{% if summary.skipped %}
+<div class="lb-result lb-result--warn" style="padding:.75rem 1rem;border-radius:6px;background:var(--surface-2);border:1px solid var(--border-strong);">
+  Skipped — odds-api quota guard ({{ summary.reason }}). Try again after the per-hour bucket resets.
+</div>
+{% else %}
+<div class="lb-result lb-result--ok" style="padding:.75rem 1rem;border-radius:6px;background:var(--surface-2);border:1px solid var(--border-strong);">
+  Done{% if summary.league_id %} for league <code>{{ summary.league_id }}</code>{% else %} (all active leagues, capped per run){% endif %}:
+  <strong>{{ summary.fetched }}</strong> fetched ·
+  <strong>{{ summary.missing }}</strong> missing/404{% if summary.forced %} · <strong>{{ summary.forced }}</strong> re-fetched{% endif %}.
+</div>
+{% endif %}
