@@ -26,6 +26,33 @@ from aggrigator.models import Sport
 logger = logging.getLogger(__name__)
 
 
+def _dedupe_payloads(payloads: list[dict], key: str) -> tuple[list[dict], int]:
+    """Collapse payloads sharing the same ``key`` value, first occurrence wins.
+
+    odds-api's phase-suffixed slugs (``usa-nba`` + ``usa-nba-playoffs``) both
+    resolve to one internal leagueID via ``match_league_slug``, so
+    ``get_leagues`` can emit the same ``leagueID`` twice. The seed session runs
+    with ``autoflush=False``, so a pending ``session.add`` is invisible to the
+    next ``session.get`` — two rows with the same PK would both insert and
+    violate ``pk_core_league`` at flush. Collapse here, before the upsert loop.
+
+    Rows missing ``key`` pass through untouched (they aren't duplicate PKs — the
+    upsert helper skips them). Returns ``(deduped, num_dropped)``.
+    """
+    seen: set = set()
+    out: list[dict] = []
+    dropped = 0
+    for payload in payloads:
+        value = payload.get(key)
+        if value is not None:
+            if value in seen:
+                dropped += 1
+                continue
+            seen.add(value)
+        out.append(payload)
+    return out, dropped
+
+
 async def seed_sports(
     session: AsyncSession, client: OddsClient, *, _payloads: list[dict] | None = None,
 ) -> int:
@@ -39,6 +66,9 @@ async def seed_sports(
     active sport).
     """
     payloads = _payloads if _payloads is not None else list(client.get_sports())
+    payloads, dropped = _dedupe_payloads(payloads, "sportID")
+    if dropped:
+        logger.info("seed_sports: collapsed %d duplicate sportID payload(s)", dropped)
     count = 0
     for payload in payloads:
         if await upsert_sport_from_spec(session, payload) is not None:
@@ -64,6 +94,13 @@ async def seed_leagues(
     flag); operator-flipped leagues stick across re-seeds.
     """
     payloads = _payloads if _payloads is not None else list(client.get_leagues())
+    payloads, dropped = _dedupe_payloads(payloads, "leagueID")
+    if dropped:
+        logger.info(
+            "seed_leagues: collapsed %d duplicate leagueID payload(s) "
+            "(phase-suffixed slugs resolving to one internal league)",
+            dropped,
+        )
 
     active_sport_ids = set(
         await session.scalars(
