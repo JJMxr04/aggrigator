@@ -51,16 +51,18 @@ async def ensure_team_logo(
         if _is_fresh_miss(row):
             return row
 
+    # No provider key -> nothing to fetch. Return whatever we already have
+    # (an existing row, or None for a never-fetched keyless team).
     if not team.odds_api_io_key:
         return row
 
-    result = client.fetch_participant_logo(team.odds_api_io_key)
+    logo_data = client.fetch_participant_logo(team.odds_api_io_key)
 
     if row is None:
         row = TeamLogo(team_id=team.id, status="missing")
         session.add(row)
 
-    if result is None:
+    if logo_data is None:
         row.image = None
         row.content_type = None
         row.byte_size = 0
@@ -72,7 +74,7 @@ async def ensure_team_logo(
         logger.info("logo: team=%s -> missing (odds-api 404)", team.id)
         return row
 
-    data, content_type = result
+    data, content_type = logo_data
     row.image = data
     row.content_type = content_type
     row.byte_size = len(data)
