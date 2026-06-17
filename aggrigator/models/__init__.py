@@ -25,6 +25,7 @@ from aggrigator.models.selection import (
 )
 from aggrigator.models.sport import Sport
 from aggrigator.models.team import Team
+from aggrigator.models.team_logo import TeamLogo
 from aggrigator.models.tenant import (
     TenantApiKey,
     TenantStatus,
@@ -58,6 +59,7 @@ __all__ = [
     "SettlementStatus",
     "Sport",
     "Team",
+    "TeamLogo",
     "TenantApiKey",
     "TenantStatus",
     "TenantTier",

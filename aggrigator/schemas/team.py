@@ -5,6 +5,11 @@ import uuid
 from pydantic import BaseModel, ConfigDict, computed_field
 
 
+def team_logo_url(team_id: str, *, public_base: str) -> str:
+    base = public_base.rstrip("/")
+    return f"{base}/v1/teams/{team_id}/logo"
+
+
 class TeamOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

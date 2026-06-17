@@ -21,6 +21,7 @@ from aggrigator.api import auth as auth_router
 from aggrigator.api import bets as bets_router
 from aggrigator.api import events as events_router
 from aggrigator.api import internal as internal_router
+from aggrigator.api import logos as logos_router
 from aggrigator.api import references as references_router
 from aggrigator.api import selections as selections_router
 from aggrigator.config import get_settings
@@ -156,6 +157,19 @@ def _warn_on_misconfig(settings) -> None:
     here. ODDSAPI_API_KEY stays warn-only because the app is still useful
     for historical data without it.
     """
+    # Fires in EVERY env — an empty public base silently emits relative
+    # logo URLs that off-origin consumers (the browser via MDProject)
+    # resolve against the wrong host and 404. This is the exact "var in the
+    # wrong service's .env" trap; make it self-announcing in the logs.
+    if not settings.public_base_url:
+        logger.warning(
+            "[startup] AGG_PUBLIC_BASE_URL is unset — /v1/events will emit "
+            "RELATIVE logo_url values (/v1/teams/{id}/logo). Browsers loading "
+            "them from another origin (MDProject) will 404. Set "
+            "AGG_PUBLIC_BASE_URL to THIS service's browser-reachable origin "
+            "(e.g. http://localhost:8001) in the aggregator's own .env."
+        )
+
     is_prod = settings.env in ("prod", "production")
     if not is_prod:
         return
@@ -379,6 +393,7 @@ def create_app() -> FastAPI:
         app.add_middleware(ForceHttpsSchemeMiddleware)
 
     app.include_router(auth_router.router)
+    app.include_router(logos_router.router)
     app.include_router(references_router.router)
     app.include_router(events_router.router)
     app.include_router(selections_router.router)

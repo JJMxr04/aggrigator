@@ -181,6 +181,31 @@ class OddsApiHttpClient:
             },
         }
 
+    def fetch_participant_logo(
+        self, odds_api_io_key: str
+    ) -> tuple[bytes, str] | None:
+        """Fetch a team crest PNG from odds-api.io.
+
+        Returns ``(bytes, content_type)`` on 200, ``None`` on 404 (no logo).
+        The apiKey is sent as a query param and never logged. Binary response —
+        does NOT go through ``_send`` (which parses JSON).
+
+        ``follow_redirects=True`` is required: odds-api serves the crest via a
+        302 to a CDN object. The shared client defaults to NOT following
+        redirects, so without this the request hangs on the redirect and
+        ReadTimeouts instead of returning the image.
+        """
+        path = f"/participants/{odds_api_io_key}/logo"
+        resp = self.client.get(
+            path, params={"apiKey": self.api_key}, follow_redirects=True
+        )
+        self._capture_rate_limit_headers(resp)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "image/png")
+        return resp.content, content_type
+
     def get_sports(self) -> list[dict]:
         """Pass through odds-api.io /sports as a list of dicts. Mapped to
         sport_id where we have a slug mapping; unknown slugs surface as

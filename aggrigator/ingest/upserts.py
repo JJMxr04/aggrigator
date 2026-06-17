@@ -11,19 +11,29 @@ hand it to ``lifecycle.decide_transition`` without re-reading the row.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import logging
-
 from aggrigator.ingest.lifecycle import TERMINAL_STATUSES, EventState
 from aggrigator.ingest.normalize import EventSpec, TeamSpec
 from aggrigator.models import Event, League, Sport, Team
 
 logger = logging.getLogger(__name__)
+
+
+async def enqueue_logo_fetch(team_pk: str) -> None:
+    """Best-effort enqueue of a logo fetch for a new team. Never raises into
+    the ingest path — a queue hiccup must not fail event ingest."""
+    try:
+        from aggrigator.workers.tasks.logos import fetch_team_logo_task
+
+        await fetch_team_logo_task.defer_async(team_pk=team_pk)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("logo enqueue failed for %s: %s", team_pk, exc)
 
 
 # ---- sport / league (from /sports + /leagues provider endpoints) ---------------
@@ -142,14 +152,20 @@ async def upsert_team_from_spec(
             **payload,
         )
         session.add(row)
+        await enqueue_logo_fetch(pk)
     else:
         for k, v in payload.items():
             setattr(row, k, v)
         # If this is the first time the live feed has surfaced an
         # odds-api.io id for this canonical team, fill it in. Don't
         # overwrite an existing key — registry is authoritative.
-        if row.odds_api_io_key is None:
+        # A NULL/empty -> real transition also means we've never had a
+        # provider key to fetch a crest with, so enqueue the logo fetch
+        # now (keyed on the row's stable PK, which for a roster-filler
+        # row differs from synth_pk).
+        if not row.odds_api_io_key:
             row.odds_api_io_key = spec.team_id
+            await enqueue_logo_fetch(row.id)
     return row
 
 

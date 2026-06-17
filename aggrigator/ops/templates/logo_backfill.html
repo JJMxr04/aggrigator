@@ -1,0 +1,61 @@
+{% extends "_base.html" %}
+
+{% block body %}
+<style>
+  .lb-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.5rem; box-shadow: var(--shadow-sm); }
+  .lb-form { display: grid; gap: 1rem; max-width: 520px; }
+  .lb-field { display: flex; flex-direction: column; gap: .35rem; }
+  .lb-field label { font-weight: 600; font-size: .85rem; }
+  .lb-field small { color: var(--text-soft); font-size: .78rem; }
+  .lb-field select { padding: .55rem .75rem; border-radius: 6px;
+    border: 1px solid var(--border-strong); background: var(--surface-2);
+    color: var(--text); font-size: .95rem; font-family: inherit; }
+  .lb-check { display: flex; align-items: center; gap: .5rem; font-size: .9rem; }
+  .lb-btn { padding: .6rem 1.1rem; border-radius: 6px; border: 0;
+    background: var(--accent); color: #fff; font-weight: 700; cursor: pointer; }
+  #lb-result { margin-top: 1.25rem; }
+  .lb-muted { color: var(--text-soft); font-size: .9rem; }
+</style>
+
+<h1>Team logo backfill</h1>
+<p class="lb-muted">Fetch team crests from odds-api for a league on demand.
+  Signed in as {{ actor_email }}.</p>
+
+<div class="lb-card">
+  <form class="lb-form"
+        hx-post="/ops/logo-backfill/run"
+        hx-target="#lb-result"
+        hx-swap="innerHTML"
+        hx-indicator="#lb-spinner">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <div class="lb-field">
+      <label for="league_id">League</label>
+      <select id="league_id" name="league_id">
+        <option value="">All leagues</option>
+        {% for lg in leagues %}
+        <option value="{{ lg.id }}">{{ lg.name }} ({{ lg.id }})</option>
+        {% endfor %}
+      </select>
+      <small>"All leagues" is capped per run and paced by the odds-api quota.</small>
+    </div>
+
+    <label class="lb-check">
+      <input type="checkbox" name="retry_missing" value="true" checked>
+      Retry teams that previously had no crest (404)
+    </label>
+    <label class="lb-check">
+      <input type="checkbox" name="force" value="true">
+      Force re-fetch (re-download even existing logos)
+    </label>
+
+    <div>
+      <button class="lb-btn" type="submit">Fetch logos</button>
+      <span id="lb-spinner" class="htmx-indicator">…working…</span>
+    </div>
+  </form>
+
+  <div id="lb-result"></div>
+</div>
+{% endblock %}

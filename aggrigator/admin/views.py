@@ -34,7 +34,9 @@ class _RelativeRedirectAdmin(Admin):
         )
         return url.path if hasattr(url, "path") else str(url)
 
+from aggrigator.config import get_settings
 from aggrigator.db import async_session_factory, engine
+from aggrigator.schemas.team import team_logo_url
 from aggrigator.webhooks.enqueue import force_enqueue_for_event
 from aggrigator.webhooks.notify import notify_webhook_worker
 
@@ -233,13 +235,35 @@ class LeagueView(ModelView, model=League):
     ]
 
 
+def _team_logo_thumb(model, _attr) -> Markup:
+    """Render a 24px logo thumbnail pointing at the keyless logo endpoint.
+
+    ``public_base_url`` empty -> a relative ``/v1/teams/{id}/logo`` URL,
+    which still resolves because the admin is same-origin with the
+    aggregator. ``team_logo_url`` is the same builder the /v1/events
+    serializer uses, so the admin preview matches the API payload."""
+    src = team_logo_url(model.id, public_base=get_settings().public_base_url)
+    return Markup('<img src="{}" height="24" alt="{} logo">').format(src, model.id)
+
+
 class TeamView(ModelView, model=Team):
     column_list = [
+        "logo",
         "league_id", "canonical_name",
         "odds_api_io_key", "thesportsdb_team_id",
         "match_confirmed", "match_source",
         "team_id",
     ]
+    column_formatters = {
+        "logo": _team_logo_thumb,
+    }
+    # On the detail page the synthetic "logo" column isn't in the model's
+    # default details list, so render the thumbnail over the real (dormant)
+    # ``logo_url`` column instead — the formatter ignores the column value
+    # and builds the <img> from ``model.id``.
+    column_formatters_detail = {
+        "logo_url": _team_logo_thumb,
+    }
     column_searchable_list = [
         "canonical_name", "name_long", "team_id",
         "odds_api_io_key", "thesportsdb_team_id",
@@ -258,6 +282,11 @@ class TeamView(ModelView, model=Team):
     form_excluded_columns = [
         "canonical_name", "odds_api_io_key", "thesportsdb_team_id",
         "match_source", "id", "public_id", "team_id",
+        # Dormant/computed — the logo URL is synthesized at serialization
+        # time from the keyless endpoint, never stored, so an editable text
+        # field here would be misleading. The detail view shows it as a
+        # thumbnail instead (column_formatters_detail above).
+        "logo_url",
     ]
 
 
@@ -479,6 +508,17 @@ class HistoricalIngestLink(BaseView):
         return RedirectResponse(url="/ops/historical-ingest", status_code=302)
 
 
+class LogoBackfillLink(BaseView):
+    """Sidebar entry → /ops/logo-backfill (per-league crest fetch)."""
+
+    name = "Logo backfill"
+    icon = "fa-solid fa-image"
+
+    @expose("/logo-backfill", methods=["GET"], identity="logo-backfill")
+    async def logo_backfill(self, request):
+        return RedirectResponse(url="/ops/logo-backfill", status_code=302)
+
+
 class DataResetLink(BaseView):
     """Sidebar entry → /ops/data-reset (truncate-with-cascade UI).
 
@@ -518,6 +558,7 @@ def mount_admin(app, *, base_url: str = "/admin") -> Admin:
     # Top of sidebar: operator action shortcuts.
     admin.add_base_view(CronsConsoleLink)
     admin.add_base_view(HistoricalIngestLink)
+    admin.add_base_view(LogoBackfillLink)
     admin.add_base_view(DataResetLink)
     for view in [
         TenantUserView, TenantApiKeyView,

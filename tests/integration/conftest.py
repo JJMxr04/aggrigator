@@ -87,6 +87,7 @@ async def _wipe(session) -> None:
         "core_market",
         "core_bookmaker",
         "core_event_event",
+        "core_team_logo",
         "core_team",
         "core_league",
         "core_sport",

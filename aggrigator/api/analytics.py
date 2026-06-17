@@ -25,6 +25,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from aggrigator.analytics import soccer_model
+from aggrigator.config import get_settings
 from aggrigator.deps import SessionDep, require_tenant_user
 from aggrigator.models import (
     BookmakerSelection,
@@ -36,6 +37,7 @@ from aggrigator.models import (
     Selection,
     Team,
 )
+from aggrigator.schemas.team import team_logo_url
 
 # Every route on this router requires a valid tenant API key. Applying
 # at the router level means a future contributor adding an endpoint can't
@@ -49,13 +51,14 @@ router = APIRouter(
 )
 
 
-def _team_dto(team) -> dict | None:
+def _team_dto(team, public_base: str | None = None) -> dict | None:
     """Compact team payload used by the events / fixtures endpoints. ``id``
     is the synthesized ``{league_id}:{team_id}`` PK that the explore
     pages use for drill-in URLs; ``team_id`` is the raw provider id
     kept for legacy callers."""
     if team is None:
         return None
+    _public_base = public_base if public_base is not None else get_settings().public_base_url
     return {
         "id": team.id,
         "team_id": team.team_id,
@@ -63,7 +66,7 @@ def _team_dto(team) -> dict | None:
         "name": team.name_long,
         "name_medium": team.name_medium,
         "name_short": team.name_short,
-        "logo_url": team.logo_url,
+        "logo_url": team_logo_url(team.id, public_base=_public_base),
     }
 
 
@@ -1180,6 +1183,7 @@ async def team_summary(
     season: str | None = Query(default=None, description="season_label"),
 ) -> dict:
     """Per-team form, season stats, home/away split, recent H2H opponents."""
+    public_base = get_settings().public_base_url
     team = await session.scalar(
         select(Team).where(Team.id == team_id)
     )
@@ -1230,7 +1234,7 @@ async def team_summary(
             "name_short": team.name_short,
             "primary_color": team.primary_color,
             "secondary_color": team.secondary_color,
-            "logo_url": team.logo_url,
+            "logo_url": team_logo_url(team.id, public_base=public_base),
         },
         "season_label": season_label,
         "seasons_available": seasons,

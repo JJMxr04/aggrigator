@@ -183,3 +183,50 @@ async def test_get_event_markets_min_decimal_validation(client, session) -> None
         f"/v1/events/{event.id}/markets?min_decimal=not-a-number"
     )
     assert r.status_code == 400
+
+
+async def test_events_team_logo_url_is_aggregator_endpoint(client, session) -> None:
+    _, _, home, away, event = await _seed_basic_event(session, with_market=True)
+    r = await client.get("/v1/events")
+    assert r.status_code == 200
+    item = r.json()["items"][0]
+    assert item["home_team"]["logo_url"].endswith(f"/v1/teams/{home.id}/logo")
+    assert item["away_team"]["logo_url"].endswith(f"/v1/teams/{away.id}/logo")
+
+
+async def test_get_event_detail_team_logo_url_is_aggregator_endpoint(client, session) -> None:
+    _, _, home, away, event = await _seed_basic_event(session)
+    r = await client.get(f"/v1/events/{event.id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["home_team"]["logo_url"].endswith(f"/v1/teams/{home.id}/logo")
+    assert body["away_team"]["logo_url"].endswith(f"/v1/teams/{away.id}/logo")
+
+
+async def test_market_subject_team_logo_url_is_aggregator_endpoint(client, session) -> None:
+    _, _, home, away, event = await _seed_basic_event(session)
+    market = await make_market(
+        session, event=event, type="NFL_TEAM_TOTAL_POINTS", category="PROPS_TEAM",
+        id=f"{event.id}-team-total",
+    )
+    # Set subject_team after initial commit — factory doesn't expose this field.
+    market.subject_team_id = home.id
+    await session.commit()
+
+    # Via /v1/events/{id}/markets
+    r = await client.get(f"/v1/events/{event.id}/markets")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["markets"]) == 1
+    market_data = body["markets"][0]
+    assert market_data["subject_team"] is not None
+    assert market_data["subject_team"]["logo_url"].endswith(f"/v1/teams/{home.id}/logo")
+
+    # Also via ?include=markets on the list endpoint
+    r2 = await client.get("/v1/events?include=markets")
+    assert r2.status_code == 200
+    items = r2.json()["items"]
+    assert len(items) == 1
+    markets_in_list = items[0]["markets"]
+    assert len(markets_in_list) == 1
+    assert markets_in_list[0]["subject_team"]["logo_url"].endswith(f"/v1/teams/{home.id}/logo")

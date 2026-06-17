@@ -68,6 +68,7 @@ app = App(
         "aggrigator.workers.tasks.full_refresh",
         "aggrigator.workers.tasks.ingest",
         "aggrigator.workers.tasks.load_registry",
+        "aggrigator.workers.tasks.logos",
         "aggrigator.workers.tasks.seed",
         "aggrigator.workers.tasks.settle",
         "aggrigator.workers.tasks.vacuum",
