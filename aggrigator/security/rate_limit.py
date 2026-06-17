@@ -47,6 +47,12 @@ PUBLIC_RULE: RateLimitItem = parse("120/minute")
 #: can't ride the anonymous bucket. Key *validity* is enforced later by
 #: the auth deps; here an invalid key only buys a bucket, not access.
 KEYED_RULE: RateLimitItem = parse("600/minute")
+#: Team-crest bytes (``GET /v1/teams/{id}/logo``) — cheap cached reads with
+#: their own lane, so a page full of <img> tags or a (paced) MDProject
+#: mirror backfill doesn't burn the 120/min anonymous public budget. Still
+#: bounded: a cold-cache burst can't run away, and the odds-api lazy-fetch
+#: behind a miss is paced separately by the odds-api quota guard.
+LOGO_RULE: RateLimitItem = parse("600/minute")
 
 #: Per-account login backoff (complements the per-IP limit against
 #: distributed guessing): this many AUTH_LOGIN_FAIL audit rows for one
@@ -188,6 +194,14 @@ async def rate_limit_dispatch(request: Request, call_next):
     ip = _client_ip(request)
     if request.method == "POST" and path == "/admin/login":
         retry = await check(ADMIN_LOGIN_RULE, "admin-login", ip)
+    elif (
+        request.method == "GET"
+        and path.startswith("/v1/teams/")
+        and path.endswith("/logo")
+    ):
+        # Keyless crest bytes ride their own bucket (browser <img> + mirror
+        # backfill), independent of the anonymous public tier.
+        retry = await check(LOGO_RULE, "logo", ip)
     elif key := request.headers.get(_TENANT_KEY_HEADER):
         # Bucket by key prefix (the indexed public part) + IP. A forged
         # key gets its own bounded lane — it can't exhaust the anonymous

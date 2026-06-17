@@ -115,6 +115,21 @@ async def test_keyed_requests_ride_their_own_bucket(client, session) -> None:
     assert r.status_code == 200
 
 
+async def test_logo_endpoint_rides_its_own_lane_not_public(client) -> None:
+    """Team-logo GETs use a dedicated bucket, not the 120/min public tier —
+    so a page of <img> tags (or a paced mirror backfill) can exceed 120
+    logo requests without tripping, and the public bucket stays untouched.
+
+    Each request is an unknown team → a fast 404 (no team row, so no
+    odds-api lazy-fetch). On the public tier the 121st would be 429.
+    """
+    for _ in range(121):
+        r = await client.get("/v1/teams/NOPE%3ANONE/logo")
+        assert r.status_code in (404, 304), r.status_code
+    # The public tier is a separate bucket — still fully usable afterward.
+    assert (await client.get("/v1/sports")).status_code == 200
+
+
 async def test_health_probes_are_exempt(client) -> None:
     for _ in range(120):
         await client.get("/v1/sports")

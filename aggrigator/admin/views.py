@@ -257,7 +257,13 @@ class TeamView(ModelView, model=Team):
     column_formatters = {
         "logo": _team_logo_thumb,
     }
-    column_formatters_detail = column_formatters
+    # On the detail page the synthetic "logo" column isn't in the model's
+    # default details list, so render the thumbnail over the real (dormant)
+    # ``logo_url`` column instead — the formatter ignores the column value
+    # and builds the <img> from ``model.id``.
+    column_formatters_detail = {
+        "logo_url": _team_logo_thumb,
+    }
     column_searchable_list = [
         "canonical_name", "name_long", "team_id",
         "odds_api_io_key", "thesportsdb_team_id",
@@ -276,6 +282,11 @@ class TeamView(ModelView, model=Team):
     form_excluded_columns = [
         "canonical_name", "odds_api_io_key", "thesportsdb_team_id",
         "match_source", "id", "public_id", "team_id",
+        # Dormant/computed — the logo URL is synthesized at serialization
+        # time from the keyless endpoint, never stored, so an editable text
+        # field here would be misleading. The detail view shows it as a
+        # thumbnail instead (column_formatters_detail above).
+        "logo_url",
     ]
 
 

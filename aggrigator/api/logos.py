@@ -5,8 +5,10 @@ never race the backfill cron. The apiKey stays inside this process.
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Header, Response
 
 from aggrigator.config import get_settings
@@ -16,6 +18,8 @@ from aggrigator.ingest.odds_api_http import OddsApiHttpClient
 from aggrigator.models import Team, TeamLogo
 
 router = APIRouter(prefix="/v1", tags=["logos"])
+
+logger = logging.getLogger(__name__)
 
 LOGO_MAX_AGE = 86400
 
@@ -44,6 +48,23 @@ async def get_team_logo(
             try:
                 row = await ensure_team_logo(session, client, team)
                 await session.commit()
+            except httpx.HTTPError as exc:
+                # odds-api was unreachable / rate-limited / errored on the
+                # lazy-fetch. This is transient, NOT a real "missing" crest —
+                # surface 503 (+ Retry-After when odds-api gave one) so the
+                # caller backs off and retries, instead of a 500 storm or a
+                # poisoned 30-day negative-cache row.
+                await session.rollback()
+                status_obj = getattr(exc, "response", None)
+                retry_after = "60"
+                if status_obj is not None:
+                    retry_after = status_obj.headers.get("Retry-After", "60")
+                logger.warning(
+                    "logo lazy-fetch failed for %s: %s", team_id, exc
+                )
+                return Response(
+                    status_code=503, headers={"Retry-After": str(retry_after)}
+                )
             finally:
                 client.close()
 

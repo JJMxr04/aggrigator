@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from aggrigator.models import League, Sport, Team, TeamLogo
@@ -54,3 +55,28 @@ async def test_logo_404_for_unknown_team(client, session):
     await _seed_team(session, with_logo=False)
     resp = await client.get("/v1/teams/usa-nba:999/logo")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_logo_503_on_oddsapi_failure_not_500_or_missing(
+    client, session, monkeypatch
+):
+    """A transient odds-api failure on the lazy-fetch (e.g. odds-api 429)
+    must surface 503 + Retry-After — NOT a 500, and NOT a poisoned 30-day
+    'missing' row. The team exists with a provider key but has no cached
+    crest, so the endpoint takes the lazy-fetch path."""
+    await _seed_team(session, with_logo=False)
+
+    req = httpx.Request("GET", "https://odds.example/participants/38/logo")
+    resp_429 = httpx.Response(429, headers={"Retry-After": "12"}, request=req)
+
+    async def _boom(*_args, **_kwargs):
+        raise httpx.HTTPStatusError("rate limited", request=req, response=resp_429)
+
+    monkeypatch.setattr("aggrigator.api.logos.ensure_team_logo", _boom)
+
+    resp = await client.get("/v1/teams/usa-nba:38/logo")
+    assert resp.status_code == 503
+    assert resp.headers["Retry-After"] == "12"
+    # The lazy-fetch failure must not have written a negative-cache row.
+    assert await session.get(TeamLogo, "usa-nba:38") is None

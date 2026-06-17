@@ -45,3 +45,18 @@ def test_logo_thumb_escapes_dangerous_id():
     # (it would terminate the src attribute). markupsafe escapes it to &#34;.
     assert '"x"' not in str(out)
     assert "&#34;" in str(out) or "&quot;" in str(out)
+
+
+def test_team_view_renders_logo_in_list_and_detail():
+    # List view: synthetic "logo" column, first.
+    assert views.TeamView.column_list[0] == "logo"
+    assert views.TeamView.column_formatters["logo"] is views._team_logo_thumb
+    # Detail view: the real (dormant) logo_url column is rendered as a thumb,
+    # since a synthetic column can't appear in the model's default detail list.
+    assert views.TeamView.column_formatters_detail["logo_url"] is views._team_logo_thumb
+
+
+def test_team_view_logo_url_not_editable_in_form():
+    # The dormant/computed logo_url is excluded from the edit form so the
+    # operator can't type into a field that's synthesized at serialization.
+    assert "logo_url" in views.TeamView.form_excluded_columns
