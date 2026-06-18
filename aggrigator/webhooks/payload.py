@@ -102,6 +102,9 @@ def _team_dict(team: Team | None) -> dict[str, Any] | None:
         "name_medium": team.name_medium,
         "name_short": team.name_short,
         "primary_color": team.primary_color,
+        "secondary_color": team.secondary_color,
+        "primary_contrast": team.primary_contrast,
+        "secondary_contrast": team.secondary_contrast,
         "stat_entity_id": team.stat_entity_id,
     }
 

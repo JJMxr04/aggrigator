@@ -38,3 +38,36 @@ class TeamOut(BaseModel):
         """Alias for ``name_long`` — matches the legacy Django ``Team.name``
         property so portal templates that read ``team.name`` keep working."""
         return self.name_long
+
+
+class TeamSyncOut(BaseModel):
+    """Trimmed team view for the MDProject sync pull (GET /v1/teams).
+
+    Only the natural-key fields MDProject matches on + the syncable display
+    fields. Deliberately omits provider keys (odds_api_io_key /
+    thesportsdb_team_id), match state, public_id, and logo_url — internal /
+    MDProject-local fields it neither stores nor should receive.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    league_id: str
+    team_id: str
+    sport_id: str | None
+    name_long: str
+    name_medium: str
+    name_short: str
+    primary_color: str | None
+    secondary_color: str | None
+    primary_contrast: str | None
+    secondary_contrast: str | None
+    stat_entity_id: str
+
+
+class TeamListOut(BaseModel):
+    items: list[TeamSyncOut]
+    page: int
+    page_size: int
+    pages: int
+    total: int
