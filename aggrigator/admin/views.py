@@ -3,6 +3,7 @@ edits. Mounted at /admin in main.py."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,8 @@ from sqladmin import Admin, BaseView, ModelView, action, expose
 from sqladmin.flash import Flash
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
+from wtforms import StringField
+from wtforms.widgets import TextInput
 
 _TEMPLATES_DIR = str(Path(__file__).parent / "templates")
 
@@ -246,6 +249,46 @@ def _team_logo_thumb(model, _attr) -> Markup:
     return Markup('<img src="{}" height="24" alt="{} logo">').format(src, model.id)
 
 
+_SIX_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+class ColorPickerWidget(TextInput):
+    """Render a String color column as a native color swatch wired to a
+    text input. The text input stays the real form field, so empty values
+    and 8-digit alpha hex (which ``<input type=color>`` can't represent)
+    round-trip untouched; the swatch is a convenience that writes 6-digit
+    hex into the text box on pick and mirrors the text value back when it
+    parses as ``#RRGGBB``. Inline handlers are safe here — the admin CSP
+    intentionally leaves ``script-src`` unset for SQLAdmin (see main.py)."""
+
+    def __call__(self, field, **kwargs):
+        value = field.data or ""
+        # Native pickers reject anything but #RRGGBB; fall back to black so
+        # the swatch still renders for empty/alpha values without clobbering
+        # the text field that actually gets submitted.
+        swatch = value if _SIX_HEX.match(value) else "#000000"
+        swatch_id = f"{field.id}__swatch"
+        kwargs.setdefault(
+            "oninput",
+            f"document.getElementById('{swatch_id}').value="
+            r"/^#[0-9a-fA-F]{6}$/.test(this.value)?this.value:'#000000';",
+        )
+        text_html = super().__call__(field, **kwargs)
+        picker_html = Markup(
+            '<input type="color" id="{}" value="{}" '
+            'style="vertical-align:middle;margin-right:.4rem;width:2.4rem;'
+            'height:2rem;padding:0;border:1px solid #ccc;border-radius:4px" '
+            "oninput=\"document.getElementById('{}').value=this.value\">"
+        ).format(swatch_id, swatch, field.id)
+        return Markup(
+            '<span style="display:inline-flex;align-items:center">{}{}</span>'
+        ).format(picker_html, text_html)
+
+
+class ColorField(StringField):
+    widget = ColorPickerWidget()
+
+
 class TeamView(ModelView, model=Team):
     column_list = [
         "logo",
@@ -288,6 +331,15 @@ class TeamView(ModelView, model=Team):
         # thumbnail instead (column_formatters_detail above).
         "logo_url",
     ]
+    # Render the hex color columns as a swatch picker + text input rather
+    # than a bare text box. ColorField keeps the text as the submitted
+    # value so empty and 8-digit alpha hex still round-trip.
+    form_overrides = {
+        "primary_color": ColorField,
+        "secondary_color": ColorField,
+        "primary_contrast": ColorField,
+        "secondary_contrast": ColorField,
+    }
 
 
 def _provider_badge(_model, attr) -> Markup:
