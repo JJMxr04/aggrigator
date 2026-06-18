@@ -24,6 +24,7 @@ from aggrigator.api import internal as internal_router
 from aggrigator.api import logos as logos_router
 from aggrigator.api import references as references_router
 from aggrigator.api import selections as selections_router
+from aggrigator.api import teams as teams_router
 from aggrigator.config import get_settings
 from aggrigator.db import engine
 from aggrigator.observability.logging import configure_logging
@@ -396,6 +397,7 @@ def create_app() -> FastAPI:
     app.include_router(logos_router.router)
     app.include_router(references_router.router)
     app.include_router(events_router.router)
+    app.include_router(teams_router.router)
     app.include_router(selections_router.router)
     app.include_router(analytics_router.router)
     app.include_router(bets_router.router)

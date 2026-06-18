@@ -98,6 +98,24 @@ async def _wipe(session) -> None:
     await session.commit()
 
 
+@pytest.fixture(autouse=True)
+def _keyless_reads_baseline():
+    """``require_key_for_reads`` now defaults to True (enforced in prod).
+    The bulk of the integration suite exercises endpoint LOGIC via keyless
+    reads, so pin the cached settings singleton back to False for tests —
+    reproducing the transitional behavior these tests were written against.
+    Mutates the same singleton other fixtures monkeypatch, then restores it.
+    ``test_keyed_reads.py`` still verifies enforcement explicitly via its own
+    ``_flag_on`` dependency override (which wins over this baseline)."""
+    from aggrigator.config import get_settings
+
+    s = get_settings()
+    original = s.require_key_for_reads
+    s.require_key_for_reads = False
+    yield
+    s.require_key_for_reads = original
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _reset_rate_limits():
     """The ASGI client presents one IP for the whole suite — without a

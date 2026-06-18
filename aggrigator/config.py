@@ -128,16 +128,18 @@ class Settings(BaseSettings):
         default="", alias="AGG_SERVICE_TENANT_EXTERNAL_ID",
     )
 
-    # P0-5 transitional flag (plan §6.2): when False (default), keyless
-    # requests to the read surface (references/events/selections) are
-    # allowed but WARN-logged — visibility into what would break. Flip to
-    # True in prod ONLY after MDProject attaches the service key and the
-    # warnings hit zero; later the flag dies and keyed reads become
-    # unconditional. A key that IS present gets validated either way —
-    # fail closed during the transition, or flipping the flag would break
-    # a silently-misconfigured client.
+    # Keyed reads are enforced by default (hardcoded baseline): keyless
+    # requests to the read surface (references/events/teams/selections) get
+    # 401. The env alias remains ONLY as an emergency-rollback escape hatch
+    # (set AGG_REQUIRE_KEY_FOR_READS=false to temporarily re-open reads if a
+    # client is misconfigured in prod) — not as a normal toggle. A key that
+    # IS present is always validated (401 on bad/revoked) either way.
+    # DEPLOY ORDER: every reader (MDProject's service key, provisioned +
+    # matching in the aggregator DB) must be sending the key BEFORE this
+    # service is deployed, or its keyless reads break. Logo + infra probes
+    # are exempt (separate keyless routers).
     require_key_for_reads: bool = Field(
-        default=False, alias="AGG_REQUIRE_KEY_FOR_READS",
+        default=True, alias="AGG_REQUIRE_KEY_FOR_READS",
     )
 
     # Bearer token for /metrics (plan §6.2 P0-4). Set in Coolify + the
