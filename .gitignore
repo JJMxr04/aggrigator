@@ -40,3 +40,6 @@ Thumbs.db
 # Editor
 *.swp
 *.swo
+
+# AI-generated plans/specs live in /Users/joem/dev/PBL/plans/aggrigator, not in-repo
+docs/superpowers/

@@ -91,7 +91,7 @@ def quota_status(
     ]
     if exhausted:
         lines.append(
-            f"⚠ over {threshold_pct}% per-hour threshold — ingest will skip"
+            f"over {threshold_pct}% per-hour threshold — ingest will skip"
         )
         pace_reason = (
             f"per-hour at {usage_pct:.1f}% ≥ {threshold_pct}% threshold"
