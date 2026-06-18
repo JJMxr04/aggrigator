@@ -1,11 +1,23 @@
-"""GET /v1/teams/{id}/logo: hit, 304, 404."""
+"""GET /v1/teams/{id}/logo: hit, 304, 404, and the keyed-reads gate."""
 
 from __future__ import annotations
 
 import httpx
 import pytest
 
+from aggrigator.config import get_settings
+from aggrigator.main import app
 from aggrigator.models import League, Sport, Team, TeamLogo
+from tests.integration.factories import make_tenant_user
+
+
+@pytest.fixture
+def _flag_on():
+    base = get_settings()
+    patched = base.model_copy(update={"require_key_for_reads": True})
+    app.dependency_overrides[get_settings] = lambda: patched
+    yield
+    app.dependency_overrides.pop(get_settings, None)
 
 
 async def _seed_team(session, *, with_logo: bool):
@@ -80,3 +92,25 @@ async def test_logo_503_on_oddsapi_failure_not_500_or_missing(
     assert resp.headers["Retry-After"] == "12"
     # The lazy-fetch failure must not have written a negative-cache row.
     assert await session.get(TeamLogo, "usa-nba:38") is None
+
+
+@pytest.mark.asyncio
+async def test_logo_keyless_401_when_flag_on(client, session, _flag_on):
+    """Once AGG_REQUIRE_KEY_FOR_READS is enforced, the logo route is no
+    longer a public hole — a keyless request is rejected like every other
+    read endpoint."""
+    await _seed_team(session, with_logo=True)
+    resp = await client.get("/v1/teams/usa-nba:38/logo")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_logo_valid_key_passes_when_flag_on(client, session, _flag_on):
+    await _seed_team(session, with_logo=True)
+    _, raw = await make_tenant_user(session, email="logoreader@example.com")
+    resp = await client.get(
+        "/v1/teams/usa-nba:38/logo",
+        headers={"X-Aggrigator-Tenant-Key": raw},
+    )
+    assert resp.status_code == 200
+    assert resp.content == b"PNGDATA"

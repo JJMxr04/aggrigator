@@ -1,6 +1,12 @@
-"""Keyless team-logo bytes. Served from core_team_logo; on a miss the
-endpoint lazily fetches from odds-api so downstream consumers (MDProject)
-never race the backfill cron. The apiKey stays inside this process.
+"""Team-logo bytes. Served from core_team_logo; on a miss the endpoint
+lazily fetches from odds-api so downstream consumers (MDProject) never race
+the backfill cron. The odds-api key stays inside this process.
+
+Key-gated like the rest of the read surface (``keyed_reads_gate``): MDProject
+proxies these bytes server-side with its tenant key, so the browser never
+hits this route directly. Enforcement follows ``AGG_REQUIRE_KEY_FOR_READS``
+— deploy MDProject's logo proxy BEFORE this gate reaches an environment where
+the flag is already on, or in-flight browsers loading logos here will 401.
 """
 
 from __future__ import annotations
@@ -9,15 +15,17 @@ import logging
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Header, Response
+from fastapi import APIRouter, Depends, Header, Response
 
 from aggrigator.config import get_settings
-from aggrigator.deps import SessionDep
+from aggrigator.deps import SessionDep, keyed_reads_gate
 from aggrigator.ingest.logos import ensure_team_logo
 from aggrigator.ingest.odds_api_http import OddsApiHttpClient
 from aggrigator.models import Team, TeamLogo
 
-router = APIRouter(prefix="/v1", tags=["logos"])
+router = APIRouter(
+    prefix="/v1", tags=["logos"], dependencies=[Depends(keyed_reads_gate)],
+)
 
 logger = logging.getLogger(__name__)
 
