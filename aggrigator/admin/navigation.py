@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, literal, or_, select
 
 from aggrigator.db import async_session_factory
 
@@ -52,8 +52,13 @@ class NavigableModelView:
 
         pk = getattr(self.model, pk_cols[0].name)
         nav, desc = self._nav_order()
-        cur_nav = getattr(obj, nav.key)
-        cur_pk = getattr(obj, pk_cols[0].name)
+        # Wrap the current row's values in typed literals. SQLAlchemy forbids
+        # ``>``/``<`` against a raw Python bool/None (it's usually a mistake),
+        # which would crash navigation on views whose first sort key is a
+        # Boolean column (e.g. TeamView's match_confirmed) or holds NULL. A
+        # typed bindparam sidesteps that guard and keeps NULLs as typed NULLs.
+        cur_nav = literal(getattr(obj, nav.key), nav.type)
+        cur_pk = literal(getattr(obj, pk_cols[0].name), pk.type)
 
         # List order is (nav <dir>, pk ASC). "next" = the row immediately
         # after the current one in that order; "prev" = immediately before.
