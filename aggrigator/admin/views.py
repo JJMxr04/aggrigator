@@ -9,6 +9,13 @@ from typing import Any
 
 from markupsafe import Markup
 from sqladmin import Admin, BaseView, ModelView, action, expose
+from sqladmin.filters import (
+    AllUniqueStringValuesFilter,
+    BooleanFilter,
+    ForeignKeyFilter,
+    OperationColumnFilter,
+    StaticValuesFilter,
+)
 from sqladmin.flash import Flash
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
@@ -37,6 +44,8 @@ class _RelativeRedirectAdmin(Admin):
         )
         return url.path if hasattr(url, "path") else str(url)
 
+from aggrigator.admin.navigation import NavigableModelView
+from aggrigator.admin.summaries import EventsByLeagueSummary, TeamsByLeagueSummary
 from aggrigator.config import get_settings
 from aggrigator.db import async_session_factory, engine
 from aggrigator.schemas.team import team_logo_url
@@ -113,15 +122,37 @@ from aggrigator.models import (
     User,
     WebhookDelivery,
 )
+from aggrigator.models.auth import UserRole
+from aggrigator.models.cron_run import CronRunStatus
+from aggrigator.models.selection import (
+    SelectionType,
+    SettlementSource,
+    SettlementStatus,
+)
+from aggrigator.models.tenant import TenantStatus, TenantTier
+
+
+def _enum_choices(enum_cls) -> list[tuple[str, str]]:
+    """Build SQLAdmin StaticValuesFilter ``(value, label)`` pairs from a
+    StrEnum. Value is what's stored in the column; label is the member value."""
+    return [(member.value, member.value) for member in enum_cls]
 
 
 # ---- view classes ----------------------------------------------------------
 
 
-class UserView(ModelView, model=User):
+class UserView(NavigableModelView, ModelView, model=User):
     column_list = ["id", "email", "role", "is_active", "created"]
     column_searchable_list = ["email"]
-    column_sortable_list = ["created", "email"]
+    column_sortable_list = ["created", "email", "role"]
+    column_default_sort = [("created", True)]
+    column_filters = [
+        StaticValuesFilter(
+            User.role,
+            values=[(UserRole.ADMIN, UserRole.ADMIN), (UserRole.USER, UserRole.USER)],
+        ),
+        BooleanFilter(User.is_active),
+    ]
     form_excluded_columns = ["password_hash"]
     icon = "fa-solid fa-user"
 
@@ -140,6 +171,24 @@ class TenantUserView(ModelView, model=TenantUser):
     column_searchable_list = ["email", "external_user_id"]
     column_sortable_list = ["created", "email", "tier", "status"]
     column_default_sort = [("created", True)]
+    column_filters = [
+        StaticValuesFilter(
+            TenantUser.tier,
+            values=[(TenantTier.FREE, TenantTier.FREE), (TenantTier.PRO, TenantTier.PRO)],
+        ),
+        StaticValuesFilter(
+            TenantUser.status,
+            values=[
+                (TenantStatus.ACTIVE, TenantStatus.ACTIVE),
+                (TenantStatus.TRIALING, TenantStatus.TRIALING),
+                (TenantStatus.PAST_DUE, TenantStatus.PAST_DUE),
+                (TenantStatus.UNPAID, TenantStatus.UNPAID),
+                (TenantStatus.CANCELED, TenantStatus.CANCELED),
+                (TenantStatus.INCOMPLETE, TenantStatus.INCOMPLETE),
+                (TenantStatus.INCOMPLETE_EXPIRED, TenantStatus.INCOMPLETE_EXPIRED),
+            ],
+        ),
+    ]
     column_formatters = {
         "email": lambda m, a: _reveal(_mask_email(m.email), m.email),
         "external_user_id": lambda m, a: _reveal(
@@ -164,6 +213,7 @@ class TenantApiKeyView(ModelView, model=TenantApiKey):
     column_searchable_list = ["prefix", "tenant_user_id"]
     column_sortable_list = ["created", "last_used_at", "revoked_at"]
     column_default_sort = [("created", True)]
+    column_filters = [OperationColumnFilter(TenantApiKey.last_used_at)]
     column_formatters = {
         "tenant_user_id": lambda m, a: _reveal(
             _mask_uuid(m.tenant_user_id), str(m.tenant_user_id)
@@ -184,6 +234,13 @@ class TenantApiKeyView(ModelView, model=TenantApiKey):
 
 class RefreshTokenView(ModelView, model=RefreshToken):
     column_list = ["id", "user_id", "expires_at", "revoked_at", "created_at"]
+    column_searchable_list = ["user_id"]
+    column_sortable_list = ["expires_at", "created_at", "revoked_at"]
+    column_default_sort = [("created_at", True)]
+    column_filters = [
+        OperationColumnFilter(RefreshToken.expires_at),
+        OperationColumnFilter(RefreshToken.revoked_at),
+    ]
     can_create = False
     can_edit = False
 
@@ -194,6 +251,13 @@ class WebhookDeliveryView(ModelView, model=WebhookDelivery):
         "attempts", "last_status", "delivered_at", "next_retry_at", "created_at",
     ]
     column_searchable_list = ["event_id", "event_name"]
+    column_sortable_list = ["created_at", "attempts", "last_status", "delivered_at"]
+    column_default_sort = [("created_at", True)]
+    column_filters = [
+        AllUniqueStringValuesFilter(WebhookDelivery.last_status),
+        OperationColumnFilter(WebhookDelivery.attempts),
+        OperationColumnFilter(WebhookDelivery.created_at),
+    ]
     can_create = False
     can_edit = False
 
@@ -203,32 +267,49 @@ class AuditLogView(ModelView, model=AuditLog):
         "id", "event_name", "actor_user_id", "target_type", "target_id",
         "ip", "created_at",
     ]
-    column_searchable_list = ["event_name", "target_id"]
+    column_searchable_list = ["event_name", "target_id", "actor_user_id"]
     column_sortable_list = ["created_at"]
+    column_default_sort = [("created_at", True)]
+    column_filters = [
+        AllUniqueStringValuesFilter(AuditLog.event_name),
+        AllUniqueStringValuesFilter(AuditLog.target_type),
+        OperationColumnFilter(AuditLog.created_at),
+    ]
     can_create = False
     can_edit = False
     can_delete = False  # audit log is append-only
 
 
-class SportView(ModelView, model=Sport):
+class SportView(NavigableModelView, ModelView, model=Sport):
     column_list = [
         "id", "name", "active",
         "odds_api_io_key", "thesportsdb_id",
     ]
+    column_searchable_list = ["name", "id"]
+    column_sortable_list = ["name", "active", "id"]
+    column_default_sort = [("name", False)]
+    column_filters = [BooleanFilter(Sport.active)]
     # Provider keys are owned by the registry loader — edit the JSON
     # under aggrigator/data/sports/ instead, then re-run load_registry.
     form_excluded_columns = ["odds_api_io_key", "thesportsdb_id"]
 
 
-class LeagueView(ModelView, model=League):
+class LeagueView(NavigableModelView, ModelView, model=League):
     column_list = [
         "id", "sport_id", "name", "active",
         "odds_api_io_key", "thesportsdb_id",
         "can_pull_historical_scores", "last_refreshed_at",
     ]
+    column_searchable_list = ["name", "id"]
     column_sortable_list = [
         "id", "sport_id", "active", "can_pull_historical_scores",
         "last_refreshed_at",
+    ]
+    column_default_sort = [("sport_id", False), ("name", False)]
+    column_filters = [
+        ForeignKeyFilter(League.sport_id, Sport.name, foreign_model=Sport),
+        BooleanFilter(League.active),
+        BooleanFilter(League.can_pull_historical_scores),
     ]
     # Registry-owned + derived columns — read-only via the admin form.
     # can_pull_historical_scores is recomputed by load_registry, never
@@ -289,7 +370,7 @@ class ColorField(StringField):
     widget = ColorPickerWidget()
 
 
-class TeamView(ModelView, model=Team):
+class TeamView(NavigableModelView, ModelView, model=Team):
     column_list = [
         "logo",
         "league_id", "canonical_name",
@@ -317,6 +398,11 @@ class TeamView(ModelView, model=Team):
     # Float unconfirmed rows to the top so the operator's review queue is
     # the default view.
     column_default_sort = [("match_confirmed", False), ("league_id", False)]
+    column_filters = [
+        ForeignKeyFilter(Team.league_id, League.name, foreign_model=League),
+        BooleanFilter(Team.match_confirmed),
+        AllUniqueStringValuesFilter(Team.match_source),
+    ]
     # canonical_name and the two provider keys come from the JSON
     # registry — editing them here would silently drift from disk. Leave
     # match_confirmed editable so the operator can toggle it from the
@@ -377,7 +463,7 @@ def _market_event_provider_badge(model, _attr) -> Markup:
     return _provider_badge(fake, "provider")
 
 
-class EventView(ModelView, model=Event):
+class EventView(NavigableModelView, ModelView, model=Event):
     column_list = [
         "provider", "id", "linked_event_id", "league_id",
         "status_type", "start_time",
@@ -388,6 +474,15 @@ class EventView(ModelView, model=Event):
     # Group by provider then sort by start_time so live + historical rows
     # for the same date sit visually adjacent.
     column_default_sort = [("provider", False), ("start_time", True)]
+    column_filters = [
+        ForeignKeyFilter(Event.league_id, League.name, foreign_model=League),
+        AllUniqueStringValuesFilter(Event.status_type),
+        StaticValuesFilter(
+            Event.provider,
+            values=[("odds_api_io", "odds-api.io"), ("thesportsdb", "TheSportsDB")],
+        ),
+        OperationColumnFilter(Event.start_time),
+    ]
     column_formatters = {
         "provider": _provider_badge,
     }
@@ -465,13 +560,24 @@ class EventView(ModelView, model=Event):
         return RedirectResponse(referer, status_code=302)
 
 
-class BookmakerView(ModelView, model=Bookmaker):
+class BookmakerView(NavigableModelView, ModelView, model=Bookmaker):
     column_list = ["id", "name", "active"]
+    column_searchable_list = ["name"]
+    column_sortable_list = ["name", "active"]
+    column_default_sort = [("name", False)]
+    column_filters = [BooleanFilter(Bookmaker.active)]
 
 
 class BookmakerSelectionView(ModelView, model=BookmakerSelection):
     column_list = [
         "id", "selection_id", "bookmaker_id", "decimal_odds", "available",
+    ]
+    column_searchable_list = ["selection_id", "bookmaker_id"]
+    column_sortable_list = ["decimal_odds", "available"]
+    column_default_sort = [("selection_id", False)]
+    column_filters = [
+        ForeignKeyFilter(BookmakerSelection.bookmaker_id, Bookmaker.name, foreign_model=Bookmaker),
+        BooleanFilter(BookmakerSelection.available),
     ]
     can_create = False
     can_edit = False
@@ -491,18 +597,39 @@ class MarketView(ModelView, model=Market):
         "event_provider": _market_event_provider_badge,
     }
     column_formatters_detail = column_formatters
+    column_sortable_list = ["type", "scope", "is_live", "suspended", "last_updated"]
+    column_default_sort = [("event_id", False), ("type", False)]
+    column_filters = [
+        AllUniqueStringValuesFilter(Market.type),
+        AllUniqueStringValuesFilter(Market.scope),
+        AllUniqueStringValuesFilter(Market.side),
+        AllUniqueStringValuesFilter(Market.category),
+        BooleanFilter(Market.is_live),
+        BooleanFilter(Market.suspended),
+    ]
 
 
-class SelectionView(ModelView, model=Selection):
+class SelectionView(NavigableModelView, ModelView, model=Selection):
     column_list = [
         "id", "market_id", "type", "decimal_odds",
         "settlement_status", "settlement_source", "settled_at",
     ]
     column_searchable_list = ["id", "market_id"]
+    column_sortable_list = ["settlement_status", "settled_at", "decimal_odds", "type"]
+    column_default_sort = [("market_id", False)]
+    column_filters = [
+        StaticValuesFilter(Selection.settlement_status, values=_enum_choices(SettlementStatus)),
+        StaticValuesFilter(Selection.settlement_source, values=_enum_choices(SettlementSource)),
+        StaticValuesFilter(Selection.type, values=_enum_choices(SelectionType)),
+    ]
 
 
 class OddsQuoteView(ModelView, model=OddsQuote):
     column_list = ["id", "selection_id", "decimal_odds", "captured_at"]
+    column_searchable_list = ["selection_id"]
+    column_sortable_list = ["captured_at", "decimal_odds"]
+    column_default_sort = [("selection_id", False), ("captured_at", True)]
+    column_filters = [OperationColumnFilter(OddsQuote.captured_at)]
     can_create = False
     can_edit = False
     can_delete = False
@@ -516,6 +643,20 @@ class CronRunView(ModelView, model=CronRun):
     ]
     column_searchable_list = ["cron_name", "job_id"]
     column_sortable_list = ["started_at", "cron_name", "status"]
+    column_default_sort = [("started_at", True)]
+    column_filters = [
+        AllUniqueStringValuesFilter(CronRun.cron_name),
+        StaticValuesFilter(
+            CronRun.status,
+            values=[
+                (CronRunStatus.RUNNING, "Running"),
+                (CronRunStatus.SUCCESS, "Success"),
+                (CronRunStatus.FAILED, "Failed"),
+                (CronRunStatus.CANCELLED, "Cancelled"),
+            ],
+        ),
+        AllUniqueStringValuesFilter(CronRun.trigger_source),
+    ]
     can_create = False
     can_edit = False
     can_delete = False
@@ -612,6 +753,8 @@ def mount_admin(app, *, base_url: str = "/admin") -> Admin:
     admin.add_base_view(HistoricalIngestLink)
     admin.add_base_view(LogoBackfillLink)
     admin.add_base_view(DataResetLink)
+    admin.add_base_view(EventsByLeagueSummary)
+    admin.add_base_view(TeamsByLeagueSummary)
     for view in [
         TenantUserView, TenantApiKeyView,
         UserView, RefreshTokenView,

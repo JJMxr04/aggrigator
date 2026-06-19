@@ -1,0 +1,28 @@
+{% extends "sqladmin/layout.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><h3 class="card-title">Events by league</h3></div>
+  <div class="table-responsive">
+    <table class="table table-vcenter card-table">
+      <thead>
+        <tr>
+          <th>League</th>
+          {% for s in statuses %}<th class="text-end">{{ s }}</th>{% endfor %}
+          <th class="text-end">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.league }}</td>
+          {% for s in statuses %}<td class="text-end">{{ r.by_status.get(s, 0) }}</td>{% endfor %}
+          <td class="text-end"><strong>{{ r.total }}</strong></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="{{ statuses | length + 2 }}">No events.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

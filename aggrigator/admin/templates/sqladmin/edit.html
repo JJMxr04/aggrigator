@@ -20,6 +20,23 @@
   <fieldset class="form-fieldset">
     {{ render_form_fields(form, form_opts=form_opts, ajax_lookup_url=url_for('admin:ajax_lookup', identity=model_view.identity)) }}
   </fieldset>
+  {% if model_view.neighbor_pks is defined %}
+  {% set neighbors = model_view.neighbor_pks(request, obj) %}
+  <div class="row mb-2">
+    <div class="col">
+      {% if neighbors.prev %}
+      <a href="{{ url_for('admin:edit', identity=model_view.identity, pk=neighbors.prev) }}" class="btn btn-sm">‹ Prev</a>
+      {% else %}
+      <span class="btn btn-sm disabled" aria-disabled="true">‹ Prev</span>
+      {% endif %}
+      {% if neighbors.next %}
+      <a href="{{ url_for('admin:edit', identity=model_view.identity, pk=neighbors.next) }}" class="btn btn-sm">Next ›</a>
+      {% else %}
+      <span class="btn btn-sm disabled" aria-disabled="true">Next ›</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
   <div class="row">
     <div class="col-md-2">
       <a href="{{ url_for('admin:list', identity=model_view.identity) }}" class="btn">
