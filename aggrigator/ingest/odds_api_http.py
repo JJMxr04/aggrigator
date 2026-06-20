@@ -37,6 +37,7 @@ from aggrigator.ingest.odds_api_errors import (
     RateLimitExceededError,
     ValidationError,
 )
+from aggrigator.ingest.odds_api_catalog import LEAGUE_TO_SPORT
 from aggrigator.ingest.odds_api_translate import (
     INTERNAL_TO_ODDSAPI_LEAGUE,
     INTERNAL_TO_ODDSAPI_SPORT,
@@ -449,31 +450,8 @@ class OddsApiHttpClient:
     # ---- internals -----------------------------------------------------
 
     def _league_to_sport(self, league_id: str) -> str | None:
-        """Reverse lookup: league_id → sport_id. Conservative —
-        only handles the leagues we map in odds_api_translate.py."""
-        # Lazy: walk INTERNAL_TO_ODDSAPI_SPORT to find the right sport. Since the
-        # sport_id is encoded in normalize's parse and Event.sport_id is
-        # written from translator output, we can use a tiny per-league map.
-        # Defaults match the slug map in odds_api_translate.py.
-        per_league = {
-            "MLB": "BASEBALL",
-            "MLS": "SOCCER",
-            "NBA": "BASKETBALL",
-            "NFL": "FOOTBALL",
-            "NHL": "HOCKEY",
-            "UEFA_CHAMPIONS_LEAGUE": "SOCCER",
-            "EPL": "SOCCER",
-            "WNBA": "BASKETBALL",
-            "CEBL": "BASKETBALL",
-            "BSN": "BASKETBALL",
-            "USL_CHAMPIONSHIP": "SOCCER",
-            "BRASILEIRAO_SERIE_B": "SOCCER",
-            "GAA_FOOTBALL": "GAELIC_FOOTBALL",
-            "AIHL": "HOCKEY",
-            "VNL": "VOLLEYBALL",
-            "VNL_WOMEN": "VOLLEYBALL",
-        }
-        return per_league.get(league_id)
+        """Reverse lookup: internal league_id -> internal sport_id (catalog-driven)."""
+        return LEAGUE_TO_SPORT.get(league_id)
 
     def _get_single_event(self, event_id: str) -> dict | None:
         try:

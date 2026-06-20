@@ -241,3 +241,23 @@ def test_unknown_league_yields_no_events_and_no_http_calls() -> None:
     out = list(client.get_events(league_id="UNKNOWN_LEAGUE"))
     assert out == []
     assert calls == []  # no upstream calls when we can't map the slug
+
+
+# ---- catalog-driven _league_to_sport ----------------------------------------
+
+
+def test_league_to_sport_reads_catalog(monkeypatch) -> None:
+    """_league_to_sport must read LEAGUE_TO_SPORT from the catalog module so
+    that entries added by the generator (e.g. JAPAN_NPB) are visible without
+    a code change."""
+    from aggrigator.ingest import odds_api_catalog as cat
+
+    monkeypatch.setitem(cat.LEAGUE_TO_SPORT, "JAPAN_NPB", "BASEBALL")
+    client = OddsApiHttpClient(
+        base_url="https://api.odds-api.io/v3",
+        api_key="x",
+        max_retries=0,
+    )
+    assert client._league_to_sport("JAPAN_NPB") == "BASEBALL"
+    assert client._league_to_sport("MLB") == "BASEBALL"
+    assert client._league_to_sport("nope") is None

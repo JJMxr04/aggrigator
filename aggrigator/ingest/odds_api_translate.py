@@ -36,101 +36,49 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from aggrigator.ingest import odds_api_catalog
+from aggrigator.ingest.catalog_build import PHASE_REGEX_FRAGMENT, build_league_pattern
 from aggrigator.ingest.converters import decimal_to_american
 from aggrigator.ingest.odds_api_errors import SchemaError
 
 logger = logging.getLogger(__name__)
 
+# Back-compat alias: some modules/tests reference ``_PHASE`` directly.
+_PHASE = PHASE_REGEX_FRAGMENT
 
-# ---- slug maps (odds-api.io ↔ internal) -----------------------------------------
-# Hardcoded defaults — Phase 0 probe (scripts/probe_oddsapi.py) confirms or
-# corrects these. Unknown leagues are logged + skipped, so a missing entry is
-# observable but not crashing. Extend as new leagues come online.
-
-INTERNAL_TO_ODDSAPI_SPORT: dict[str, str] = {
-    "BASEBALL": "baseball",
-    "BASKETBALL": "basketball",
-    "FOOTBALL": "american-football",
-    "GAELIC_FOOTBALL": "gaelic-football",
-    "HOCKEY": "ice-hockey",
-    "SOCCER": "football",
-    "TENNIS": "tennis",
-    "VOLLEYBALL": "volleyball",
-}
-ODDSAPI_TO_INTERNAL_SPORT: dict[str, str] = {v: k for k, v in INTERNAL_TO_ODDSAPI_SPORT.items()}
-
-# League slug map. Conservative seed — verify against /leagues?sport= during
-# Phase 0 and update entries that don't match.
-INTERNAL_TO_ODDSAPI_LEAGUE: dict[str, str] = {
-    "MLB": "usa-mlb",
-    "MLS": "usa-mls",
-    "NBA": "usa-nba",
-    "NFL": "usa-nfl",
-    "NHL": "usa-nhl",
-    "UEFA_CHAMPIONS_LEAGUE": "europe-uefa-champions-league",
-    "EPL": "england-premier-league",
-    # Added 2026-06-07 after full-roster coverage check — every team in
-    # each league below has pending games on the provider (verified by
-    # sports-scores-sim/scripts/check-league-team-coverage.py against
-    # official 2026 season rosters). Don't add a league here without
-    # running that check: a league deep into playoffs only surfaces a
-    # handful of teams and lazy team-upsert would seed it incomplete.
-    "WNBA": "usa-wnba",
-    # BSN (Puerto Rico) added 2026-06-09 — replaces CEBL, which neither
-    # DraftKings nor bet365 price. Full-roster coverage verified 12/12
-    # against the official 2026 season (check-league-team-coverage.py).
-    "BSN": "puerto-rico-bsn",
-    "USL_CHAMPIONSHIP": "usa-usl-championship",
-    "BRASILEIRAO_SERIE_B": "brazil-brasileiro-serie-b",
-    "GAA_FOOTBALL": "ireland-gaa-all-ireland-football-championship",
-    # Corrected 2026-06-09: odds-api lists this as ``australia-aihl`` (verified
-    # against /leagues?sport=ice-hockey), not the long descriptive slug.
-    "AIHL": "australia-aihl",
-    "VNL": "international-nations-league",
-    "VNL_WOMEN": "international-nations-league-women",
-}
-ODDSAPI_TO_INTERNAL_LEAGUE: dict[str, str] = {v: k for k, v in INTERNAL_TO_ODDSAPI_LEAGUE.items()}
+# These dicts are derived from ``odds_api_catalog`` at import time via
+# ``rebuild_maps()``. Call ``rebuild_maps()`` again after mutating the catalog
+# (e.g. in tests) to pick up changes. Do NOT rebind these names — consumers
+# hold references to the dict objects.
+INTERNAL_TO_ODDSAPI_SPORT: dict[str, str] = {}
+ODDSAPI_TO_INTERNAL_SPORT: dict[str, str] = {}
+INTERNAL_TO_ODDSAPI_LEAGUE: dict[str, str] = {}
+ODDSAPI_TO_INTERNAL_LEAGUE: dict[str, str] = {}
+INTERNAL_LEAGUE_PATTERNS: dict[str, re.Pattern[str]] = {}
 
 
-# Live odds-api slugs carry the current SEASON PHASE: ``usa-nba`` in the
-# regular season becomes ``usa-nba-playoffs`` in the postseason, ``usa-nfl``
-# becomes ``usa-nfl-preseason``, etc. The /leagues and /events endpoints ONLY
-# return the in-season slug, and the payload has NO stable league id (just
-# ``name``/``slug``/``eventsCount``). So exact-slug matching silently drops a
-# league the moment its phase changes — which is why a static dict only ever
-# caught the handful of leagues whose phase happened to match.
-#
-# We match by ANCHORED pattern instead. ``_PHASE`` is an optional suffix
-# alternation of the phases we have observed; the ``^...$`` anchors keep
-# ``usa-mls`` from swallowing ``usa-mls-next-pro`` and ``serie-b`` from
-# matching ``serie-d``. A league entering a phase whose suffix isn't listed
-# here still drops (and is logged by the caller) until the suffix is added —
-# so EXTEND THE ALTERNATION when a new phase shows up, don't widen the prefix.
-_PHASE = (
-    r"(?:-(?:playoffs|postseason|preseason|finals|knockout-stage|group-stage|"
-    r"qualification|championship-round|relegation-round|main-round))?"
-)
+def rebuild_maps() -> None:
+    """(Re)derive the module-level maps from ``odds_api_catalog``.
 
-INTERNAL_LEAGUE_PATTERNS: dict[str, re.Pattern[str]] = {
-    "MLB": re.compile(rf"^usa-mlb{_PHASE}$"),
-    "MLS": re.compile(rf"^usa-mls{_PHASE}$"),
-    "NBA": re.compile(rf"^usa-nba{_PHASE}$"),
-    "NFL": re.compile(rf"^usa-nfl{_PHASE}$"),
-    "NHL": re.compile(rf"^usa-nhl{_PHASE}$"),
-    "WNBA": re.compile(rf"^usa-wnba{_PHASE}$"),
-    "BSN": re.compile(rf"^puerto-rico-bsn{_PHASE}$"),
-    "USL_CHAMPIONSHIP": re.compile(rf"^usa-usl-championship{_PHASE}$"),
-    "BRASILEIRAO_SERIE_B": re.compile(rf"^brazil-brasileiro-serie-b{_PHASE}$"),
-    "EPL": re.compile(rf"^england-premier-league{_PHASE}$"),
-    "UEFA_CHAMPIONS_LEAGUE": re.compile(rf"^europe-uefa-champions-league{_PHASE}$"),
-    # Unverified: odds-api currently returns 0 leagues for gaelic-football, so
-    # this pattern has never matched live. Best-guess slug retained.
-    "GAA_FOOTBALL": re.compile(rf"^ireland-gaa-all-ireland-football-championship{_PHASE}$"),
-    "AIHL": re.compile(rf"^australia-aihl{_PHASE}$"),
-    # Exact (no phase suffix) so VNL never swallows the ``-women`` variant.
-    "VNL": re.compile(r"^international-nations-league$"),
-    "VNL_WOMEN": re.compile(r"^international-nations-league-women$"),
-}
+    Clears and refills each dict in place so that existing imports — which
+    hold references to the dict objects — see the updated contents.
+    """
+    INTERNAL_TO_ODDSAPI_SPORT.clear()
+    INTERNAL_TO_ODDSAPI_SPORT.update(odds_api_catalog.SPORT_SLUGS)
+    ODDSAPI_TO_INTERNAL_SPORT.clear()
+    ODDSAPI_TO_INTERNAL_SPORT.update({v: k for k, v in INTERNAL_TO_ODDSAPI_SPORT.items()})
+
+    INTERNAL_TO_ODDSAPI_LEAGUE.clear()
+    INTERNAL_TO_ODDSAPI_LEAGUE.update(odds_api_catalog.LEAGUE_SLUGS)
+    ODDSAPI_TO_INTERNAL_LEAGUE.clear()
+    ODDSAPI_TO_INTERNAL_LEAGUE.update({v: k for k, v in INTERNAL_TO_ODDSAPI_LEAGUE.items()})
+
+    INTERNAL_LEAGUE_PATTERNS.clear()
+    for internal_id, base_slug in INTERNAL_TO_ODDSAPI_LEAGUE.items():
+        INTERNAL_LEAGUE_PATTERNS[internal_id] = build_league_pattern(base_slug)
+
+
+rebuild_maps()
 
 
 def match_league_slug(slug: str) -> str | None:

@@ -321,8 +321,10 @@ def test_missing_required_field_raises_schema_error() -> None:
 
 
 def test_unknown_sport_slug_drops_event() -> None:
+    # Use a slug that the catalog will never carry (kabaddi is not in
+    # GENERATOR_SPORT_SLUGS) so this test stays meaningful as the catalog grows.
     ev = _mlb_event_pending()
-    ev["sport"] = {"name": "Cricket", "slug": "cricket"}
+    ev["sport"] = {"name": "Kabaddi", "slug": "kabaddi"}
     assert to_internal_event_payload(ev) is None
 
 
@@ -411,3 +413,23 @@ def test_slug_maps_are_bijective() -> None:
         assert ODDSAPI_TO_INTERNAL_SPORT[slug] == internal_id
     for internal_id, slug in INTERNAL_TO_ODDSAPI_LEAGUE.items():
         assert ODDSAPI_TO_INTERNAL_LEAGUE[slug] == internal_id
+
+
+def test_arbitrary_league_in_catalog_resolves(monkeypatch):
+    # Simulate the generator having added a long-tail league.
+    from aggrigator.ingest import odds_api_catalog as cat
+    from aggrigator.ingest import odds_api_translate as tr
+    monkeypatch.setitem(cat.LEAGUE_SLUGS, "ARGENTINA_PRIMERA_B", "argentina-primera-b")
+    tr.rebuild_maps()  # re-derive from catalog
+    try:
+        assert tr.match_league_slug("argentina-primera-b") == "ARGENTINA_PRIMERA_B"
+        assert tr.match_league_slug("argentina-primera-b-playoffs") == "ARGENTINA_PRIMERA_B"
+    finally:
+        tr.rebuild_maps()  # restore maps after monkeypatch undoes the dict mutation
+
+
+def test_legacy_league_still_resolves():
+    from aggrigator.ingest import odds_api_translate as tr
+    assert tr.match_league_slug("usa-mlb") == "MLB"
+    assert tr.match_league_slug("usa-nba-playoffs") == "NBA"
+    assert tr.match_league_slug("not-a-real-slug") is None
