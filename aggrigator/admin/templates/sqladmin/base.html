@@ -1,0 +1,32 @@
+{# Extends the stock sqladmin base purely to inject a CSS override into the
+   document head; everything else (head_css, body, scripts) is inherited.
+
+   Fix: the list view lays the results table and the filter sidebar out as
+   flex siblings —
+
+     <div class="d-flex">
+       <div class="flex-grow-1 me-2"> ...<table class="text-nowrap">... </div>
+       <div class="col-md-3" style="width:300px"> #filter-sidebar </div>
+     </div>
+
+   A flex item defaults to `min-width: auto`, so it refuses to shrink below
+   its content's intrinsic width. The results table is `text-nowrap`, giving
+   it a large min-content width, so the table column blows past the viewport
+   and shoves the fixed 300px sidebar off the right edge — and `.table-
+   responsive`'s overflow can never engage because its parent is already
+   wider than the screen. Setting `min-width: 0` lets the column shrink and
+   hands the horizontal scroll back to `.table-responsive`. #}
+{% extends "sqladmin_original/base.html" %}
+
+{% block head_tail %}
+<style>
+  /* Allow the results-table column to shrink so the filter sidebar stays
+     on-screen and the table scrolls inside its own responsive wrapper. */
+  .d-flex > .flex-grow-1.me-2 {
+    min-width: 0;
+  }
+  .d-flex > .flex-grow-1.me-2 .table-responsive {
+    overflow-x: auto;
+  }
+</style>
+{% endblock %}
