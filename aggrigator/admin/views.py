@@ -261,6 +261,98 @@ class WebhookDeliveryView(ModelView, model=WebhookDelivery):
     can_create = False
     can_edit = False
 
+    @action(
+        name="resend",
+        label="Resend",
+        confirmation_message=(
+            "Force a fresh webhook delivery for the event(s) behind the "
+            "selected delivery row(s)? MDProject will re-apply the current "
+            "event/market/selection state — useful when the original delivery "
+            "never arrived. Duplicate selections of the same event are sent "
+            "once; the selected rows are left unchanged."
+        ),
+    )
+    async def resend(self, request: Request) -> Response:
+        """Resend the selected deliveries by force-enqueuing a fresh delivery
+        for each underlying event, then pushing the delivery worker.
+
+        Resolves the selected delivery ids to their parent events, deduplicates
+        by event (N selected rows of one event resend once), and reuses
+        ``force_enqueue_for_event`` — the same path as the EventView
+        "Re-enqueue webhook" action — so MDProject doesn't 409-dedup the new
+        delivery against the original."""
+        pks_param = request.query_params.get("pks", "") or ""
+        delivery_ids = [p for p in pks_param.split(",") if p]
+
+        enqueued = 0
+        skipped = 0
+        errors: list[str] = []
+        # Dedupe by event across the selection so N deliveries of one event
+        # produce a single fresh delivery, not N.
+        seen_events: set[str] = set()
+
+        if delivery_ids:
+            async with async_session_factory() as session:
+                for delivery_id in delivery_ids:
+                    delivery = await session.get(WebhookDelivery, delivery_id)
+                    if delivery is None:
+                        errors.append(f"{delivery_id}: delivery not found")
+                        continue
+                    if delivery.event_id in seen_events:
+                        continue
+                    seen_events.add(delivery.event_id)
+
+                    event = await session.get(Event, delivery.event_id)
+                    if event is None:
+                        errors.append(
+                            f"{delivery_id}: event {delivery.event_id} not found"
+                        )
+                        continue
+                    try:
+                        fresh = await force_enqueue_for_event(session, event)
+                    except Exception as exc:  # noqa: BLE001 — surface to operator
+                        await session.rollback()
+                        errors.append(
+                            f"{delivery_id}: {type(exc).__name__}: {exc}"
+                        )
+                        continue
+                    if fresh is None:
+                        skipped += 1
+                    else:
+                        enqueued += 1
+                await session.commit()
+
+            if enqueued:
+                # Push the worker so the new row drains immediately rather than
+                # waiting for the next ingest-driven notify.
+                await notify_webhook_worker()
+
+        # ---- flash a summary so the operator sees the outcome ----------
+        if enqueued:
+            Flash.success(
+                request,
+                f"Resent {enqueued} webhook deliver"
+                f"{'y' if enqueued == 1 else 'ies'}.",
+            )
+        if skipped:
+            Flash.warning(
+                request,
+                f"Skipped {skipped} event(s) — either AGG_MDPROJECT_URL is "
+                f"unset, or the event isn't in a terminal state "
+                f"(finished/postponed/canceled). Check worker logs for the "
+                f"per-event reason.",
+            )
+        for err in errors:
+            Flash.error(request, err)
+        if not enqueued and not skipped and not errors:
+            Flash.info(request, "No deliveries selected.")
+
+        # Bounce back to wherever the operator clicked from (list or detail).
+        referer = request.headers.get("referer") or str(
+            request.url_for("admin:list", identity=self.identity)
+        )
+        return RedirectResponse(referer, status_code=302)
+
 
 class AuditLogView(ModelView, model=AuditLog):
     column_list = [
