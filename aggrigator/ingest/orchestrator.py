@@ -21,7 +21,7 @@ from aggrigator.config import get_settings
 from aggrigator.ingest.client import OddsClient
 from aggrigator.ingest.ingester import write_markets
 from aggrigator.ingest.lifecycle import EventState, Transition, decide_transition
-from aggrigator.ingest.normalize import EventSpec, event_spec_from_payload
+from aggrigator.ingest.normalize import event_spec_from_payload
 from aggrigator.ingest.bet_autosettle import autosettle_bets_for_event
 from aggrigator.ingest.odds_api_reconcile import reconcile_disappeared
 from aggrigator.ingest.settlement_computed import settle_event, void_remaining_pending

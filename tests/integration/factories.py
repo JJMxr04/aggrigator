@@ -9,6 +9,10 @@ factories can reference it via FK.
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from aggrigator.models.tenant import TenantUser
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 

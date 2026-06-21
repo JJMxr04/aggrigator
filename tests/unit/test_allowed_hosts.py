@@ -1,4 +1,3 @@
-import os
 from aggrigator.config import Settings
 
 def test_loopback_merged_when_validation_on(monkeypatch):

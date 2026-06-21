@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from aggrigator.ingest.normalize import BookmakerQuoteSpec, MarketSpec, SelectionSpec
+from aggrigator.ingest.normalize import MarketSpec, SelectionSpec
 from aggrigator.models import (
     Bookmaker,
     BookmakerSelection,

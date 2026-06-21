@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from aggrigator.ingest.odds_api_reconcile import reconcile_disappeared
-from aggrigator.models import Event
 from tests.integration.factories import (
     make_event,
     make_league,

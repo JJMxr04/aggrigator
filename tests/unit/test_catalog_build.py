@@ -1,4 +1,3 @@
-import re
 from aggrigator.ingest.catalog_build import (
     strip_phase, derive_canonical_id, build_league_pattern, build_catalog,
 )

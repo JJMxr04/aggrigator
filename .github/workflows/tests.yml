@@ -1,0 +1,71 @@
+# CI: unit + integration tests. Mirrors security.yml conventions
+# (checkout@v5, setup-python@v6, Python 3.12). Runs on every push/PR.
+#
+# - unit: pure-Python, no services. Fixture-backed cases skip because
+#   tests/fixtures/oddsapi/ is not committed; pure-unit cases still run.
+# - integration: spins up an ephemeral Postgres, creates the schema with
+#   `alembic upgrade head`, then runs the suite. The per-test TRUNCATE that
+#   the integration suite performs is safe here only because the DB is
+#   throwaway — AGG_TEST_DATABASE_URL points at the service's own database.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Ruff lint
+        run: ruff check .
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install (with dev extras)
+        run: pip install -e ".[dev]"
+      - name: Unit tests
+        run: pytest tests/unit -vv
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: aggrigator
+          POSTGRES_PASSWORD: aggrigator
+          POSTGRES_DB: aggrigator
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aggrigator"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AGG_DATABASE_URL: postgresql+asyncpg://aggrigator:aggrigator@localhost:5432/aggrigator
+      AGG_DATABASE_URL_SYNC: postgresql+psycopg2://aggrigator:aggrigator@localhost:5432/aggrigator
+      AGG_TEST_DATABASE_URL: postgresql+asyncpg://aggrigator:aggrigator@localhost:5432/aggrigator
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install (with dev extras)
+        run: pip install -e ".[dev]"
+      - name: Create schema
+        run: alembic upgrade head
+      - name: Integration tests
+        run: pytest tests/integration -vv

@@ -23,11 +23,9 @@ authoritative for cross-provider identity.
 from __future__ import annotations
 
 import dataclasses
-import json
 import logging
 import pathlib
 from dataclasses import dataclass, field
-from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -7,7 +7,7 @@ import pytest
 
 from aggrigator.ingest.logos import ensure_team_logo
 from aggrigator.ingest.odds_api_http import OddsApiHttpClient
-from aggrigator.models import League, Sport, Team, TeamLogo
+from aggrigator.models import League, Sport, Team
 
 
 def _client(handler) -> OddsApiHttpClient:

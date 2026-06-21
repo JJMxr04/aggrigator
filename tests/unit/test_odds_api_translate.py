@@ -12,7 +12,6 @@ probe; for now we test against hand-crafted JSON.
 
 from __future__ import annotations
 
-from decimal import Decimal
 
 import pytest
 

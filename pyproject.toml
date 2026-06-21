@@ -54,3 +54,6 @@ filterwarnings = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint.per-file-ignores]
+"aggrigator/admin/views.py" = ["E402"]

@@ -101,7 +101,7 @@ def test_text_calls_only_in_audited_modules() -> None:
                 violations.append(f"{rel}:{node.lineno} calls text()")
     assert not violations, (
         "raw SQL outside the audited modules — move it into "
-        f"aggrigator/queries/:\n  " + "\n  ".join(violations)
+        "aggrigator/queries/:\n  " + "\n  ".join(violations)
     )
 
 

@@ -15,7 +15,7 @@ real cron tasks running against the local odds simulator.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pytest
 from httpx import AsyncClient

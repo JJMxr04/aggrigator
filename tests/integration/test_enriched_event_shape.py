@@ -8,7 +8,6 @@ from decimal import Decimal
 import pytest
 
 from tests.integration.factories import (
-    make_bookmaker,
     make_event,
     make_league,
     make_market,
