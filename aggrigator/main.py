@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Defaults that ship in config.py — flagging these in prod is the cheapest
 # way to catch "operator forgot to set the env var" before it bites in
 # production. Kept in sync with aggrigator/config.py defaults.
-_DEFAULT_JWT_SECRET = "dev-only-change-me"
+_DEFAULT_JWT_SECRET = "dev-only-change-me"  # nosec B105 -- sentinel to detect an unset prod secret, not a real credential
 
 
 async def _probe_db() -> None:
@@ -352,7 +352,7 @@ def create_app() -> FastAPI:
         body = b""
         async for chunk in response.body_iterator:
             body += chunk
-        etag = '"' + hashlib.md5(body).hexdigest() + '"'
+        etag = '"' + hashlib.md5(body, usedforsecurity=False).hexdigest() + '"'  # nosemgrep: python.lang.security.insecure-hash-algorithms-md5.insecure-hash-algorithm-md5
         cache_control = "private, max-age=300"
         if request.headers.get("if-none-match") == etag:
             return Response(

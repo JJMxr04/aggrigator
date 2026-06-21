@@ -27,7 +27,7 @@ _COLOR_FIELDS = ("primary_color", "secondary_color", "primary_contrast", "second
 
 
 def _rand_hex() -> str:
-    return "#%06x" % random.randint(0, 0xFFFFFF)
+    return "#%06x" % random.randint(0, 0xFFFFFF)  # nosec B311 -- cosmetic team colors, not security
 
 
 async def main(overwrite: bool) -> None:

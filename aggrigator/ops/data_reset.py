@@ -94,7 +94,7 @@ async def list_table_info(session: AsyncSession) -> list[TableInfo]:
         # Bind via parameterized identifier? Postgres doesn't allow placeholders
         # for table names. Safe because the value comes from the allowlist
         # above, not from request input.
-        result = await session.execute(text(f'SELECT COUNT(*) FROM "{name}"'))
+        result = await session.execute(text(f'SELECT COUNT(*) FROM "{name}"'))  # nosec B608  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
         count = result.scalar_one()
         out.append(TableInfo(
             name=name,
@@ -125,7 +125,7 @@ async def truncate_table(
     # itself, this row is the last one to disappear — useful evidence that
     # someone did it.
     pre_count_result = await session.execute(
-        text(f'SELECT COUNT(*) FROM "{table}"')
+        text(f'SELECT COUNT(*) FROM "{table}"')  # nosec B608  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
     )
     pre_count = pre_count_result.scalar_one()
 
@@ -143,7 +143,7 @@ async def truncate_table(
     )
 
     await session.execute(
-        text(f'TRUNCATE TABLE "{table}" RESTART IDENTITY CASCADE')
+        text(f'TRUNCATE TABLE "{table}" RESTART IDENTITY CASCADE')  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
     )
     await session.commit()
 

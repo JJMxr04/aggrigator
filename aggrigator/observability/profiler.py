@@ -60,7 +60,7 @@ def init_profilers(app: FastAPI, settings: Settings, engine: AsyncEngine) -> Non
     # Always log what we resolved — the #1 source of "why isn't this on"
     # confusion is a stale env-var read. This line lets the operator
     # confirm at a glance what the running process sees.
-    logger.info(
+    logger.info(  # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure -- logs only bool(token is set), never the token value
         "[profiler] init_profilers called: profiler_enabled=%s token_set=%s env=%s",
         settings.profiler_enabled,
         bool(settings.profiler_token),

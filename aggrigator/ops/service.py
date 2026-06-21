@@ -191,7 +191,8 @@ class CronService:
         # Refresh the caller's view through the existing path so the
         # returned item reflects the new state.
         item = await self.get_cron(name)
-        assert item is not None
+        if item is None:
+            raise RuntimeError(f"cron {name!r} missing immediately after upsert")
         return item
 
     async def history(self, name: str, *, limit: int = 25) -> list[CronRunOut]:

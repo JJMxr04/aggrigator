@@ -45,7 +45,7 @@ def derive_canonical_id(base_slug: str, maxlen: int = 48) -> str:
     cid = base_slug.upper().replace("-", "_")
     if len(cid) <= maxlen:
         return cid
-    digest = hashlib.sha1(base_slug.encode()).hexdigest()[:6].upper()
+    digest = hashlib.sha1(base_slug.encode(), usedforsecurity=False).hexdigest()[:6].upper()  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
     return cid[: maxlen - 7] + "_" + digest
 
 
@@ -117,7 +117,7 @@ def build_catalog(
             league_id = slug_to_existing_league.get(base) or derive_canonical_id(base)
             # Guard against a derived-id collision with a different base.
             if league_id in league_slugs and league_slugs[league_id] != base:
-                digest = hashlib.sha1(base.encode()).hexdigest()[:6].upper()
+                digest = hashlib.sha1(base.encode(), usedforsecurity=False).hexdigest()[:6].upper()  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
                 mangled = (league_id[:41] + "_" + digest)[:48]
                 if mangled in league_slugs and league_slugs[mangled] != base:
                     raise ValueError(

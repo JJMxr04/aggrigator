@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from markupsafe import Markup
+from markupsafe import Markup, escape
 from sqladmin import Admin, BaseView, ModelView, action, expose
 from sqladmin.filters import (
     AllUniqueStringValuesFilter,
@@ -71,12 +71,12 @@ _COPY_JS = (
 def _reveal(masked: str, full: str) -> Markup:
     if not full:
         return Markup('—')
-    return Markup(
+    return Markup(  # nosec B704 -- masked/full are HTML-escaped; _COPY_JS is a static constant
         '<details style="display:inline-block">'
         f'<summary style="cursor:pointer;list-style:none">'
-        f'<code>{masked}</code> <span style="opacity:.6">▸</span></summary>'
+        f'<code>{escape(masked)}</code> <span style="opacity:.6">▸</span></summary>'
         '<div style="margin-top:4px">'
-        f'<code>{full}</code> '
+        f'<code>{escape(full)}</code> '
         f'<button type="button" style="font-size:11px;padding:1px 6px" '
         f'onclick="{_COPY_JS}">copy</button>'
         '</div></details>'
@@ -438,10 +438,10 @@ def _provider_badge(_model, attr) -> Markup:
         bg, fg, label = "#fef0c7", "#92400e", "HIST (TheSportsDB)"
     else:
         bg, fg, label = "#eee", "#555", value or "—"
-    return Markup(
+    return Markup(  # nosec B704 -- bg/fg are static literals; label is HTML-escaped
         f'<span style="background:{bg};color:{fg};padding:2px 8px;'
         f'border-radius:4px;font-size:.78rem;font-weight:600;'
-        f'font-family:ui-monospace,monospace">{label}</span>'
+        f'font-family:ui-monospace,monospace">{escape(label)}</span>'
     )
 
 

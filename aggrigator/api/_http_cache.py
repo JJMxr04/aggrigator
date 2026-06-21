@@ -39,7 +39,7 @@ from pydantic import BaseModel
 def _compute_etag(body: bytes) -> str:
     # Quoted per RFC 7232 §2.3; md5 is fine for cache validation (not
     # security). Truncate to 32 chars to keep header compact.
-    return '"' + hashlib.md5(body).hexdigest() + '"'
+    return '"' + hashlib.md5(body, usedforsecurity=False).hexdigest() + '"'  # nosemgrep: python.lang.security.insecure-hash-algorithms-md5.insecure-hash-algorithm-md5
 
 
 def cached_json(
