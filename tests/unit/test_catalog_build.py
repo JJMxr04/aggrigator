@@ -1,3 +1,5 @@
+import pytest
+
 from aggrigator.ingest.catalog_build import (
     strip_phase, derive_canonical_id, build_league_pattern, build_catalog,
 )
@@ -124,7 +126,15 @@ def test_render_catalog_module_is_importable(tmp_path):
     import importlib.util
     import sys
     import pathlib
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2].parent / "sports-scores-sim" / "scripts"))
+    # Cross-repo contract: the renderer lives in the sibling sports-scores-sim
+    # repo, present in the local PBL monorepo but not in aggrigator's own CI
+    # checkout. Skip when it isn't on disk rather than fail.
+    scripts_dir = (
+        pathlib.Path(__file__).resolve().parents[2].parent / "sports-scores-sim" / "scripts"
+    )
+    if not (scripts_dir / "generate_provider_catalog.py").exists():
+        pytest.skip("sibling sports-scores-sim repo not checked out (cross-repo contract test)")
+    sys.path.insert(0, str(scripts_dir))
     from generate_provider_catalog import render_catalog_module
     cat = Catalog(
         sport_slugs={"BASEBALL": "baseball"},

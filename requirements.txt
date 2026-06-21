@@ -34,6 +34,7 @@ MarkupSafe==3.0.3
 packaging==25.0  # capped <26 by coredis (limits[async-redis]); pytest needs >=22, limits >=21 — all satisfied
 passlib==1.7.4
 procrastinate==3.6.0
+prometheus-client==0.25.0  # backs /metrics; register_metrics() in observability/prometheus.py no-ops without it
 psycopg[binary,pool]==3.3.4
 psycopg-pool==3.2.8  # pin <3.3: 3.3 returns None for pool.kwargs which breaks procrastinate 3.6 listen_notify
 psycopg2-binary==2.9.12
