@@ -1,20 +1,42 @@
-# CI: unit + integration tests. Mirrors security.yml conventions
-# (checkout@v5, setup-python@v6, Python 3.12). Runs on every push/PR.
+# CI: one workflow per push/PR so the Actions tab shows a single run.
+# Jobs:
+#   - pip-audit:    dependency CVE scan (also runs weekly via the cron below,
+#                   to catch new CVEs landing against unchanged requirements).
+#   - lint:         ruff over the repo (config in pyproject.toml [tool.ruff]).
+#   - unit:         pytest tests/unit, no services. Fixture-backed cases skip
+#                   because tests/fixtures/oddsapi/ is not committed.
+#   - integration:  ephemeral Postgres + `alembic upgrade head`, then
+#                   pytest tests/integration. The per-test TRUNCATE is safe
+#                   only because the DB is throwaway — AGG_TEST_DATABASE_URL
+#                   points at the service's own database.
 #
-# - unit: pure-Python, no services. Fixture-backed cases skip because
-#   tests/fixtures/oddsapi/ is not committed; pure-unit cases still run.
-# - integration: spins up an ephemeral Postgres, creates the schema with
-#   `alembic upgrade head`, then runs the suite. The per-test TRUNCATE that
-#   the integration suite performs is safe here only because the DB is
-#   throwaway — AGG_TEST_DATABASE_URL points at the service's own database.
-name: tests
+# On the weekly schedule only pip-audit runs; lint/unit/integration are gated
+# to push/PR events.
+name: ci
 
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
 
 jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit requirements
+        # Audits the pinned requirements file directly — no project
+        # install needed, so the job stays fast and side-effect-free.
+        run: pip-audit -r requirements.txt --strict
+
   lint:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -27,6 +49,7 @@ jobs:
         run: ruff check .
 
   unit:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -39,6 +62,7 @@ jobs:
         run: pytest tests/unit -vv
 
   integration:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     services:
       postgres:
