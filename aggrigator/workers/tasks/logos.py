@@ -106,7 +106,7 @@ async def run_backfill_team_logos(
     return summary
 
 
-@app.periodic(cron="15 4 * * *")
+@app.periodic(cron="15 4 * * 0")
 @app.task(
     name="aggrigator.backfill_team_logos",
     pass_context=True,
