@@ -272,7 +272,7 @@ async def upsert_event_from_spec(
         last_provider_refresh_at=now,
         # Reset on every successful upsert. The watchdog's disappearance
         # branch reads this to detect events that stop appearing in
-        # /events. See cancelled-suspended.md §3 Layer 2.
+        # /events.
         last_seen_upstream_at=now,
         provider=provider,
     )

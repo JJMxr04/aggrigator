@@ -42,8 +42,8 @@ from aggrigator.schemas.team import team_logo_url
 # Every route on this router requires a valid tenant API key. Applying
 # at the router level means a future contributor adding an endpoint can't
 # forget the gate. The PRO-tier check moved to MDProject's Stripe layer
-# (plan §6.4, 2026-06-10) — the aggregator authenticates the *service*,
-# not the subscriber. (The aggregator-side PRO gate was removed in Phase 16.)
+# — the aggregator authenticates the *service*,
+# not the subscriber. (The aggregator-side PRO gate was removed.)
 router = APIRouter(
     prefix="/v1/analytics",
     tags=["analytics"],

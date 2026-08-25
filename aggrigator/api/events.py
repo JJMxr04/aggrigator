@@ -1,9 +1,9 @@
 """Event reads — list, detail, markets-for-event.
 
 Same query contract as MDProject ``core/event/views/api/events.py`` and
-``markets.py`` (plan §3.4). The aggregator does **not** trigger inline provider
+``markets.py``. The aggregator does **not** trigger inline provider
 calls on read (unlike MDProject's ``get_event_odds``); a future on-demand
-refresh job is enqueued instead — wired in Phase 3.
+refresh job is enqueued instead.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from aggrigator.schemas.market import MarketOut
 from aggrigator.schemas.pagination import Page, PageParams
 from aggrigator.schemas.team import team_logo_url
 
-# Keyed reads (plan §6.2 P0-5) — router-level so a future endpoint can't
+# Keyed reads — router-level so a future endpoint can't
 # be added keyless by accident; enforcement flag-staged via keyed_reads_gate.
 router = APIRouter(
     prefix="/v1/events", tags=["events"], dependencies=[Depends(keyed_reads_gate)],

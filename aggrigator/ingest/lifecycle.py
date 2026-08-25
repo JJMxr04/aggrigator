@@ -1,7 +1,7 @@
 """Event-lifecycle transition predicates.
 
 Pure functions, no DB. Mirror MDProject's ``_should_settle`` / ``_should_reopen``
-in ``core/event/models/event.py`` plus the plan §6 state machine. The
+in ``core/event/models/event.py`` plus the state machine. The
 orchestrator calls ``decide_transition`` after upserting an event row to figure
 out which webhook (if any) to enqueue.
 

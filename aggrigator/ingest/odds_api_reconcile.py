@@ -2,9 +2,8 @@
 upstream feed.
 
 odds-api.io has no explicit ``cancelled`` / ``postponed`` status (verified
-against the OpenAPI spec — see aggrigator-plan/odds-api/cancelled-suspended.md
-§1). The only REST signal for a cancellation is **absence**: the event
-stops appearing in ``GET /events?sport=...``.
+against the OpenAPI spec). The only REST signal for a cancellation is
+**absence**: the event stops appearing in ``GET /events?sport=...``.
 
 This module compares "events the DB has in-window" against "events the
 adapter returned this cycle" and flags the missing ones by setting
@@ -12,7 +11,7 @@ adapter returned this cycle" and flags the missing ones by setting
 (``lifecycle.run_watchdog``) then auto-VOIDs anything that stays missing
 past the disappearance grace.
 
-Two-clock design (§3 Layer 2 of cancelled-suspended.md):
+Two-clock design:
 
 - ``last_seen_upstream_at`` — the disappearance clock, independent of
   ``start_time``. A pre-match cancellation 6h before kickoff has to be

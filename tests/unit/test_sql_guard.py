@@ -1,4 +1,4 @@
-"""AST guard — the permanent payoff of the §6.8 query-layer refactor.
+"""AST guard — the permanent payoff of the query-layer refactor.
 
 Walks every module under ``aggrigator/`` and fails the suite when:
 

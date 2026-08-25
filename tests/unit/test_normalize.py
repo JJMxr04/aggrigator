@@ -82,7 +82,7 @@ def test_finished_event_winner_code_set_when_scores_present(
 
 def test_market_id_collision_rate_is_bounded(all_event_payloads: list[dict]) -> None:
     """``build_market_id`` now includes ``statID`` and ``statEntityID`` so the
-    big ``eo``/``yn`` per-side collision is gone (plan §7.7 #3). A handful of
+    big ``eo``/``yn`` per-side collision is gone. A handful of
     stragglers remain (~0.5% of markets) — likely from edge cases in
     ``_group_key`` for live alt-line shifts. Bound the rate at 1% so a
     regression in either ``build_market_id`` or ``_group_key`` is loud, and

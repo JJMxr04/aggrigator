@@ -2,7 +2,7 @@
 
 These are the dropdowns / filter-lookup calls the upload portal uses to
 populate event-pick UI before any specific event is chosen. Cheap queries on
-small tables. Keyed reads (plan §6.2 P0-5): nothing in the aggregator is
+small tables. Keyed reads: nothing in the aggregator is
 anonymous — enforcement is flag-staged via ``keyed_reads_gate``.
 """
 

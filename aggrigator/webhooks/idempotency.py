@@ -1,6 +1,6 @@
 """Idempotency-key derivation for webhook deliveries.
 
-Per plan §4.6: ``f"{event_id}:{sha256(canonical_state_blob)[:16]}"``.
+Format: ``f"{event_id}:{sha256(canonical_state_blob)[:16]}"``.
 
 The canonical state blob is a stable JSON serialization of the *load-bearing*
 state for that event — anything whose change should re-fire the webhook:

@@ -3,8 +3,7 @@
 Used by the odds-api.io migration to detect events that vanish from the
 upstream feed — the only signal odds-api.io gives for cancellations
 (verified against the OpenAPI spec; no ``cancelled`` / ``postponed``
-status values exist). See aggrigator-plan/odds-api/cancelled-suspended.md
-§3 Layer 2 + §9 for the full design.
+status values exist).
 
 The column is nullable so existing rows pre-migration don't trip the
 watchdog until the next ingest cycle refreshes them. We also backfill

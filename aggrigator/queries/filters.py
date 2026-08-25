@@ -1,4 +1,4 @@
-"""Shared filter models for the query layer (plan §6.8 win #3).
+"""Shared filter models for the query layer.
 
 One place for the window/CSV/Decimal parsing that used to be
 copy-pasted across ``api/events.py`` / ``api/analytics.py``. Routes

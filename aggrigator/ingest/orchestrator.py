@@ -301,7 +301,7 @@ async def ingest_league(
     first_event_seen = False
     # Track event ids the adapter returned this cycle so the disappearance
     # reconcile pass (oddsapi-only) can flag rows that vanished from
-    # upstream. See cancelled-suspended.md §3 Layer 2.
+    # upstream.
     seen_event_ids: set[str] = set()
     deliveries_enqueued_this_walk = 0
     window_start = now - timedelta(days=settings.ingest_window_days_behind)

@@ -1,13 +1,13 @@
 """Bet tracking — CRUD + summary endpoints under ``/v1/analytics/bets``.
 
-User-private ledger (file 07 of the dashboard plan). All DB access goes
-through the tenant-scoped ``queries.BetQueries`` (plan §6.8) — built per
+User-private ledger. All DB access goes
+through the tenant-scoped ``queries.BetQueries`` — built per
 request from the *acting* tenant user, so cross-tenant reads are
-impossible by construction. The tier gate moved to MDProject (§6.4);
+impossible by construction. The tier gate moved to MDProject;
 the key itself is still required (router-level ``require_tenant_user``).
 
 Auto-settle on event finalization lives in
-``aggrigator/ingest/bet_autosettle.py`` (Phase D.3) — these endpoints
+``aggrigator/ingest/bet_autosettle.py`` — these endpoints
 only handle user-driven CRUD.
 """
 

@@ -1,4 +1,4 @@
-"""Reference-table reads (plan §6.8 step 2) — sports / leagues /
+"""Reference-table reads — sports / leagues /
 bookmakers / market types."""
 
 from __future__ import annotations

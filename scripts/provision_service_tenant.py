@@ -1,4 +1,4 @@
-"""Provision THE MDProject service tenant + key (roadmap Phase 2, plan §6.4).
+"""Provision THE MDProject service tenant + key.
 
 Usage:
     ./venv/bin/python scripts/provision_service_tenant.py            # create (or show)
@@ -56,9 +56,9 @@ async def main(rotate: bool) -> None:
             tenant = TenantUser(
                 external_user_id=uuid.uuid4(),
                 email=SERVICE_EMAIL,
-                # Tier is meaningless for the service tenant (plan §6.4 —
-                # tier gating lives in MDProject); FREE documents that
-                # nothing here relies on it.
+                # Tier is meaningless for the service tenant (tier gating
+                # lives in MDProject); FREE documents that nothing here
+                # relies on it.
                 tier=TenantTier.FREE,
                 status=TenantStatus.ACTIVE,
             )

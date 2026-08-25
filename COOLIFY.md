@@ -132,7 +132,7 @@ AGG_PARADISE_SECRET=<openssl rand -hex 32>           # same — generate now, sh
 
 # --- CORS / host allowlist (DEFERRED for first private deploy) ---
 AGG_CORS_ORIGINS=                                    # set once MDProject domain is known; no wildcards
-AGG_ALLOWED_HOSTS=                                   # SET BEFORE PUBLIC EXPOSURE (see §6). Coolify's COOLIFY_FQDN is auto-merged when non-empty.
+AGG_ALLOWED_HOSTS=                                   # SET BEFORE PUBLIC EXPOSURE. Coolify's COOLIFY_FQDN is auto-merged when non-empty.
 AGG_DOCS_ENABLED=false
 
 # --- ingest window ---
@@ -168,7 +168,7 @@ AGG_PROFILER_TOKEN=
 > **Security caveat.** With `AGG_ALLOWED_HOSTS` empty, Starlette's
 > TrustedHostMiddleware is skipped — any `Host` header is accepted.
 > Fine while the URL is private; **must** be set before sharing the
-> domain. See §6 pre-flight.
+> domain.
 
 Hit **Deploy.** The container will:
 

@@ -3,7 +3,7 @@
 Replaces ``api/admin_crons.py``. Same admin-only auth, same dep chain
 (``require_admin`` → ``require_user`` → ``current_user``).
 
-Endpoints (plan §2.1.5):
+Endpoints:
 - ``GET  /v1/admin/crons``                           list every registered cron + last_run
 - ``GET  /v1/admin/crons/{name}``                    one cron + last_run (HTMX poll target)
 - ``POST /v1/admin/crons/{name}/run``                trigger; 409 if a run is in flight

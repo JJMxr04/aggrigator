@@ -2,7 +2,7 @@
 
 Movement returns the OddsQuote time-series for a selection. Slips is a
 stateless parlay combiner — combine N selection prices into one decimal.
-Keyed reads (plan §6.2 P0-5): nothing in the aggregator is anonymous —
+Keyed reads: nothing in the aggregator is anonymous —
 enforcement is flag-staged via ``keyed_reads_gate``.
 """
 

@@ -45,7 +45,7 @@ class EventWithMarketsOut(EventOut):
 
 
 class OddsMeta(BaseModel):
-    """Per plan §3.4: surfaces freshness state without inline provider calls."""
+    """Surfaces freshness state without inline provider calls."""
     stale: bool = False
     last_provider_refresh_at: datetime | None = None
 

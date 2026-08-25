@@ -1,8 +1,8 @@
-"""Tenant-key auth + tenant-scoped bets (plan §6.4 / §6.8 / 6.7 lines).
+"""Tenant-key auth + tenant-scoped bets.
 
 Covers:
 - ``require_tenant_user``: valid / missing / junk / revoked keys.
-- §6.4 behavior: tier is NOT checked by the aggregator anymore (FREE keys
+- Tier is NOT checked by the aggregator anymore (FREE keys
   reach analytics; MDProject's Stripe layer gates users now).
 - Cross-tenant isolation: user A's key never returns user B's bets.
 - The acting-user trusted channel: only the configured service tenant
@@ -55,7 +55,7 @@ async def test_junk_key_is_401(client) -> None:
 
 
 async def test_valid_key_passes_regardless_of_tier(client, session) -> None:
-    """§6.4: FREE-tier key reaches analytics — tier gating left the
+    """FREE-tier key reaches analytics — tier gating left the
     aggregator (MDProject decides who sees what before proxying)."""
     _, raw = await make_tenant_user(session, email="free@example.com")  # FREE default
     r = await client.get(_LEAGUES, headers=_key_headers(raw))
@@ -102,7 +102,7 @@ async def test_user_a_never_sees_user_b_bets(client, session) -> None:
     )).status_code == 404
 
 
-# ---- acting-user trusted channel (§6.4 / D-1) -------------------------------
+# ---- acting-user trusted channel ---------------------------------------------
 
 
 @pytest.fixture

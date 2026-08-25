@@ -149,7 +149,7 @@ def test_settled_event_translated_with_scores() -> None:
 
 
 def test_settled_with_null_scores_becomes_cancelled() -> None:
-    """cancelled-suspended.md §4.1 — settled+null-scores = abandoned."""
+    """Settled+null-scores = abandoned."""
     ev = _mlb_event_settled()
     ev["scores"] = {"home": None, "away": None}
     payload = to_internal_event_payload(ev)
@@ -245,7 +245,7 @@ def test_pending_event_picks_main_totals_line_closest_to_canonical() -> None:
 
 
 def test_pending_event_empty_bookmakers_becomes_event_only() -> None:
-    """cancelled-suspended.md §4.2 — pending+no books = WebSocket no_markets."""
+    """Pending+no books = WebSocket no_markets."""
     ev = _mlb_event_pending()
     payload = to_internal_event_payload(ev, {"bookmakers": {}})
     assert payload is not None

@@ -95,8 +95,7 @@ async def scan_disappeared_events(
 ) -> list[Event]:
     """Return pending Event rows whose ``last_seen_upstream_at`` is older
     than ``grace_hours``. These are events the upstream feed has stopped
-    returning — the disappearance signal for odds-api.io cancellations
-    (see cancelled-suspended.md §3 Layer 2).
+    returning — the disappearance signal for odds-api.io cancellations.
 
     Independent of ``start_time``: a pre-match cancellation 6h before
     kickoff disappears from upstream while still in the future.

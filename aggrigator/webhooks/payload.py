@@ -1,4 +1,4 @@
-"""Build the outbound v1 webhook payload (plan §4.3) from DB rows.
+"""Build the outbound v1 webhook payload from DB rows.
 
 The orchestrator calls ``build_payload(session, event)`` after a successful
 ingest+grade pass; the result is dropped onto a ``WebhookDelivery`` row's

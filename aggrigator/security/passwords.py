@@ -1,6 +1,6 @@
 """Argon2id password hashing.
 
-Parameters per plan §8: ``time_cost=3``, ``memory_cost=64MiB``, ``parallelism=4``,
+Parameters: ``time_cost=3``, ``memory_cost=64MiB``, ``parallelism=4``,
 ``hash_len=32``, ``salt_len=16``. Tuning these is a deploy-time decision; tests
 set the same numbers so they run in similar time on dev hardware.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from passlib.hash import argon2
 
-# Argon2id with the §8 parameters. ``type="ID"`` selects argon2id specifically
+# Argon2id with the parameters above. ``type="ID"`` selects argon2id specifically
 # (the default in passlib≥1.7.4 for newer hashes, but we pin it explicitly).
 _HASHER = argon2.using(
     type="ID",

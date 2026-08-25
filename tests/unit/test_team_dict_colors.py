@@ -1,4 +1,4 @@
-"""Unit: webhook _team_dict carries all four colors (design §6)."""
+"""Unit: webhook _team_dict carries all four colors."""
 
 from __future__ import annotations
 

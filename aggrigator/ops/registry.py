@@ -215,7 +215,7 @@ REGISTRY: list[CronSpec] = [
             "(2) Disappearance (oddsapi only): events the upstream stopped "
             "returning past AGG_LIFECYCLE_DISAPPEARED_VOID_HOURS get the "
             "same VOID treatment — needed because odds-api.io has no "
-            "explicit ``cancelled`` status (cancelled-suspended.md §3)."
+            "explicit ``cancelled`` status."
         ),
         schedule_human="hourly @ :45",
         runner=run_lifecycle_watchdog,

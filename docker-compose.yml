@@ -11,7 +11,7 @@
 # advisory-lock primitive replaces the old SET NX EX).
 #
 # Redis is back (pre-provisioned only, nothing reads it yet): the planned
-# `limits`-based rate limiter (plan §7.4 / P0-1) needs Redis-backed storage
+# `limits`-based rate limiter needs Redis-backed storage
 # because the web entrypoint runs 4 uvicorn workers — in-process counters
 # would give each worker its own quota.
 

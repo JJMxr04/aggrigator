@@ -1,4 +1,4 @@
-"""Rate limiting — plan §6.2 P0-1, the one genuinely missing battery.
+"""Rate limiting — the one genuinely missing battery.
 
 Built directly on the already-pinned ``limits`` package (moving-window
 strategy), no slowapi. Two enforcement surfaces:
@@ -34,7 +34,7 @@ from limits.storage import storage_from_string
 
 logger = logging.getLogger(__name__)
 
-# ---- tiers (plan §6.2) ------------------------------------------------------
+# ---- tiers --------------------------------------------------------------------
 
 #: Login / refresh — brute-force surface. Per IP.
 AUTH_RULE: RateLimitItem = parse("5/minute")

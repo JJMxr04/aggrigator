@@ -1,7 +1,7 @@
 """Single-attempt webhook delivery + retry-policy decision.
 
 Pure of the queue layer (ARQ): given a ``WebhookDelivery`` row and the raw
-secret, ``send_one`` POSTs the payload, applies the §4.7 retry rules, and
+secret, ``send_one`` POSTs the payload, applies the retry rules, and
 mutates the row in place. Caller commits.
 
 The httpx ``AsyncClient`` is injected so tests can swap a ``MockTransport``.
@@ -22,7 +22,7 @@ from aggrigator.security.webhook_signing import HEADER_NAME, sign
 logger = logging.getLogger(__name__)
 
 
-# Plan §4.7. 8 attempts ≈ 8h cap.
+# 8 attempts ≈ 8h cap.
 RETRY_BACKOFF_SECONDS = [60, 120, 300, 900, 1800, 3600, 7200, 21600]
 MAX_ATTEMPTS = len(RETRY_BACKOFF_SECONDS)
 

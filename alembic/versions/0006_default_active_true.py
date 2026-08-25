@@ -1,6 +1,6 @@
 """Flip the DB-side default for ``core_sport.active`` and ``core_league.active``
 from ``false`` to ``true`` — matches the model default + the seed-resets-active
-behavior from plan §2.4.
+behavior.
 
 Existing rows are NOT touched by ``ALTER COLUMN ... SET DEFAULT`` — that only
 affects future INSERTs that omit the column. To flip existing data, use the

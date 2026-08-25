@@ -62,7 +62,7 @@ class CronRun(Base):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=CronRunStatus.RUNNING
     )
-    # Truncated to 4000 chars at write time per plan §2.1.8.
+    # Truncated to 4000 chars at write time.
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     items_processed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

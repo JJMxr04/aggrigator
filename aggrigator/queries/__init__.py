@@ -1,4 +1,4 @@
-"""Audited query layer (plan §6.8).
+"""Audited query layer.
 
 All route-facing DB access migrates here so that:
 

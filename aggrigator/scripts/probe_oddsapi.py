@@ -1,9 +1,7 @@
 """Phase 0 probe — capture odds-api.io payloads + resolve open questions.
 
 Run locally with an active API key. The probe answers the empirical
-questions the docs leave open
-(see aggrigator-plan/odds-api/odds-api.md §8 Phase 0 +
-python-sdk.md §5):
+questions the docs leave open:
 
 1. Which base URL is live — ``api.odds-api.io`` or ``api2.odds-api.io``?
 2. What sport slugs exist? (Update ``INTERNAL_TO_ODDSAPI_SPORT`` in

@@ -1,14 +1,12 @@
 """odds-api.io exception taxonomy.
 
 Names mirror the official `odds-api-io` Python SDK so that swapping in the
-SDK later (if it ever exposes response headers — see
-aggrigator-plan/odds-api/python-sdk.md) is a one-line import change for
-callers.
+SDK later (if it ever exposes response headers) is a one-line import
+change for callers.
 
 Reason we don't use the SDK today: it doesn't surface
 ``x-ratelimit-remaining`` from responses, and that header is the
-cornerstone of our per-hour throttle pacer
-(aggrigator-plan/odds-api/odds-api.md §6).
+cornerstone of our per-hour throttle pacer.
 """
 
 from __future__ import annotations

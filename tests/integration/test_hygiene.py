@@ -1,4 +1,4 @@
-"""P0-4 (/metrics token) + P1-5 (body cap) — plan §6.2/§6.3, 6.7 lines."""
+"""P0-4 (/metrics token) + P1-5 (body cap)."""
 
 from __future__ import annotations
 

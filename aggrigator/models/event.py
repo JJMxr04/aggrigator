@@ -1,8 +1,7 @@
 """Event — mirrors MDProject ``core_event_event``.
 
 Aggregator-only deltas:
-- ``id`` widened to ``VARCHAR(64)`` (MDProject uses 32; both sides expand — see
-  plan §7.6).
+- ``id`` widened to ``VARCHAR(64)`` (MDProject uses 32; both sides expand).
 - ``last_webhook_sent_hash`` / ``last_webhook_sent_at`` for outbound idempotency.
 """
 

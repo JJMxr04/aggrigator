@@ -1,7 +1,7 @@
 """Prometheus ``/metrics`` endpoint.
 
 Lightweight: register the standard process collector + a small set of custom
-counters. Gated by ``AGG_METRICS_TOKEN`` (plan §6.2 P0-4): when set, the
+counters. Gated by ``AGG_METRICS_TOKEN``: when set, the
 scraper must send it as a bearer token (or ``?token=``), and a mismatch
 returns **404** — the hide-existence pattern the profiler endpoints already
 use, so probes can't even confirm the path exists. When unset, the endpoint

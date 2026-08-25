@@ -94,7 +94,7 @@ async def close_run(
     row.finished_at = datetime.now(tz=timezone.utc)
     if error is not None:
         row.status = CronRunStatus.FAILED
-        # truncate at write time (plan §2.1.8)
+        # truncate at write time
         row.error = (
             f"{type(error).__name__}: {error}\n\n"
             + "".join(traceback.format_exception(error))

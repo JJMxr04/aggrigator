@@ -5,7 +5,7 @@ The aggregator's ingest pipeline parses internal-shape JSON via
 pipeline for a second provider, we translate odds-api.io's response shape
 INTO the upstream shape so normalize.py works unchanged.
 
-Per the migration plan (aggrigator-plan/odds-api/odds-api.md §Scope):
+Translation scope:
 
 - Only ``ML`` / ``Asian Handicap`` or ``Spread`` (main line) / ``Totals``
   (main line) are translated. ``Asian Handicap`` (soccer/tennis) and
@@ -17,7 +17,7 @@ Per the migration plan (aggrigator-plan/odds-api/odds-api.md §Scope):
   scores carry settlement; no per-bookmaker price snapshot needed).
 - ``pending`` events: translated WITH odds when ``/odds`` data is provided.
 
-Per aggrigator-plan/odds-api/cancelled-suspended.md §4:
+Null-score / empty-odds handling:
 
 - ``settled`` with null scores → VOID-shape payload (status.cancelled=True).
 - ``pending`` with empty bookmakers → event-only payload (no odds dict).
@@ -170,10 +170,9 @@ def to_internal_event_payload(
     scores = event_dict.get("scores") or {}
 
     if status == "settled":
-        # Guard per cancelled-suspended.md §4.1: a "settled" event with null
-        # scores is an abandoned game or feed error, not a real finalize.
-        # Translate as cancelled so the downstream lifecycle treats it as
-        # VOID, not FINALIZED.
+        # A "settled" event with null scores is an abandoned game or feed
+        # error, not a real finalize. Translate as cancelled so the
+        # downstream lifecycle treats it as VOID, not FINALIZED.
         if scores.get("home") is None or scores.get("away") is None:
             return _void_event_payload(event_dict, sport_id, league_id)
         return _settled_event_payload(event_dict, sport_id, league_id)

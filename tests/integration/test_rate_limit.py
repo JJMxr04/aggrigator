@@ -1,4 +1,4 @@
-"""Integration tests for security/rate_limit — plan §6.2 P0-1 + §6.7.
+"""Integration tests for security/rate_limit.
 
 Storage is in-process memory here (no AGG_RATELIMIT_STORAGE_URL in the
 test env); the autouse conftest fixture resets counters between tests.
@@ -35,7 +35,7 @@ async def test_sixth_login_attempt_in_a_minute_is_429(client) -> None:
 
 
 async def test_429_identical_for_existing_and_missing_accounts(client, session) -> None:
-    """The limiter must not become an account oracle (§6.7)."""
+    """The limiter must not become an account oracle."""
     await make_user(session, email="real@example.com")
 
     bodies = []

@@ -1,4 +1,4 @@
-"""``AGG_REQUIRE_KEY_FOR_READS`` gate (plan §6.2 P0-5 + 6.7).
+"""``AGG_REQUIRE_KEY_FOR_READS`` gate.
 
 The flag now defaults to True (enforced); the conftest ``_keyless_reads_
 baseline`` fixture pins it back to False for the suite, so the "flag off"

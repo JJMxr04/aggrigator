@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from passlib.hash import argon2
 
-# Same argon2 params as passwords (plan §8) — argon2id, 64 MiB, t=3, p=4.
+# Same argon2 params as passwords — argon2id, 64 MiB, t=3, p=4.
 _HASHER = argon2.using(
     type="ID",
     time_cost=3,

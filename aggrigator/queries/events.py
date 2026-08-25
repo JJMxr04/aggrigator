@@ -1,4 +1,4 @@
-"""Event + market reads (plan §6.8 step 2) — behavior-identical port of
+"""Event + market reads — behavior-identical port of
 the inline ORM previously in ``api/events.py``."""
 
 from __future__ import annotations

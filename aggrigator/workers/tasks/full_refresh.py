@@ -14,7 +14,7 @@ When the operator clicks "Refresh all" (or the cron fires), this:
 2. Walks every league where ``League.active AND Sport.active`` and
    ingests events + markets + selections + per-bookmaker quotes.
    Lifecycle transitions enqueue webhook deliveries automatically
-   (orchestrator handles that — plan §3).
+   (orchestrator handles that).
 
 Returns a combined summary so the cron-run row records both halves.
 

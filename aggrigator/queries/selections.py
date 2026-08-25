@@ -1,4 +1,4 @@
-"""Selection reads (plan §6.8 step 2) — movement time-series + slip legs."""
+"""Selection reads — movement time-series + slip legs."""
 
 from __future__ import annotations
 

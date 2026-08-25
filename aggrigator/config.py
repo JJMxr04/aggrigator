@@ -59,9 +59,8 @@ class Settings(BaseSettings):
         default=80, alias="AGG_ODDSAPI_THROTTLE_PCT",
     )
     # NOTE: bookmaker list is HARDCODED at 2 in code (see
-    # aggrigator/ingest/odds_api_http.py:ODDSAPI_BOOKMAKERS) by design —
-    # rationale in aggrigator-plan/odds-api/best-practices.md §4.1. Even
-    # on paid tiers we stay at 2 books. There is intentionally no env var
+    # aggrigator/ingest/odds_api_http.py:ODDSAPI_BOOKMAKERS) by design.
+    # Even on paid tiers we stay at 2 books. There is intentionally no env var
     # for this.
     # On HTTP 429, retry up to this many times with exponential backoff
     # (honors Retry-After header when present). 0 = no retries (fail fast).
@@ -117,13 +116,12 @@ class Settings(BaseSettings):
             return ""
         return f"{self.mdproject_url.rstrip('/')}{MDPROJECT_WEBHOOK_PATH}"
 
-    # Identifies THE service tenant (plan §6.4: one key for all MDProject
+    # Identifies THE service tenant (one key for all MDProject
     # traffic). When a request's key belongs to the tenant user whose
     # external_user_id equals this UUID, it may assert X-Acting-User to
     # act for any tenant user on per-user-data routes (bets). Empty
     # (default) = no tenant may assert — per-user keys keep working
-    # unchanged. Set in Coolify when the service tenant is provisioned
-    # (Phase 2 of the roadmap).
+    # unchanged. Set in Coolify when the service tenant is provisioned.
     service_tenant_external_id: str = Field(
         default="", alias="AGG_SERVICE_TENANT_EXTERNAL_ID",
     )
@@ -142,7 +140,7 @@ class Settings(BaseSettings):
         default=True, alias="AGG_REQUIRE_KEY_FOR_READS",
     )
 
-    # Bearer token for /metrics (plan §6.2 P0-4). Set in Coolify + the
+    # Bearer token for /metrics. Set in Coolify + the
     # Prometheus scraper config; mismatch returns 404 (hide-existence,
     # same pattern as the profiler). Empty = open endpoint + prod boot
     # warning.
@@ -327,7 +325,7 @@ class Settings(BaseSettings):
     # --- disappearance detection (odds-api.io) ---
     # Independent of the stale-pending clock above: a pre-match cancellation
     # 6h before kickoff has to be catchable even though stale-pending only
-    # fires after start time. See cancelled-suspended.md §3 Layer 2.
+    # fires after start time.
     #
     # ``..._grace_hours``: an event that hasn't been seen upstream for
     # this many hours is reported as disappeared (informational).

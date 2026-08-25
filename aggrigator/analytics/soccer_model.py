@@ -1,11 +1,8 @@
 """Soccer Elo + bivariate Poisson goal model.
 
-Per ``plans/analytics/dashboard_and_data/02-data-and-derivations.md`` §4-5.
-
-No DB cache for v1 (per the plan's open question 1, recommendation b /
-fallback to plan's open question 3 option a): recompute from events on
-demand. EPL has 380 events per season — walking them is fast enough
-that adding a cache table is premature.
+No DB cache for v1: recompute from events on demand. EPL has 380 events
+per season — walking them is fast enough that adding a cache table is
+premature.
 
 Public functions:
 - ``compute_elo_for_league`` — walks settled events chronologically and

@@ -91,7 +91,7 @@ class Team(Base, TimestampMixin):
 
         Once a real ``odds_api_io_key`` arrives via the live feed, the
         upsert path keeps the row's PK stable but populates
-        ``odds_api_io_key`` in its own column — see plan 01 §5.
+        ``odds_api_io_key`` in its own column.
         """
         slug = re.sub(r"[^a-z0-9]+", "_", canonical_name.lower()).strip("_")
         return f"_canon:{slug}"

@@ -4,20 +4,20 @@ Implements the ``OddsClient`` Protocol so the existing orchestrator,
 normalizer, and webhook layers see internal-shape payloads — the translation
 happens here. See ``odds_api_translate.py`` for the payload mapping rules.
 
-Design notes (full rationale in aggrigator-plan/odds-api/odds-api.md):
+Design notes:
 
 - **Sync, not async**: the orchestrator runs HTTP sequentially inside an
   ARQ task; mixing httpx.Client with our existing async DB layer matches
   what sync httpx pattern.
-- **Hardcoded bookmaker list** (best-practices.md §4.1): even on paid
+- **Hardcoded bookmaker list**: even on paid
   tiers we stay at 2 books — pinning prevents accidental tier-upgrade cost
   bloat and keeps the product surface stable.
-- **Header capture** (odds-api.md §5/§6): every response stashes
+- **Header capture**: every response stashes
   ``x-ratelimit-{limit, remaining, reset}`` on the instance so the per-hour
   pacer reads them without an extra round-trip.
-- **API-key redaction** (best-practices.md §6): logs strip
+- **API-key redaction**: logs strip
   ``apiKey=<value>`` so a debug-level log can never leak the key.
-- **/odds/multi batching** (best-practices.md §3): pending events are
+- **/odds/multi batching**: pending events are
   flushed in groups of 10 — the documented batch limit.
 """
 
@@ -49,14 +49,13 @@ from aggrigator.ingest.odds_api_translate import (
 logger = logging.getLogger(__name__)
 
 
-# ---- hardcoded bookmaker list (see best-practices.md §4.1) -----------------
+# ---- hardcoded bookmaker list ----------------------------------------------
 # Pinned at 2 — the free-tier cap. Even on paid tiers we keep this list so
 # a tier upgrade can't silently expand request volume / DB writes / pricing
 # surface. To add a third bookmaker: update this constant + run fixtures.
-# This is product, not infra — see best-practices.md §4.1 for the full
-# rationale. The two slots are matched to the books selected on the
-# odds-api.io account: changing this constant without changing the account
-# selection produces HTTP 400 on /odds/multi.
+# This is product, not infra. The two slots are matched to the books
+# selected on the odds-api.io account: changing this constant without
+# changing the account selection produces HTTP 400 on /odds/multi.
 ODDSAPI_BOOKMAKERS: tuple[str, ...] = ("draftkings", "bet365")
 # The /odds query param expects display-cased names (e.g. "DraftKings"); our
 # internal IDs are lowercase. Map at the API boundary.
@@ -380,10 +379,9 @@ class OddsApiHttpClient:
         - ``event_id`` short-circuits to a single ``/events/{id}`` lookup.
         - ``odd_ids`` / ``include_*`` / ``bookmaker_id`` / ``limit`` are
           ignored (the OddsClient surface needs them; odds-api.io doesn't).
-        - Live events are dropped at the adapter boundary
-          (odds-api.md §4.4 scope rule).
+        - Live events are dropped at the adapter boundary.
         - Settled events yield WITHOUT an /odds call — scores are carried
-          on the event payload (odds-api.md §9 cost cut).
+          on the event payload.
         - Pending events are batched 10-at-a-time through /odds/multi.
         """
         if event_id is not None:
@@ -657,7 +655,7 @@ class OddsApiHttpClient:
                 redacted_url, elapsed_ms,
                 self.last_ratelimit_remaining,
             )
-            # Every 100 requests, emit usage stats per best-practices.md §1.
+            # Every 100 requests, emit usage stats.
             if self.request_count and self.request_count % 100 == 0:
                 logger.info(
                     "oddsapi usage: %d req, %d errors, %d 429s, "

@@ -36,11 +36,10 @@ case "$ROLE" in
     # --workers is INTENTIONALLY hardcoded (was AGG_WEB_WORKERS). Part of
     # the four app services' ~16 vCPU envelope on the 64 GB / 21 vCPU
     # Coolify host (the rest goes to MDProject's share, Matomo, GlitchTip,
-    # Coolify, and the Postgres resources) — see COOLIFY.md §"Worker
-    # sizing". These are uvicorn ASYNC workers, so 4 already gives high
-    # per-worker concurrency, and this tier is mostly machine-to-machine
-    # (MDProject calls it). Setting AGG_WEB_WORKERS in Coolify now has NO
-    # effect; change the number here + redeploy.
+    # Coolify, and the Postgres resources). These are uvicorn ASYNC workers,
+    # so 4 already gives high per-worker concurrency, and this tier is
+    # mostly machine-to-machine (MDProject calls it). Setting AGG_WEB_WORKERS
+    # in Coolify now has NO effect; change the number here + redeploy.
     exec gunicorn aggrigator.main:app \
         --worker-class uvicorn.workers.UvicornWorker \
         --workers 4 \
@@ -62,11 +61,10 @@ case "$ROLE" in
     # --concurrency tunes how many jobs run in parallel within this
     # process. Procrastinate uses Postgres LISTEN/NOTIFY for push-based
     # job delivery (no polling). INTENTIONALLY hardcoded (was
-    # AGG_WORKER_CONCURRENCY) — part of the apps' ~16 vCPU envelope, see
-    # COOLIFY.md §"Worker sizing". Ingestion/settlement-backfill is heavy
-    # but bursty, so 2 steady slots borrow idle host CPU when a burst hits.
-    # Setting that env var in Coolify now has NO effect; change here +
-    # redeploy.
+    # AGG_WORKER_CONCURRENCY) — part of the apps' ~16 vCPU envelope.
+    # Ingestion/settlement-backfill is heavy but bursty, so 2 steady slots
+    # borrow idle host CPU when a burst hits. Setting that env var in
+    # Coolify now has NO effect; change here + redeploy.
     exec procrastinate -a aggrigator.workers.app.app worker \
         --concurrency 2
     ;;

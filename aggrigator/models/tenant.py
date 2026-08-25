@@ -66,7 +66,7 @@ class TenantUser(Base, TimestampMixin):
         nullable=False,
     )
     # Mirrors MDProject's Subscription.status verbatim so the gate can use
-    # the same grace-period logic on both sides (file 05 §6).
+    # the same grace-period logic on both sides.
     status: Mapped[str] = mapped_column(
         String(24),
         default=TenantStatus.ACTIVE,
@@ -79,7 +79,7 @@ class TenantUser(Base, TimestampMixin):
         JSONB, default=dict, server_default="{}", nullable=False,
     )
     # Soft delete. Hard delete happens via a separate retention job after
-    # 90 days for GDPR (see subscription-plan/06-user-flows.md §6).
+    # 90 days for GDPR.
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )

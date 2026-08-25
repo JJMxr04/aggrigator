@@ -90,7 +90,7 @@ async def run_ingest_due_leagues(
         "events_processed": sum(r.events_processed for r in reports),
         "events_failed": sum(r.events_failed for r in reports),
     }
-    # Per-cycle telemetry (best-practices.md §8). Lands in
+    # Per-cycle telemetry. Lands in
     # cron_run.summary; surfaces in /ops/crons. p50/p95 are computed
     # client-side from per-request durations.
     durs = sorted(client.request_durations_ms)

@@ -3,7 +3,7 @@
 No respx dependency — vanilla httpx supports response injection via a
 custom transport, which is enough for the path coverage we need.
 
-Coverage focus (best-practices.md §3, §6; cancelled-suspended.md §4):
+Coverage focus:
 
 - ``/odds/multi`` batching: pending events flushed in groups of 10; the
   single-event ``/odds`` endpoint is NEVER called for >1 pending event.

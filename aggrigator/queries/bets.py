@@ -1,4 +1,4 @@
-"""Tenant-scoped bet queries (plan §6.8 win #1).
+"""Tenant-scoped bet queries.
 
 Every method applies ``Bet.tenant_user_id == self.tenant_user_id``
 itself — a handler physically cannot forget the scope, and a future

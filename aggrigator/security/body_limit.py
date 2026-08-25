@@ -1,4 +1,4 @@
-"""Request-body size cap (plan §6.3 P1-5).
+"""Request-body size cap.
 
 Pure ASGI middleware — cheap defense in front of Pydantic. Handlers are
 schema-safe but parsing a 100 MB JSON body still burns CPU/memory before

@@ -301,7 +301,7 @@ async def data_reset_page(request: Request):
     )
 
 
-# Allowlist in the SIGNATURE (plan §6.8): the path param is typed as an
+# Allowlist in the SIGNATURE: the path param is typed as an
 # Enum built from SQLAlchemy metadata, so FastAPI 422s anything outside
 # ``known_tables()`` before the handler runs. The body re-check below is
 # retained as belt-and-suspenders.

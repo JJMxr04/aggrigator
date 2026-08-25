@@ -177,8 +177,7 @@ async def update_entitlements(
 
     Idempotent: re-sending the same body is a no-op apart from the
     ``updated`` timestamp. Callers should treat 404 as "we don't know
-    that user — re-run provision_user first" (defensive path in the plan,
-    file 04 §7d)."""
+    that user — re-run provision_user first" (a defensive path)."""
     _check_tier_status(payload.tier, payload.status)
 
     tenant_user = await session.scalar(

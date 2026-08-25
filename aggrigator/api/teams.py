@@ -1,4 +1,4 @@
-"""Bulk team catalog read for the MDProject team-data sync (design §3).
+"""Bulk team catalog read for the MDProject team-data sync.
 
 Keyed (router-level ``keyed_reads_gate``) exactly like ``api/events.py`` —
 no team endpoint can be added keyless by accident. Trimmed ``TeamSyncOut``

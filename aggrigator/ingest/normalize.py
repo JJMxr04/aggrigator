@@ -492,7 +492,7 @@ def build_market_id(
     """Deterministic ``Market.id`` for an provider-sourced market.
 
     Includes ``statID`` and ``statEntityID`` whenever the group key uses them
-    (per plan §7.7 #3) so distinct ``eo``/``yn`` groups don't collide on the
+    so distinct ``eo``/``yn`` groups don't collide on the
     same id.
     """
     scope_slug = _SCOPE_TO_SLUG.get(scope, scope.lower())

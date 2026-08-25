@@ -117,8 +117,8 @@ async def require_tenant_user(
     x_aggrigator_tenant_key: Annotated[str | None, Header()] = None,
 ) -> TenantUser:
     """Read ``X-Aggrigator-Tenant-Key`` → ``TenantApiKey`` → ``TenantUser``.
-    Authentication only — NO tier check (plan §6.2 P0-5 / §6.4: tier
-    enforcement lives in MDProject's Stripe layer now).
+    Authentication only — NO tier check (tier enforcement lives in
+    MDProject's Stripe layer now).
 
     Layered checks:
     1. Header present + parsable (``agg_{env}_{head5}{tail}``).
@@ -180,7 +180,7 @@ async def keyed_reads_gate(
     settings: SettingsDep,
     x_aggrigator_tenant_key: Annotated[str | None, Header()] = None,
 ) -> None:
-    """P0-5 (plan §6.2): the read surface (references / events /
+    """The read surface (references / events /
     selections) requires a tenant key once ``AGG_REQUIRE_KEY_FOR_READS``
     is true. Until then keyless requests pass with a WARNING each — the
     rollout signal for when MDProject's proxy has fully switched over.
@@ -212,7 +212,7 @@ async def require_acting_tenant_user(
     tenant_user: Annotated[TenantUser, Depends(require_tenant_user)],
     x_acting_user: Annotated[str | None, Header()] = None,
 ) -> TenantUser:
-    """The tenant user a per-user-data request acts FOR (plan §6.4).
+    """The tenant user a per-user-data request acts FOR.
 
     Two callers:
     - A per-user key with no ``X-Acting-User`` header → the key's owner
@@ -221,7 +221,7 @@ async def require_acting_tenant_user(
       <external_user_id UUID>`` → that user. Only the tenant whose
       ``external_user_id`` equals ``AGG_SERVICE_TENANT_EXTERNAL_ID`` may
       assert; anyone else gets 403. This is the "explicit tenant_user_id
-      on service-key routes" trusted channel (decision D-1) — MDProject
+      on service-key routes" trusted channel — MDProject
       authenticates its end users and we trust its assertion, exactly as
       the HMAC internal channel already does for provisioning.
     """
