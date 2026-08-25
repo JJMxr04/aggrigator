@@ -24,7 +24,7 @@ There's no Redis dependency for the core system — Procrastinate (task queue, p
 ## Local dev setup (Homebrew)
 
 ```bash
-cd /Users/joem/dev/PBL/aggrigator
+cd aggrigator
 python3.12 -m venv venv
 source venv/bin/activate
 pip install -e ".[dev]"
